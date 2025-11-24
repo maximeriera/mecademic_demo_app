@@ -50,16 +50,9 @@
     <div class="control-panel">
         <h1>Demo Robot Controller</h1>
 
-        <div class="info-box">
-            <table id="robot-info-table">
-                <tr><td>Model</td><td id="info-model">Loading...</td></tr>
-                <tr><td>IP Address</td><td id="info-ip">Loading...</td></tr>
-            </table>
-        </div>
-
         <hr>
 
-        <h2>Robot Status</h2>
+        <h2>Demo Status</h2>
         <div id="robot-state" class="status-box">Loading...</div>
 
         <p id="message-log">Loading...</p>
@@ -75,6 +68,18 @@
         <button id="btn-init" onclick="sendInitialize()">INITIALIZE</button>
         <button id="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button> <p id="message-log"></p>
 
+        <hr> <h2>Robot Information</h2>
+        <div id="robot-info-container" class="info-box">
+            Loading robot configurations...
+        
+            <div class="info-box">
+                <table id="robot-info-table">
+                    <tr><td>Model</td><td id="info-model">Loading...</td></tr>
+                    <tr><td>IP Address</td><td id="info-ip">Loading...</td></tr>
+                </table>
+            </div>
+        </div>
+        
     </div>
 
     <script>
@@ -172,24 +177,45 @@
             fetch('/api/info')
                 .then(response => response.json())
                 .then(data => {
-                    // Populate the table cells with the fetched data
-                    document.getElementById('info-model').textContent = data.model || 'N/A';
-                    document.getElementById('info-ip').textContent = data.ip_address || 'N/A';
-                    document.getElementById('info-version').textContent = data.revision || 'N/A';
+                    const infoContainer = document.getElementById('robot-info-container');
+                    infoContainer.innerHTML = ''; // Clear existing content
+
+                    if (data.length === 0) {
+                        infoContainer.innerHTML = '<p>No robot devices configured.</p>';
+                        return;
+                    }
                     
-                    // You could dynamically generate the whole table for all keys:
-                    // const table = document.getElementById('robot-info-table');
-                    // table.innerHTML = ''; // Clear existing
-                    // for (const key in data) {
-                    //     const row = table.insertRow();
-                    //     const cell1 = row.insertCell(0);
-                    //     const cell2 = row.insertCell(1);
-                    //     cell1.innerHTML = `<strong>${key.replace('_', ' ')}</strong>`;
-                    //     cell2.textContent = data[key];
-                    // }
+                    data.forEach((robot_info, index) => {
+                        const robotTitle = document.createElement('h3');
+                        robotTitle.textContent = `Device ${index + 1}: ${robot_info.model || 'Mecademic Robot'}`;
+                        infoContainer.appendChild(robotTitle);
+
+                        const table = document.createElement('table');
+                        table.className = 'robot-info-table'; 
+                        
+                        for (const key in robot_info) {
+                            const row = table.insertRow();
+                            const cell1 = row.insertCell(0);
+                            const cell2 = row.insertCell(1);
+                            
+                            // Simple formatting for key names
+                            const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                            
+                            cell1.innerHTML = `<strong>${formattedKey}</strong>`;
+                            cell2.textContent = robot_info[key];
+                        }
+                        infoContainer.appendChild(table);
+                    });
 
                 })
+                .catch(error => {
+                    messageLog.textContent = "Error loading robot information.";
+                    console.error('Error fetching robot info:', error);
+                });
         }
+        
+        // Ensure you call loadRobotInfo() on script execution
+        loadRobotInfo();
 
                 
         // Poll the status every 200 milliseconds (5 times per second)

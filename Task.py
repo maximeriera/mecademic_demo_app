@@ -7,11 +7,13 @@ import logging
 
 import mecademicpy.robot as mdr
 
+from typing import Tuple, Any
+
 from TaskType import TaskType
 from RobotState import RobotState
 
 class Task(threading.Thread):
-    def __init__(self, task_type: TaskType, state_change_callback, robot_api: mdr.Robot):
+    def __init__(self, task_type: TaskType, state_change_callback, robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
         super().__init__()
         
         self.logger = logging.getLogger(__name__)
@@ -22,7 +24,8 @@ class Task(threading.Thread):
         self.state_change_callback = state_change_callback
         self.name = f"TaskThread-{task_type.name}"
         # Placeholder for robot connection object (e.g., Mecademic Meca 500 API client)
-        self.robot_api = robot_api 
+        self.robot_apis = robot_apis
+        self.accessory_apis = accessory_apis
 
     def run(self):
         """The main execution loop for the thread."""
@@ -51,25 +54,34 @@ class Task(threading.Thread):
         """Logic for HOME task."""
         # --- Placeholder: Replace with actual Meca 500 commands ---
         self.logger.info(f"Executing finite task: {self.task_type.value}...")
-        self.robot_api.MoveJoints(0, 0, 0, 0, 0, 0)
-        self.robot_api.WaitIdle()
+        self.robot_apis[0].MoveJoints(0, 0, 0, 0, 0, 0)
+        self.robot_apis[1].MoveJoints(0, 0, 0, 0)
+        
+        self.robot_apis[0].WaitIdle()
+        self.robot_apis[1].WaitIdle()
         # --------------------------------------------------------
     
     def _run_shipment(self):
         """Logic for SHIPMENT task."""
         # --- Placeholder: Replace with actual Meca 500 commands ---
         self.logger.info(f"Executing finite task: {self.task_type.value}...")
-        self.robot_api.MoveJoints(45, 0, 0, 0, 0, 0)
-        self.robot_api.WaitIdle()
+        self.robot_apis[0].MoveJoints(45, 0, 0, 0, 0, 0)
+        self.robot_apis[1].MoveJoints(20, 0, 0, 0)
+        
+        self.robot_apis[0].WaitIdle()
+        self.robot_apis[1].WaitIdle()
         # --------------------------------------------------------
 
     def _run_prod_loop(self):
         """Logic for the infinite PROD task."""
         while not self.stopped():
             # --- Placeholder: Replace with actual Meca 500 production loop commands ---
-            self.robot_api.MoveJoints(0, 10, 0, 0, 0, 0)
-            self.robot_api.MoveJoints(0, -10, 0, 0, 0, 0)
-            self.robot_api.WaitIdle()
+            self.robot_apis[0].MoveJoints(0, 10, 0, 0, 0, 0)
+            self.robot_apis[1].MoveJoints(10, 0, 0, 0)
+            
+            self.robot_apis[0].MoveJoints(0, -10, 0, 0, 0, 0)
+            self.robot_apis[1].MoveJoints(-10, 0, 0, 0)
+            self.robot_apis[0].WaitIdle()
             # -------------------------------------------------------------------------
             
     def stop(self):
