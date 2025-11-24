@@ -12,6 +12,10 @@ from typing import Tuple, Any
 from TaskType import TaskType
 from RobotState import RobotState
 
+from demo_code.prod import prod_cycle
+from demo_code.home import home
+from demo_code.shipment import shipment
+
 class Task(threading.Thread):
     def __init__(self, task_type: TaskType, state_change_callback, robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
         super().__init__()
@@ -52,36 +56,18 @@ class Task(threading.Thread):
             
     def _run_home(self):
         """Logic for HOME task."""
-        # --- Placeholder: Replace with actual Meca 500 commands ---
-        self.logger.info(f"Executing finite task: {self.task_type.value}...")
-        self.robot_apis[0].MoveJoints(0, 0, 0, 0, 0, 0)
-        self.robot_apis[1].MoveJoints(0, 0, 0, 0)
-        
-        self.robot_apis[0].WaitIdle()
-        self.robot_apis[1].WaitIdle()
+        home(self.robot_apis, self.accessory_apis)
         # --------------------------------------------------------
     
     def _run_shipment(self):
         """Logic for SHIPMENT task."""
-        # --- Placeholder: Replace with actual Meca 500 commands ---
-        self.logger.info(f"Executing finite task: {self.task_type.value}...")
-        self.robot_apis[0].MoveJoints(45, 0, 0, 0, 0, 0)
-        self.robot_apis[1].MoveJoints(20, 0, 0, 0)
-        
-        self.robot_apis[0].WaitIdle()
-        self.robot_apis[1].WaitIdle()
+        shipment(self.robot_apis, self.accessory_apis)
         # --------------------------------------------------------
 
     def _run_prod_loop(self):
         """Logic for the infinite PROD task."""
         while not self.stopped():
-            # --- Placeholder: Replace with actual Meca 500 production loop commands ---
-            self.robot_apis[0].MoveJoints(0, 10, 0, 0, 0, 0)
-            self.robot_apis[1].MoveJoints(10, 0, 0, 0)
-            
-            self.robot_apis[0].MoveJoints(0, -10, 0, 0, 0, 0)
-            self.robot_apis[1].MoveJoints(-10, 0, 0, 0)
-            self.robot_apis[0].WaitIdle()
+           prod_cycle(self.robot_apis, self.accessory_apis)
             # -------------------------------------------------------------------------
             
     def stop(self):
