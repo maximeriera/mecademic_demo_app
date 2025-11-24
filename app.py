@@ -15,7 +15,7 @@ app = Flask(__name__)
 # NOTE: Replace dummy config with your actual Meca 500 connection details
 try:
     # We must start the controller in the main thread before starting Flask's server
-    ROBOT = RobotController(robot_api_config={"address": ROBOT_IP, "disconnect_on_exception": False})
+    ROBOT = RobotController()
 except Exception as e:
     # If connection fails, set a permanent FAULT state
     print(f"FATAL: Failed to initialize RobotController: {e}")
@@ -90,10 +90,11 @@ def stop_task():
 
 @app.route('/api/info', methods=['GET'])
 def get_robot_info():
-    """API endpoint to get static robot information."""
+    """API endpoint to get static robot information (now a list of devices)."""
     try:
-        info = ROBOT.get_robot_info()
-        return jsonify(info), 200
+        # This will now return a list of info dictionaries
+        info_list = ROBOT.get_robot_info() 
+        return jsonify(info_list), 200
     except Exception as e:
         return jsonify({'message': f'Failed to retrieve robot info: {e}'}), 500
 

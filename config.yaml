@@ -1,0 +1,17 @@
+# config.yaml
+
+devices:
+  # --- Robots ---
+  meca_500:
+    type: "mecademic"
+    ip_address: "192.168.0.100"
+
+  micro_dash:
+    type: "mecademic"
+    ip_address: "192.168.0.101"
+    
+  # --- Accessories/Controllers ---
+
+  # arduino_io:
+  #   type: "arduino"
+  #   Port: "COM3"
