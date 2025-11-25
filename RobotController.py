@@ -4,7 +4,6 @@ from RobotState import RobotState
 from Task import Task
 
 import mecademicpy.robot as mdr
-import pyfirmata
 
 from enum import Enum
 import threading
@@ -57,11 +56,21 @@ class RobotController:
                 # Append to tuples
                 self.robot_apis += (robot_api,)
                 self.robot_infos += (robot_info,)
+                
             elif device_type == 'arduino':
                 self.logger.info(f"Creating Arduino IO API for device: {device_name}")
+                import accessories_api.ArduinoBoard as arduino_api_module
                 # Placeholder for actual Arduino API creation
-                arduino_api = pyfirmata.Arduino(port=device_info.get('Port', 'COM3'))
+                arduino_api = arduino_api_module.ArduinoBoard(port=device_info.get('Port', 'COM3'))
                 self.accessory_apis += (arduino_api,)
+                
+            elif device_type == 'zaber':
+                self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
+                import accessories_api.ZaberAxis as zaber_api_module
+                # Placeholder for actual Zaber API creation
+                zaber_api = zaber_api_module.ZaberAxis(port=device_info.get('Port', 'COM3'))
+                self.accessory_apis += (zaber_api,)
+                
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 
@@ -193,7 +202,7 @@ class RobotController:
                     all_healthy = False
                     break # Break the inner loop, controller is faulted
 
-            if all_healthy and self.get_state() != RobotState.BUSY and self.get_state() != RobotState.INITIALIZING:
+            if all_healthy and self.get_state() != RobotState.BUSY and self.get_state() != RobotState.INITIALIZING and self.get_state() != RobotState.FAULTED:
                 # Only return to READY if monitoring thread detects no issues AND no task is running
                 self.set_state(RobotState.READY)
 
@@ -225,6 +234,9 @@ class RobotController:
             robot_api.DeactivateRobot()
             robot_api.WaitDeactivated()
             robot_api.Disconnect()
+            
+        for accessory_api in self.accessory_apis:
+            accessory_api.shutdown()
 
         self.logger.info("Controller shutdown complete.")
         
