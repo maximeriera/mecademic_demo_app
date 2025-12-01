@@ -36,6 +36,8 @@ class Task(threading.Thread):
         self.state_change_callback(RobotState.BUSY)
         self.logger.info(f"[{self.name}] Starting task: {self.task_type.value}")
         
+        faulted = False
+        
         try:
             match self.task_type:
                 case TaskType.PROD:
@@ -45,29 +47,41 @@ class Task(threading.Thread):
                 case TaskType.SHIPMENT:
                     self._run_shipment()
         except Exception as e:
-            self.logger.info(f"[{self.name}] Task failed: {e}")
+            self.logger.warning(f"[{self.name}] Task failed: {e}")
             self.state_change_callback(RobotState.FAULTED)
+            faulted = True
         finally:
             self._is_finished.set()
-            if self.state_change_callback(RobotState.BUSY) != RobotState.FAULTED:
+            if not faulted:
                 # Only transition to READY if no FAULT was set during execution
                 self.state_change_callback(RobotState.READY)
             self.logger.info(f"[{self.name}] Task finished.")
             
     def _run_home(self):
         """Logic for HOME task."""
-        home(self.robot_apis, self.accessory_apis)
+        try:
+            home(self.robot_apis, self.accessory_apis)
+        except Exception as e:
+            self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
         # --------------------------------------------------------
     
     def _run_shipment(self):
         """Logic for SHIPMENT task."""
-        shipment(self.robot_apis, self.accessory_apis)
+        try:        
+            shipment(self.robot_apis, self.accessory_apis)
+        except Exception as e:
+            self.logger.warning(f"[{self.name}] SHIPMENT task encountered an error: {e}")
+            raise e 
         # --------------------------------------------------------
 
     def _run_prod_loop(self):
         """Logic for the infinite PROD task."""
-        while not self.stopped():
-           prod_cycle(self.robot_apis, self.accessory_apis)
+        try:
+            while not self.stopped():
+                prod_cycle(self.robot_apis, self.accessory_apis)
+        except Exception as e:
+            self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
+            raise e
             # -------------------------------------------------------------------------
             
     def stop(self):

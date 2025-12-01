@@ -5,8 +5,6 @@ from flask import Flask, render_template, jsonify
 from RobotController import RobotController, TaskType, RobotState 
 import threading
 
-ROBOT_IP = '192.168.0.100'
-
 # --- Flask Setup ---
 app = Flask(__name__)
 

@@ -10,9 +10,6 @@ CARTANG_VEL = 45
 def prod_cycle(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
     """Logic for PROD task."""
     
-    pass
-
-'''
     mirror:mdr.Robot = robot_apis[0]
     dispenser:mdr.Robot = robot_apis[1]
     board:pyfirmata.Arduino = accessory_apis[0] 
@@ -140,4 +137,3 @@ def prod_cycle(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
     dispenser.WaitIdle()
     
     # --------------------------------------------------------
-'''
