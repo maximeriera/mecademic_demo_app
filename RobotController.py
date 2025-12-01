@@ -71,6 +71,12 @@ class RobotController:
                 zaber_api = zaber_api_module.ZaberAxis(port=device_info.get('Port', 'COM3'))
                 self.accessory_apis += (zaber_api,)
                 
+            elif device_type == 'planarmotor':
+                self.logger.info(f"Creating Planar Motor API for device: {device_name}")
+                import accessories_api.PlanarMotor as planar_motor_module
+                planar_motor_api = planar_motor_module.PlanarMotor()
+                self.accessory_apis += (planar_motor_api,)
+                
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 
