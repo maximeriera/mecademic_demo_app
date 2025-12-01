@@ -111,7 +111,17 @@ class RobotController:
         # Update the main controller tuple with the real RobotInfo objects
         self.robot_infos = tuple(updated_robot_infos) 
         
-        self.logger.info("Robot Controller Initialized and Ready.")  
+        self.logger.info("Robot Controller Initialized and Ready.") 
+        
+        for accessory_api in self.accessory_apis:
+            try:
+                self.logger.info(f"Initializing accessory API: {type(accessory_api).__name__}")
+                accessory_api.initialize()
+            except Exception as e:
+                self.logger.error(f"Accessory API initialization failed: {e}", exc_info=True)
+                self.set_state(RobotState.FAULTED)
+                raise Exception(f"Accessory API initialization failed: {e}")
+        
         self.set_state(RobotState.READY)
 
     def set_state(self, new_state: RobotState):
