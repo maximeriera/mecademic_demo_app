@@ -34,12 +34,14 @@ class PlanarMotorMove:
         self.end_speed = ending_speed
 
 class PlanarMotorApi:
-    def __init__(self):
+    def __init__(self, ip:str, auto_connect: bool = False):
+        self.ip = ip
+        self.auto_connect = auto_connect
         self.sys = sys
         self.bot = bot
         self.is_connected = False
     
-    def connect(self, auto_connect: bool = True, ip: str = '192.168.10.100') -> bool:
+    def connect(self) -> bool:
         """
         Establishes connection to the PMC hardware.
         
@@ -50,14 +52,14 @@ class PlanarMotorApi:
         Returns:
             bool: True if connection was successful.
         """
-        if auto_connect:
+        if self.auto_connect:
             # Broadcast search on local network
             connection_state = self.sys.auto_search_and_connect_to_pmc()
             self.is_connected = connection_state
             return connection_state
         else:
             # Direct IP connection
-            connection_state = sys.connect_to_specific_pmc(ip)
+            connection_state = sys.connect_to_specific_pmc(self.ip)
             self.is_connected = connection_state
             return connection_state
     
@@ -135,6 +137,25 @@ class PlanarMotorApi:
         # Note: Function missing 'return pos' in original code, likely a bug. 
         # Added implied return behavior in documentation context.
         return pos
+    
+    def get_xbot_at_pos(self, xpos: float, ypos: float, tolerance: float = 5.0) -> int | None:
+        """
+        Finds the Bot ID of a mover at a specific (X, Y) position within a tolerance.
+        
+        Args:
+            xpos (float): Target X coordinate.
+            ypos (float): Target Y coordinate.
+            tolerance (float): Acceptable distance from target position.
+        
+        Returns:
+            int | None: The Bot ID if found, else None.
+        """
+        status = self.bot.get_all_xbot_info(pmc_types.ALLXBOTSFEEDBACKOPTION(0))
+        for stat in status:
+            dist = ((stat.x_pos - xpos) ** 2 + (stat.y_pos - ypos) ** 2) ** 0.5
+            if dist <= tolerance:
+                return stat.xbot_id
+        return None
     
     def send_rotation(self, id: int) -> None:
         """
@@ -252,13 +273,13 @@ class PlanarMotorApi:
             self.is_connected = False
     
 class PlanarMotor(Accessory):
-    def __init__(self):
-        self.api = PlanarMotorApi()
+    def __init__(self, ip:str = '192.168.10.200'):
+        self.api = PlanarMotorApi(ip=ip)
         self.logger = logging.getLogger(__name__)
     
     def initialize(self):
         try:
-            connected = self.api.connect(auto_connect=True)
+            connected = self.api.connect()
             if not connected:
                 raise Exception("Failed to connect to Planar Motor system.")    
             self.api.initialize()

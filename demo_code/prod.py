@@ -1,5 +1,6 @@
 import mecademicpy.robot as mdr
 import pyfirmata
+import accessories_api.PlanarMotor as pmp
 
 from typing import Tuple, Any
 
@@ -10,130 +11,23 @@ CARTANG_VEL = 45
 def prod_cycle(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
     """Logic for PROD task."""
     
-    mirror:mdr.Robot = robot_apis[0]
-    dispenser:mdr.Robot = robot_apis[1]
-    board:pyfirmata.Arduino = accessory_apis[0] 
+    planar_motor:pmp.PlanarMotor = accessory_apis[0]
+    num_bot = 4
     
-    mirror.SetBlending(100)
-    mirror.SetJointVel(JOINT_VEL)
-    mirror.SetCartLinVel(CARTLIN_VEL)
-    mirror.SetCartAngVel(CARTANG_VEL)
-
-    dispenser.SetBlending(100)
-    dispenser.SetJointVel(JOINT_VEL)
-    dispenser.SetCartLinVel(CARTLIN_VEL)
-    dispenser.SetCartAngVel(CARTANG_VEL)
+    def swap_nearest_2_positions(planarmotor:pmp.PlanarMotor, xlist, ylist):
+        pos1_bot = planar_motor.api.get_xbot_at_pos(xlist[0], ylist[0])
+        pos2_bot = planar_motor.api.get_xbot_at_pos(xlist[1], ylist[1])
+        
+        planar_motor.api.send_single_linear_command(num_bot=2, xbot_ids=[pos1_bot, pos2_bot], x_positions=[xlist[0], xlist[1]], y_positions=[ylist[0] + 60, ylist[1] - 60])
+        planar_motor.api.send_single_linear_command(num_bot=2, xbot_ids=[pos1_bot, pos2_bot], x_positions=[xlist[1], xlist[0]], y_positions=[ylist[0] + 60, ylist[1] - 60])
+        planar_motor.api.send_single_linear_command(num_bot=2, xbot_ids=[pos1_bot, pos2_bot], x_positions=[xlist[1], xlist[0]], y_positions=[ylist[1] , ylist[0]])
+        
+        planar_motor.api.wait_multiple_move_done([pos1_bot, pos2_bot])
+        
+    def spin_positions(xlist, ylist):
+        for i in range(len(xlist)):
+            bot_id = planar_motor.api.get_xbot_at_pos(xlist[i], ylist[i])
+            planar_motor.api.send_single_rotation_command(xbot_id=bot_id, angle_degrees=360, speed_deg_per_sec=180)
+        planar_motor.api.wait_multiple_move_done([planar_motor.api.get_xbot_at_pos(xlist[i], ylist[i]) for i in range(len(xlist))])
     
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    mirror.StartProgram('optic1_pick')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    mirror.Delay(1)
-    mirror.StartProgram('alignment1')
-    mirror.Delay(2)
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    dispenser.StartProgram('dispensing')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    dispenser.StartProgram('curing1')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    board.digital[8].write(1)
-
-    dispenser.StartProgram('curingLED')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-    board.digital[8].write(0)
-
-
-
-    dispenser.StartProgram('curing2')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    mirror.StartProgram('optic1_place')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-
-    mirror.StartProgram('optic2_pick')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    mirror.Delay(1)
-    mirror.StartProgram('alignment2')
-    mirror.Delay(2)
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    dispenser.StartProgram('dispensing')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    dispenser.StartProgram('curing1')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-
-
-    board.digital[8].write(1)
-    dispenser.StartProgram('curingLED')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-    board.digital[8].write(0)
-
-
-    dispenser.StartProgram('curing2')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-
-    mirror.StartProgram('optic2_place')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-
-    mirror.StartProgram('optic3_pick')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    mirror.Delay(1)
-    mirror.StartProgram('alignment3')
-    mirror.Delay(2)
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    dispenser.StartProgram('dispensing')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    dispenser.StartProgram('curing1')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    board.digital[8].write(1)
-
-
-    dispenser.StartProgram('curingLED')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-    board.digital[8].write(0)
-
-    dispenser.StartProgram('curing2')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-
-
-    mirror.StartProgram('optic3_place')
-    mirror.WaitIdle()
-    dispenser.WaitIdle()
-    
-    # --------------------------------------------------------
+    swap_nearest_2_positions(planar_motor, [120, 360], [120, 120])

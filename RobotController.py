@@ -74,7 +74,7 @@ class RobotController:
             elif device_type == 'planarmotor':
                 self.logger.info(f"Creating Planar Motor API for device: {device_name}")
                 import accessories_api.PlanarMotor as planar_motor_module
-                planar_motor_api = planar_motor_module.PlanarMotor()
+                planar_motor_api = planar_motor_module.PlanarMotor(add=device_info.get('ip_address', '192.168.10.200'))
                 self.accessory_apis += (planar_motor_api,)
                 
             else:

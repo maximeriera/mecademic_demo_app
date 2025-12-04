@@ -2,16 +2,20 @@
 
 devices:
   # --- Robots ---
-  meca_500:
+  meca_500_1:
     type: "mecademic"
     ip_address: "192.168.0.100"
 
-  micro_dash:
+  meca_500_2:
     type: "mecademic"
     ip_address: "192.168.0.101"
+
+  meca_500_3:
+    type: "mecademic"
+    ip_address: "192.168.0.102"
     
   # --- Accessories/Controllers ---
 
-  # arduino_io:
-  #   type: "arduino"
-  #   Port: "COM3"
+  planar_motor_1:
+    type: "planarmotor"
+    ip_address: "192.268.0.200"
