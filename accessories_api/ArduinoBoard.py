@@ -1,25 +1,27 @@
 from Accessory import Accessory
 
 import pyfirmata
+import logging
 
 class ArduinoBoard(Accessory):
     def __init__(self, port):
         self.api = None
         self.port = port
+        self.logger = logging.getLogger(__name__)
     
     def initialize(self):
         try:
             self.api = pyfirmata.Arduino(self.port)
-            print("ArduinoBoard initialized.")
+            self.logger.info("ArduinoBoard initialized.")
         except Exception as e:
-            print(f"Failed to initialize ArduinoBoard on port {self.port}: {e}")
+            self.logger.error(f"Failed to initialize ArduinoBoard on port {self.port}: {e}")
             raise e
     
     def shutdown(self):
         if self.api:
             self.api.exit()
             self.api = None
-        print("ArduinoBoard shut down.")
+        self.logger.info("ArduinoBoard shut down.")
         
     def isFaulted(self):
         return self.api is None
