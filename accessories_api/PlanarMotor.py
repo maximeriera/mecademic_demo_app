@@ -1,4 +1,4 @@
-from Accessory import Accessory
+from .Accessory import Accessory
 
 from pmclib import system_commands as sys   # PMC System level commands (Connection, Mastership)
 from pmclib import xbot_commands as bot     # PMC Mover level commands (Motion, State)

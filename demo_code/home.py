@@ -1,5 +1,6 @@
 import mecademicpy.robot as mdr
-import accessories_api.PlanarMotor as pmp
+
+
 from typing import Tuple
 
 from typing import Tuple, Any
@@ -7,11 +8,12 @@ from typing import Tuple, Any
 def home(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
     """Logic for HOME task."""
     
-    # mirror:mdr.Robot = robot_apis[0]
-    # dispenser:mdr.Robot = robot_apis[1]
+    scara:mdr.Robot = robot_apis[0]
+    trail:mdr.Robot = robot_apis[1]
+    dispenser:mdr.Robot = robot_apis[2]
     
-    planar_motor:pmp.PlanarMotor = accessory_apis[0]
-    num_bot = 4
-    planar_motor.api.send_auto_move_command(num_bot=num_bot, xbot_ids= [1,2,3,4], y_positions=[120]*num_bot, x_pos=[120 + i*240 for i in range(num_bot)])
+    scara.MoveJoints(65, -145, -33, 80)
+    trail.MoveJoints(0, -40, 10, 0, 30, 0)
+    dispenser.MoveJoints(-15, -30, 30, 0, 0, 0)
 
-    
+    return

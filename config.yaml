@@ -2,20 +2,21 @@
 
 devices:
   # --- Robots ---
-  meca_500_1:
-    type: "mecademic"
-    ip_address: "192.168.0.100"
-
-  meca_500_2:
+  scara:
     type: "mecademic"
     ip_address: "192.168.0.101"
-
-  meca_500_3:
-    type: "mecademic"
-    ip_address: "192.168.0.102"
+  
+  # meca_trail:
+  #   type: "mecademic"
+  #   ip_address: "192.168.0.100"
+  # 
+  # meca_dispenser:
+  #   type: "mecademic"
+  #   ip_address: "192.168.0.102"
     
   # --- Accessories/Controllers ---
 
-  planar_motor_1:
-    type: "planarmotor"
-    ip_address: "192.268.0.200"
+  asyril_1:
+    type: "asyril"
+    ip_address: "192.168.0.50"
+    recipe: 63083

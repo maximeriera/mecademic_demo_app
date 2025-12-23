@@ -77,6 +77,12 @@ class RobotController:
                 planar_motor_api = planar_motor_module.PlanarMotor(add=device_info.get('ip_address', '192.168.10.200'))
                 self.accessory_apis += (planar_motor_api,)
                 
+            elif device_type == 'asyril':
+                self.logger.info(f"Creating Asyril API for device: {device_name}")
+                import accessories_api.Asyril as asyril_api_module
+                asyril_api = asyril_api_module.AsyrilEyePlus(ipaddress=device_info.get('ip_address', ''), recipe=device_info.get('recipe', 0))
+                self.accessory_apis += (asyril_api,)
+                
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 
