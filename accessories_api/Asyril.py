@@ -14,7 +14,10 @@ class AsyrilEyePlus(Accessory):
         self.recipe = recipe
         
         self.__connection = None
-        self.faulted = False   
+        self.faulted = False
+        
+        self._in_calib = False
+        self._calib_pose = 0
         
     def __del__(self):
         self.shutdown()
@@ -22,7 +25,7 @@ class AsyrilEyePlus(Accessory):
     def initialize(self):
         try:
             self.connect()
-            self.start_production(self.recipe)
+            self.start_production()
         except Exception as e:
             self.faulted = True
             print(f"Failed to initialize: {e}")
@@ -31,7 +34,6 @@ class AsyrilEyePlus(Accessory):
         try:
             self.stop_production()
             self.disconnect()
-            self.faulted = True
         except Exception as e:
             self.faulted = True
             print(f"Failed to shutdown: {e}")
@@ -58,8 +60,8 @@ class AsyrilEyePlus(Accessory):
         response = self.__receive_raw__()
         return response
 
-    def start_production(self, recipe):
-        command = "start production " + str(recipe)
+    def start_production(self):
+        command = "start production " + str(self.recipe)
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
@@ -94,6 +96,47 @@ class AsyrilEyePlus(Accessory):
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
+    
+    def start_calibration(self, recipe:int = None):
+        if recipe is None:
+            recipe = self.recipe
+        command = "start handeye_calibration " + str(recipe)
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        if response.startswith("200"):
+            self._in_calib = True
+            self._calib_pose = 1
+        return response
+    
+    def stop_calibration(self):
+        command = "stop handeye_calibration"
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        if response.startswith("200"):
+            self._in_calib = False
+            self._calib_pose = 0
+    
+    def calibrate(self):
+        command = "calibrate"
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        if response.startswith("200"):
+            command = "save_calibration"
+            self.__send_raw__(command)
+            response = self.__receive_raw__()
+            if response.startswith("200"):
+                self.stop_calibration()
+            else:
+                raise RuntimeError(f"Failed to save calibration: {response}")
+        else:
+            raise RuntimeError(f"Failed to calibrate: {response}")
+        return response
+    
+    def take_calibration_image(self):
+        raise NotImplementedError("Calibration method not implemented yet.")
+    
+    def set_calibration_pose(self, n:int, x:float, y:float):
+        raise NotImplementedError("Calibration method not implemented yet.")
 
     def __send_raw__(self, command):
         self.__connection.send(
