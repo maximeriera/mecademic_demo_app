@@ -15,6 +15,7 @@
         #btn-prod { background-color: #6c757d; }
         #btn-stop { background-color: #6c757d; }
         #btn-init { background-color: #343a40; } /* Use a secondary/grey color */
+        #btn-clear { background-color: #fd7e14; } /* Orange for fault clearing */
         #btn-shutdown { background-color: #343a40; } /* Darker, system-level color */        
         
         /* State Colors */
@@ -66,6 +67,7 @@
 
         <hr> <h2>System Control</h2>
         <button id="btn-init" onclick="sendInitialize()">INITIALIZE</button>
+        <button id="btn-clear" onclick="sendClearFaults()">CLEAR FAULTS</button>
         <button id="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button> <p id="message-log"></p>
 
         <hr> <h2>Robot Information</h2>
@@ -152,6 +154,20 @@
             })
             .catch(error => {
                 messageLog.textContent = "Error sending initialization command.";
+                console.error('Error:', error);
+            });
+        }
+
+        function sendClearFaults() {
+            fetch('/api/clear_faults', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                messageLog.textContent = data.message;
+            })
+            .catch(error => {
+                messageLog.textContent = "Error sending clear faults command.";
                 console.error('Error:', error);
             });
         }

@@ -7,33 +7,41 @@ import logging
 
 import mecademicpy.robot as mdr
 
-from typing import Tuple, Any
+from typing import Dict
 
-from TaskType import TaskType
-from RobotState import RobotState
+from ControllerState import ControllerState
+from devices import Device
 
 from demo_code.prod import prod_cycle
 from demo_code.home import home
 from demo_code.shipment import shipment
 
+from enum import Enum
+
+# --- Enums for State Management ---
+
+class TaskType(Enum):
+    """Defines the types of tasks the robot can execute."""
+    HOME = "Home"
+    SHIPMENT = "Shipment"
+    CALIBRATION = "Calibration"
+    PROD = "Production"
+
 class Task(threading.Thread):
-    def __init__(self, task_type: TaskType, state_change_callback, robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
+    def __init__(self, logger: logging.Logger, task_type: TaskType, state_change_callback, devices: Dict[str, Device]):
         super().__init__()
         
-        self.logger = logging.getLogger(__name__)
-        
+        self.logger = logger
         self.task_type = task_type
         self._stop_event = threading.Event()
         self._is_finished = threading.Event()
         self.state_change_callback = state_change_callback
         self.name = f"TaskThread-{task_type.name}"
-        # Placeholder for robot connection object (e.g., Mecademic Meca 500 API client)
-        self.robot_apis = robot_apis
-        self.accessory_apis = accessory_apis
+        self.devices = devices
 
     def run(self):
         """The main execution loop for the thread."""
-        self.state_change_callback(RobotState.BUSY)
+        self.state_change_callback(ControllerState.BUSY)
         self.logger.info(f"[{self.name}] Starting task: {self.task_type.value}")
         
         faulted = False
@@ -46,21 +54,23 @@ class Task(threading.Thread):
                     self._run_home()
                 case TaskType.SHIPMENT:
                     self._run_shipment()
+                case TaskType.CALIBRATION:
+                    self.logger.info(f"[{self.name}] CALIBRATION task is not implemented yet.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
-            self.state_change_callback(RobotState.FAULTED)
+            self.state_change_callback(ControllerState.FAULTED)
             faulted = True
         finally:
             self._is_finished.set()
             if not faulted:
                 # Only transition to READY if no FAULT was set during execution
-                self.state_change_callback(RobotState.READY)
+                self.state_change_callback(ControllerState.READY)
             self.logger.info(f"[{self.name}] Task finished.")
             
     def _run_home(self):
         """Logic for HOME task."""
         try:
-            home(self.robot_apis, self.accessory_apis)
+            home(self.devices)
         except Exception as e:
             self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
         # --------------------------------------------------------
@@ -68,7 +78,7 @@ class Task(threading.Thread):
     def _run_shipment(self):
         """Logic for SHIPMENT task."""
         try:        
-            shipment(self.robot_apis, self.accessory_apis)
+            shipment(self.devices)
         except Exception as e:
             self.logger.warning(f"[{self.name}] SHIPMENT task encountered an error: {e}")
             raise e 
@@ -78,7 +88,7 @@ class Task(threading.Thread):
         """Logic for the infinite PROD task."""
         try:
             while not self.stopped():
-                prod_cycle(self.robot_apis, self.accessory_apis)
+                prod_cycle(self.devices)
         except Exception as e:
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
             raise e

@@ -1,5 +1,8 @@
+from devices import Device
+from typing import Dict
+
 import mecademicpy.robot as mdr
-import accessories_api.Asyril as asyril_api_module
+import devices.api.AsyrilAPI as asyril_api_module
 
 from typing import Tuple, Any
 
@@ -12,9 +15,11 @@ CARTANG_VEL = 45
 PARTS_PER_TRAIL = 16
 TRAILS_OFFSET = 20
 
-def prod_cycle(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
+def prod_cycle(devices: Dict[str, Device]):\
     
-    def scara_trail(trail_id:int, scara:mdr.Robot, asyril:asyril_api_module.AsyrilEyePlus) -> None:
+    return
+    
+    def scara_trail(trail_id:int, scara:mdr.Robot, asyril:asyril_api_module.AsyrilEyePlusApi) -> None:
         for i in range(PARTS_PER_TRAIL):
             pose = asyril.get_part()
             if pose['resp'] == 200:
@@ -40,7 +45,7 @@ def prod_cycle(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
     
     """Logic for PROD task."""
     
-    asyril:asyril_api_module.AsyrilEyePlus = accessory_apis[0]  # Assuming only one Asyril accessory for this demo
+    asyril:asyril_api_module.AsyrilEyePlusApi = accessory_apis[0]  # Assuming only one Asyril accessory for this demo
     scara:mdr.Robot = robot_apis[0]  # Assuming only one SCARA robot for this demo
     
     scara_trail(trail_id=1, scara=scara, asyril=asyril)
