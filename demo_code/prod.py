@@ -38,7 +38,7 @@ def prod_cycle(devices: Dict[str, Device], index:int):
                         scara.api.SetVariable(name='PickPose.y', value=pose['y'])
                     else:
                         asyril.logger.error("Failed to get part pose")
-                        return
+                        continue
 
                     pose_x = (i // 4) * TRAILS_OFFSET
                     pose_y = (i % 4) * TRAILS_OFFSET
