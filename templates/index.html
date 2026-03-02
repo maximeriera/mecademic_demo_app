@@ -2,243 +2,384 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Demo Robot Control</title>
+    <title>Demo Application Control</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin-top: 10px; background-color: #f4f4f9; }
-        .control-panel { background: #fff; padding: 5px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 400px; text-align: center; }
-        h1 { color: #333; }
-        .status-box { margin: 20px 0; padding: 10px 20px; border-radius: 4px; font-size: 1.2em; font-weight: bold; border: 1px solid #ccc; }
-        #robot-state { transition: background-color 0.5s ease; }
-        button { padding: 10px 20px; margin: 8px; font-size: 16px; cursor: pointer; border: none; border-radius: 4px; color: white; transition: background-color 0.3s; width: 150px; }
-        #btn-home { background-color: #6c757d; }
-        #btn-shipment { background-color: #6c757d; }
-        #btn-prod { background-color: #6c757d; }
-        #btn-stop { background-color: #6c757d; }
-        #btn-init { background-color: #343a40; } /* Use a secondary/grey color */
-        #btn-clear { background-color: #fd7e14; } /* Orange for fault clearing */
-        #btn-shutdown { background-color: #343a40; } /* Darker, system-level color */        
-        
-        /* State Colors */
-        .READY { background-color: #28a745; color: white; }
-        .BUSY { background-color: #ffc107; color: #333; }
-        .INITIALIZING { background-color: #007bff; color: white; }
-        .FAULTED { background-color: #dc3545; color: white; }
+        /* --- Base --- */
+        *, *::before, *::after { box-sizing: border-box; }
 
-        /* templates/index.html (inside the <style> block) */
-        .info-box { 
-            text-align: left; 
-            width: 90%; 
-            margin: 15px auto; 
-            padding: 10px;
-            border: 1px dashed #ccc;
-            border-radius: 4px;
-            font-size: 0.9em;
+        :root {
+            --color-bg:        #f0f2f5;
+            --color-panel:     #ffffff;
+            --color-border:    #dee2e6;
+            --color-text:      #212529;
+            --color-muted:     #6c757d;
+            --color-header:    #343a40;
+
+            --color-green:     #28a745;
+            --color-yellow:    #ffc107;
+            --color-red:       #dc3545;
+            --color-blue:      #007bff;
+            --color-orange:    #fd7e14;
+
+            --radius:          6px;
+            --shadow:          0 4px 12px rgba(0,0,0,0.10);
         }
-        #robot-info-table { 
-            width: 100%; 
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--color-bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px;
+            margin: 0;
+            color: var(--color-text);
+        }
+
+        /* --- Panel --- */
+        .control-panel {
+            background: var(--color-panel);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            width: 460px;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            background-color: var(--color-header);
+            color: white;
+            padding: 16px 24px;
+            text-align: center;
+        }
+        .panel-header h1 {
+            margin: 0;
+            font-size: 1.3em;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+
+        .panel-body {
+            padding: 0 20px 20px;
+        }
+
+        /* --- Section --- */
+        .section {
+            margin-top: 20px;
+        }
+        .section-title {
+            font-size: 0.70em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.10em;
+            color: var(--color-muted);
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 6px;
+            margin-bottom: 12px;
+        }
+
+        /* --- Status Box --- */
+        .status-box {
+            padding: 12px;
+            border-radius: var(--radius);
+            font-size: 1.25em;
+            font-weight: 700;
+            text-align: center;
+            letter-spacing: 0.05em;
+            border: 2px solid transparent;
+            transition: background-color 0.4s ease, color 0.4s ease;
+            background-color: var(--color-muted);
+            color: white;
+        }
+        .READY        { background-color: var(--color-green);  color: white; }
+        .BUSY         { background-color: var(--color-yellow); color: #333; }
+        .INITIALIZING { background-color: var(--color-blue);   color: white; }
+        .FAULTED      { background-color: var(--color-red);    color: white; }
+        .OFF          { background-color: var(--color-muted);  color: white; }
+
+        /* --- Message Log --- */
+        .message-log {
+            margin-top: 10px;
+            min-height: 32px;
+            padding: 6px 10px;
+            border-radius: var(--radius);
+            background-color: #f8f9fa;
+            border: 1px solid var(--color-border);
+            font-size: 0.85em;
+            color: var(--color-muted);
+            text-align: center;
+        }
+
+        /* --- Buttons --- */
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .btn-grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+        }
+
+        button {
+            padding: 10px 6px;
+            font-size: 0.85em;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            border: none;
+            border-radius: var(--radius);
+            color: white;
+            transition: filter 0.15s ease, transform 0.1s ease;
+        }
+        button:hover  { filter: brightness(1.12); }
+        button:active { transform: scale(0.97); }
+
+        .btn-task     { background-color: var(--color-muted); }
+        .btn-stop     { background-color: var(--color-red); }
+        .btn-init     { background-color: var(--color-blue); }
+        .btn-clear    { background-color: var(--color-orange); }
+        .btn-shutdown { background-color: var(--color-header); }
+
+        /* --- Device Cards --- */
+        .device-card {
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            margin-bottom: 10px;
+            overflow: hidden;
+        }
+        .device-card-header {
+            background-color: var(--color-header);
+            color: white;
+            padding: 7px 12px;
+            font-weight: 600;
+            font-size: 0.90em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .device-card-body {
+            padding: 8px 12px;
+        }
+        .device-card-body table {
+            width: 100%;
             border-collapse: collapse;
+            font-size: 0.85em;
         }
-        #robot-info-table td {
-            padding: 5px;
+        .device-card-body td {
+            padding: 4px 4px;
+            vertical-align: top;
         }
-        #robot-info-table tr td:first-child {
-            width: 40%;
+        .device-card-body tr:not(:last-child) td {
+            border-bottom: 1px solid #f0f0f0;
         }
+        .device-card-body tr td:first-child {
+            width: 45%;
+            font-weight: 600;
+            color: var(--color-muted);
+        }
+        .device-card-body a {
+            color: var(--color-blue);
+            text-decoration: none;
+        }
+        .device-card-body a:hover { text-decoration: underline; }
 
+        /* --- Badges --- */
+        .badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 20px;
+            font-size: 0.72em;
+            font-weight: 700;
+            margin-left: 4px;
+            letter-spacing: 0.03em;
+        }
+        .badge-ok    { background-color: var(--color-green);  color: white; }
+        .badge-warn  { background-color: var(--color-yellow); color: #333; }
+        .badge-error { background-color: var(--color-red);    color: white; }
+        .badge-off   { background-color: var(--color-muted);  color: white; }
     </style>
 </head>
 <body>
     <div class="control-panel">
-        <h1>Demo Robot Controller</h1>
 
-        <hr>
-
-        <h2>Demo Status</h2>
-        <div id="robot-state" class="status-box">Loading...</div>
-
-        <p id="message-log">Loading...</p>
-
-        <hr> <h2>Tasks</h2>
-        <button id="btn-prod" onclick="sendTask('prod')">PROD</button>
-        <button id="btn-stop" onclick="sendStop()">STOP</button>
-        <button id="btn-home" onclick="sendTask('home')">HOME</button>
-        <button id="btn-shipment" onclick="sendTask('shipment')">SHIPMENT</button>
-
-
-        <hr> <h2>System Control</h2>
-        <button id="btn-init" onclick="sendInitialize()">INITIALIZE</button>
-        <button id="btn-clear" onclick="sendClearFaults()">CLEAR FAULTS</button>
-        <button id="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button> <p id="message-log"></p>
-
-        <hr> <h2>Robot Information</h2>
-        <div id="robot-info-container" class="info-box">
-            Loading robot configurations...
-        
-            <div class="info-box">
-                <table id="robot-info-table">
-                    <tr><td>Model</td><td id="info-model">Loading...</td></tr>
-                    <tr><td>IP Address</td><td id="info-ip">Loading...</td></tr>
-                </table>
-            </div>
+        <div class="panel-header">
+            <h1>Demo Application Controller</h1>
         </div>
-        
+
+        <div class="panel-body">
+
+            <div class="section">
+                <div class="section-title">System Status</div>
+                <div id="robot-state" class="status-box">Loading...</div>
+                <div id="message-log" class="message-log">—</div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Tasks</div>
+                <div class="btn-grid">
+                    <button class="btn-task" onclick="sendTask('prod')">PROD</button>
+                    <button class="btn-stop"  onclick="sendStop()">STOP</button>
+                    <button class="btn-task" onclick="sendTask('home')">HOME</button>
+                    <button class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
+                    <button class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">System Control</div>
+                <div class="btn-grid-3">
+                    <button class="btn-init"     onclick="sendInitialize()">INITIALIZE</button>
+                    <button class="btn-clear"    onclick="sendClearFaults()">CLEAR FAULTS</button>
+                    <button class="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Devices</div>
+                <div id="robot-info-container">Loading device info...</div>
+            </div>
+
+        </div>
     </div>
 
     <script>
         const stateDisplay = document.getElementById('robot-state');
-        const messageLog = document.getElementById('message-log');
+        const messageLog   = document.getElementById('message-log');
 
-        /**
-         * 1. Status Polling: Periodically fetches the robot's current status.
-         */
         function updateRobotStatus() {
             fetch('/api/status')
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
-                    const status = data.status;
-                    stateDisplay.textContent = status;
-
-                    // CRITICAL FIX: Ensure the base class is kept AND the state is uppercase
-                    // If the Python state comes as "Ready", convert it to "READY"
-                    const stateClass = status.toUpperCase();
-
-                    // Apply dynamic class for color coding
-                    stateDisplay.className = 'status-box ' + stateClass;
-                    loadRobotInfo(); 
+                    stateDisplay.textContent = data.status;
+                    stateDisplay.className = 'status-box ' + data.status.toUpperCase();
                 })
-                .catch(error => {
-                    stateDisplay.textContent = "COMMUNICATION ERROR";
-                    stateDisplay.className = 'status-box FAULTED'; 
-                    console.error('Error fetching status:', error);
+                .catch(() => {
+                    stateDisplay.textContent = 'COMMUNICATION ERROR';
+                    stateDisplay.className = 'status-box FAULTED';
                 });
         }
 
-        /**
-         * 2. Control Functions: Sends commands to the backend.
-         */
+        function setMessage(text) {
+            messageLog.textContent = text || '—';
+        }
+
         function sendTask(task) {
-            fetch(`/api/task/${task}`, {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                messageLog.textContent = data.message;
-            })
-            .catch(error => {
-                messageLog.textContent = "Error sending task command.";
-                console.error('Error:', error);
-            });
+            fetch(`/api/task/${task}`, { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending task command.'));
         }
 
         function sendStop() {
-            fetch('/api/stop', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                messageLog.textContent = data.message;
-            })
-            .catch(error => {
-                messageLog.textContent = "Error sending stop command.";
-                console.error('Error:', error);
-            });
+            fetch('/api/stop', { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending stop command.'));
         }
 
         function sendInitialize() {
-            fetch('/api/initialize', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                messageLog.textContent = data.message;
-            })
-            .catch(error => {
-                messageLog.textContent = "Error sending initialization command.";
-                console.error('Error:', error);
-            });
+            fetch('/api/initialize', { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending initialization command.'));
         }
 
         function sendClearFaults() {
-            fetch('/api/clear_faults', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                messageLog.textContent = data.message;
-            })
-            .catch(error => {
-                messageLog.textContent = "Error sending clear faults command.";
-                console.error('Error:', error);
-            });
+            fetch('/api/clear_faults', { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending clear faults command.'));
         }
 
         function sendShutdown() {
-            fetch('/api/shutdown', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                messageLog.textContent = data.message;
-            })
-            .catch(error => {
-                messageLog.textContent = "Error sending shutdown command.";
-                console.error('Error:', error);
-            });
+            fetch('/api/shutdown', { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending shutdown command.'));
         }
 
-/**
-         * Function to fetch static robot information on page load.
-         */
         function loadRobotInfo() {
             fetch('/api/info')
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
-                    const infoContainer = document.getElementById('robot-info-container');
-                    infoContainer.innerHTML = ''; // Clear existing content
+                    const container = document.getElementById('robot-info-container');
+                    container.innerHTML = '';
 
-                    if (data.length === 0) {
-                        infoContainer.innerHTML = '<p>No robot devices configured.</p>';
+                    if (!Array.isArray(data) || data.length === 0) {
+                        container.innerHTML = '<p style="color:var(--color-muted);font-size:0.85em">No devices configured.</p>';
                         return;
                     }
-                    
-                    data.forEach((robot_info, index) => {
-                        const robotTitle = document.createElement('h3');
-                        robotTitle.textContent = `Device ${index + 1}: ${robot_info.model || 'Mecademic Robot'}`;
-                        infoContainer.appendChild(robotTitle);
 
-                        const table = document.createElement('table');
-                        table.className = 'robot-info-table'; 
-                        
-                        for (const key in robot_info) {
-                            const row = table.insertRow();
-                            const cell1 = row.insertCell(0);
-                            const cell2 = row.insertCell(1);
-                            
-                            // Simple formatting for key names
-                            const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                            
-                            cell1.innerHTML = `<strong>${formattedKey}</strong>`;
-                            cell2.textContent = robot_info[key];
+                    const statusKeys = new Set(['connected', 'ready', 'faulted', 'device_id']);
+
+                    data.forEach(device => {
+                        const card = document.createElement('div');
+                        card.className = 'device-card';
+
+                        // Header
+                        const header = document.createElement('div');
+                        header.className = 'device-card-header';
+
+                        const title = document.createElement('span');
+                        title.textContent = device.device_id || 'Unknown Device';
+                        header.appendChild(title);
+
+                        const badges = document.createElement('span');
+                        if ('faulted' in device) {
+                            const b = document.createElement('span');
+                            b.className = 'badge ' + (device.faulted ? 'badge-error' : 'badge-ok');
+                            b.textContent = device.faulted ? 'FAULTED' : 'OK';
+                            badges.appendChild(b);
                         }
-                        infoContainer.appendChild(table);
-                    });
+                        if ('connected' in device) {
+                            const b = document.createElement('span');
+                            b.className = 'badge ' + (device.connected ? 'badge-ok' : 'badge-off');
+                            b.textContent = device.connected ? 'Connected' : 'Disconnected';
+                            badges.appendChild(b);
+                        }
+                        if ('ready' in device) {
+                            const b = document.createElement('span');
+                            b.className = 'badge ' + (device.ready ? 'badge-ok' : 'badge-warn');
+                            b.textContent = device.ready ? 'Ready' : 'Not Ready';
+                            badges.appendChild(b);
+                        }
+                        header.appendChild(badges);
+                        card.appendChild(header);
 
+                        // Body
+                        const body = document.createElement('div');
+                        body.className = 'device-card-body';
+                        const table = document.createElement('table');
+
+                        for (const key in device) {
+                            if (statusKeys.has(key)) continue;
+                            const row = table.insertRow();
+                            const label = row.insertCell(0);
+                            const value = row.insertCell(1);
+                            label.textContent = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                            const raw = device[key];
+                            if (key === 'ip_address' && raw) {
+                                const link = document.createElement('a');
+                                link.href = `http://${raw}`;
+                                link.target = '_blank';
+                                link.rel = 'noopener noreferrer';
+                                link.textContent = raw;
+                                value.appendChild(link);
+                            } else {
+                                value.textContent = (raw !== null && raw !== undefined) ? raw : '—';
+                            }
+                        }
+                        body.appendChild(table);
+                        card.appendChild(body);
+                        container.appendChild(card);
+                    });
                 })
-                .catch(error => {
-                    messageLog.textContent = "Error loading robot information.";
-                    console.error('Error fetching robot info:', error);
+                .catch(() => {
+                    document.getElementById('robot-info-container').innerHTML =
+                        '<p style="color:var(--color-red);font-size:0.85em">Error loading device info.</p>';
                 });
         }
-        
-        // Ensure you call loadRobotInfo() on script execution
-        loadRobotInfo();
 
-                
-        // Poll the status every 200 milliseconds (5 times per second)
-        setInterval(updateRobotStatus, 200); 
-        updateRobotStatus(); // Initial call
+        setInterval(updateRobotStatus, 500);
+        setInterval(loadRobotInfo, 5000);
+        updateRobotStatus();
         loadRobotInfo();
-
     </script>
 </body>
 </html>

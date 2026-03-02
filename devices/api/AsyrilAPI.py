@@ -79,8 +79,6 @@ class AsyrilEyePlusApi:
         self._in_calib = False
         self._calib_pose = 0
         
-        self.connect()
-        
     @property
     def connected(self):
         try:

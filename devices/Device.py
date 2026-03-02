@@ -37,8 +37,11 @@ class Device(ABC):
         return logger
     
     def __del__(self):
-        self.logger.info(f"[{self.device_id}] device is being deleted.")   
-        self.shutdown()
+        self.logger.info(f"[{self.device_id}] device is being deleted.")
+        try:
+            self.shutdown()
+        except Exception as e:
+            pass  # Avoid raising exceptions during garbage collection
         
     @property
     @abstractmethod

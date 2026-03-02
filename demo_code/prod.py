@@ -8,6 +8,8 @@ from typing import Tuple, Any
 
 import time
 
+from devices.MecaRobot import MecaRobot
+
 JOINT_VEL = 15
 CARTLIN_VEL = 100
 CARTANG_VEL = 45
@@ -15,7 +17,12 @@ CARTANG_VEL = 45
 PARTS_PER_TRAIL = 16
 TRAILS_OFFSET = 20
 
-def prod_cycle(devices: Dict[str, Device]):\
+def prod_cycle(devices: Dict[str, Device]):
+    
+    meca: MecaRobot = devices.get("Meca500")
+    meca.api.MoveJoints(10, 0, 0, 0, 0, 0)
+    meca.api.MoveJoints(-10, 0, 0, 0, 0, 0)
+    meca.api.WaitIdle()
     
     return
     

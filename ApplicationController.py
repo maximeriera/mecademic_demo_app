@@ -28,13 +28,15 @@ class ApplicationController:
         self._state_lock = threading.Lock() # Protects state changes
         
         # Threads for monitoring and task execution
+        
         self._monitor_thread = threading.Thread(target=self._monitor_devices_status, name="MonitorThread", daemon=True)
         self._monitor_stop_event = threading.Event()
         
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
 
-        self._create_devices() 
+        self._create_devices()
+        self.logger.info("ApplicationController initialized with devices: " + ", ".join(self.devices.keys())) 
         self._monitor_thread.start()
 
     
@@ -106,6 +108,12 @@ class ApplicationController:
         
         self.logger.info("All devices Initialized and Ready.") 
         
+        if not self._monitor_thread.is_alive():
+            self.logger.warning("Monitor thread is not alive after initialization. Attempting to restart.")
+            self._monitor_thread = threading.Thread(target=self._monitor_devices_status, name="MonitorThread", daemon=True)
+            self._monitor_stop_event.clear()
+            self._monitor_thread.start()
+        
         self.set_state(ControllerState.READY)
 
     def set_state(self, new_state: ControllerState):
@@ -171,7 +179,7 @@ class ApplicationController:
     def _monitor_devices_status(self):
         """Dedicated thread to monitor the devices' hardware status."""
         while not self._monitor_stop_event.is_set():
-            
+            self.logger.debug("Monitoring devices status...")
             if self.get_state() in [ControllerState.INITIALIZING, ControllerState.OFF]:
                 # Skip monitoring during initialization or when off
                 time.sleep(0.2)
@@ -183,17 +191,20 @@ class ApplicationController:
             
             for _, device in self.devices.items():
                 if device.faulted:
-                    self.set_state(ControllerState.FAULTED)
+                    if self.get_state() != ControllerState.FAULTED:
+                        self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state.")
+                        self.set_state(ControllerState.FAULTED)
                     all_healthy = False
                     all_ready = False
                     break # Break the inner loop, controller is faulted
             
                 if not device.ready:
+                    self.logger.warning(f"Device {device.device_id} is not ready. Controller cannot be READY.")
                     all_ready = False
                     break
             
             
-            if all_ready and self.get_state() != ControllerState.BUSY and self.get_state() != ControllerState.INITIALIZING and self.get_state() != ControllerState.FAULTED:
+            if all_healthy and all_ready and self.get_state() != ControllerState.BUSY and self.get_state() != ControllerState.INITIALIZING and self.get_state() != ControllerState.FAULTED:
                 # Only return to READY if monitoring thread detects no issues AND no task is running
                 self.set_state(ControllerState.READY)
 
@@ -202,9 +213,9 @@ class ApplicationController:
                 self._current_task.join()
                 self._current_task = None
             
-            time.sleep(0.1) # Check frequency
+            time.sleep(0.2) # Check frequency
 
-        self.logger.info("[MonitorThread] Shutdown complete.")
+        self.logger.warning("[MonitorThread] Shutdown complete.")
         
     def _check_reference_position(self):
         pass
