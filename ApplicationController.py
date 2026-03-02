@@ -179,7 +179,7 @@ class ApplicationController:
     def _monitor_devices_status(self):
         """Dedicated thread to monitor the devices' hardware status."""
         while not self._monitor_stop_event.is_set():
-            self.logger.debug("Monitoring devices status...")
+            # self.logger.debug("Monitoring devices status...")
             if self.get_state() in [ControllerState.INITIALIZING, ControllerState.OFF]:
                 # Skip monitoring during initialization or when off
                 time.sleep(0.2)

@@ -46,7 +46,8 @@ class AsyrilEyePlus(Device):
             self.api.set_part_timeout()
         except Exception as e:
             self._faulted = True
-            print(f"Failed to initialize: {e}")
+            self.logger.error(f"Failed to initialize: {e}")
+            raise ConnectionError(f"Failed to initialize: {e}")
 
     def shutdown(self):
         try:

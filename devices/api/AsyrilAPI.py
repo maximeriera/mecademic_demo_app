@@ -228,6 +228,7 @@ class AsyrilEyePlusApi:
         except socket.timeout:
             self.logger.error("Socket timed out while waiting for response.")
             response = ""
+            raise TimeoutError("Socket timed out while waiting for response.")
         return response
     
     def __handle_response__(self, response:str):

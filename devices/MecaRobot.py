@@ -62,7 +62,7 @@ class MecaRobot(Device):
             self._api.Connect(self._ip_address, disconnect_on_exception=False)
         except Exception as e:
             self.logger.error(f"Failed to connect to MecaRobot at {self._ip_address}: {e}")
-            return
+            raise ConnectionError(f"Failed to connect: {e}")
         self._api.ActivateAndHome()
         
     def deactivate(self):
