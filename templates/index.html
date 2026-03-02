@@ -41,22 +41,51 @@
             background: var(--color-panel);
             border-radius: var(--radius);
             box-shadow: var(--shadow);
-            width: 460px;
+            width: 520px;
             overflow: hidden;
         }
 
         .panel-header {
             background-color: var(--color-header);
             color: white;
-            padding: 16px 24px;
+            padding: 16px 24px 0;
             text-align: center;
         }
         .panel-header h1 {
-            margin: 0;
+            margin: 0 0 12px;
             font-size: 1.3em;
             font-weight: 600;
             letter-spacing: 0.03em;
         }
+
+        /* --- Tabs --- */
+        .tab-bar {
+            display: flex;
+            border-top: 1px solid rgba(255,255,255,0.15);
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 9px 0;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: rgba(255,255,255,0.6);
+            font-size: 0.80em;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: color 0.2s, border-color 0.2s;
+            border-radius: 0;
+            transform: none;
+            filter: none;
+            width: auto;
+        }
+        .tab-btn:hover  { color: rgba(255,255,255,0.9); filter: none; }
+        .tab-btn.active { color: white; border-bottom-color: white; }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
 
         .panel-body {
             padding: 0 20px 20px;
@@ -198,6 +227,58 @@
         .badge-warn  { background-color: var(--color-yellow); color: #333; }
         .badge-error { background-color: var(--color-red);    color: white; }
         .badge-off   { background-color: var(--color-muted);  color: white; }
+
+        /* --- Log Viewer --- */
+        .log-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .log-toolbar select {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 8px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            font-size: 0.85em;
+            background: white;
+            color: var(--color-text);
+        }
+        .log-toolbar label {
+            font-size: 0.80em;
+            color: var(--color-muted);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+        .log-toolbar button {
+            padding: 6px 12px;
+            font-size: 0.80em;
+            background-color: var(--color-blue);
+            flex-shrink: 0;
+        }
+        #log-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: "Consolas", "Menlo", monospace;
+            font-size: 0.75em;
+            line-height: 1.5;
+            padding: 12px;
+            border-radius: var(--radius);
+            height: 380px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            border: 1px solid #333;
+        }
+        #log-output .log-info    { color: #9cdcfe; }
+        #log-output .log-warning { color: var(--color-yellow); }
+        #log-output .log-error   { color: #f48771; }
+        #log-output .log-critical{ color: var(--color-red); font-weight: bold; }
+        #log-output .log-debug   { color: #888; }
     </style>
 </head>
 <body>
@@ -205,9 +286,14 @@
 
         <div class="panel-header">
             <h1>Demo Application Controller</h1>
+            <div class="tab-bar">
+                <button class="tab-btn active" onclick="switchTab('control', this)">Control</button>
+                <button class="tab-btn"        onclick="switchTab('logs', this)">Logs</button>
+            </div>
         </div>
 
-        <div class="panel-body">
+        <!-- ===== CONTROL TAB ===== -->
+        <div id="tab-control" class="tab-panel active panel-body">
 
             <div class="section">
                 <div class="section-title">System Status</div>
@@ -241,12 +327,42 @@
             </div>
 
         </div>
+
+        <!-- ===== LOGS TAB ===== -->
+        <div id="tab-logs" class="tab-panel panel-body">
+
+            <div class="section">
+                <div class="section-title">Log Viewer</div>
+                <div class="log-toolbar">
+                    <select id="log-file-select" onchange="loadSelectedLog()">
+                        <option value="">— Select a log file —</option>
+                    </select>
+                    <label>
+                        <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+                    </label>
+                    <button onclick="loadSelectedLog()">&#8635; Refresh</button>
+                </div>
+                <div id="log-output">Select a log file above.</div>
+            </div>
+
+        </div>
+
     </div>
 
     <script>
         const stateDisplay = document.getElementById('robot-state');
         const messageLog   = document.getElementById('message-log');
 
+        /* ---- Tab switching ---- */
+        function switchTab(name, btn) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('tab-' + name).classList.add('active');
+            btn.classList.add('active');
+            if (name === 'logs') populateLogFileList();
+        }
+
+        /* ---- Status polling ---- */
         function updateRobotStatus() {
             fetch('/api/status')
                 .then(r => r.json())
@@ -260,62 +376,53 @@
                 });
         }
 
-        function setMessage(text) {
-            messageLog.textContent = text || '—';
-        }
+        function setMessage(text) { messageLog.textContent = text || '—'; }
 
+        /* ---- Task / control commands ---- */
         function sendTask(task) {
             fetch(`/api/task/${task}`, { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending task command.'));
         }
-
         function sendStop() {
             fetch('/api/stop', { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending stop command.'));
         }
-
         function sendInitialize() {
             fetch('/api/initialize', { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending initialization command.'));
         }
-
         function sendClearFaults() {
             fetch('/api/clear_faults', { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending clear faults command.'));
         }
-
         function sendShutdown() {
             fetch('/api/shutdown', { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending shutdown command.'));
         }
 
+        /* ---- Device info cards ---- */
         function loadRobotInfo() {
             fetch('/api/info')
                 .then(r => r.json())
                 .then(data => {
                     const container = document.getElementById('robot-info-container');
                     container.innerHTML = '';
-
                     if (!Array.isArray(data) || data.length === 0) {
                         container.innerHTML = '<p style="color:var(--color-muted);font-size:0.85em">No devices configured.</p>';
                         return;
                     }
-
                     const statusKeys = new Set(['connected', 'ready', 'faulted', 'device_id']);
-
                     data.forEach(device => {
                         const card = document.createElement('div');
                         card.className = 'device-card';
 
-                        // Header
                         const header = document.createElement('div');
                         header.className = 'device-card-header';
-
                         const title = document.createElement('span');
                         title.textContent = device.device_id || 'Unknown Device';
                         header.appendChild(title);
@@ -342,11 +449,9 @@
                         header.appendChild(badges);
                         card.appendChild(header);
 
-                        // Body
                         const body = document.createElement('div');
                         body.className = 'device-card-body';
                         const table = document.createElement('table');
-
                         for (const key in device) {
                             if (statusKeys.has(key)) continue;
                             const row = table.insertRow();
@@ -376,6 +481,66 @@
                 });
         }
 
+        /* ---- Log viewer ---- */
+        function populateLogFileList() {
+            fetch('/api/logs')
+                .then(r => r.json())
+                .then(data => {
+                    const sel = document.getElementById('log-file-select');
+                    const current = sel.value;
+                    sel.innerHTML = '<option value="">— Select a log file —</option>';
+                    for (const [category, files] of Object.entries(data)) {
+                        if (files.length === 0) continue;
+                        const group = document.createElement('optgroup');
+                        group.label = category;
+                        files.forEach(f => {
+                            const opt = document.createElement('option');
+                            opt.value = `${category}/${f}`;
+                            opt.textContent = f;
+                            if (opt.value === current) opt.selected = true;
+                            group.appendChild(opt);
+                        });
+                        sel.appendChild(group);
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function coloriseLine(line) {
+            const escaped = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            if (/\|\s*CRITICAL\s*\|/i.test(line)) return `<span class="log-critical">${escaped}</span>`;
+            if (/\|\s*ERROR\s*\|/i.test(line))    return `<span class="log-error">${escaped}</span>`;
+            if (/\|\s*WARNING\s*\|/i.test(line))  return `<span class="log-warning">${escaped}</span>`;
+            if (/\|\s*INFO\s*\|/i.test(line))     return `<span class="log-info">${escaped}</span>`;
+            if (/\|\s*DEBUG\s*\|/i.test(line))    return `<span class="log-debug">${escaped}</span>`;
+            return escaped;
+        }
+
+        function loadSelectedLog() {
+            const sel = document.getElementById('log-file-select');
+            const val = sel.value;
+            const output = document.getElementById('log-output');
+            if (!val) { output.innerText = 'Select a log file above.'; return; }
+            fetch(`/api/logs/${val}?lines=300`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.message) { output.innerText = data.message; return; }
+                    output.innerHTML = data.lines.map(coloriseLine).join('');
+                    if (document.getElementById('log-autoscroll').checked) {
+                        output.scrollTop = output.scrollHeight;
+                    }
+                })
+                .catch(() => { output.innerText = 'Error loading log file.'; });
+        }
+
+        // Auto-refresh log if the Logs tab is visible
+        setInterval(() => {
+            if (document.getElementById('tab-logs').classList.contains('active')) {
+                loadSelectedLog();
+            }
+        }, 3000);
+
+        /* ---- Startup ---- */
         setInterval(updateRobotStatus, 500);
         setInterval(loadRobotInfo, 5000);
         updateRobotStatus();

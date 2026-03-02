@@ -6,6 +6,7 @@ import threading
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+from pathlib import Path
 
 # --- Logging Setup ---
 os.makedirs("app_logs", exist_ok=True)
@@ -144,6 +145,46 @@ def clear_faults():
 def get_state_values():
     """Returns all valid ControllerState values for the UI."""
     return jsonify([s.value for s in ControllerState])
+
+
+# --- Log directories (resolved relative to this file so they work regardless of cwd) ---
+_BASE_DIR = Path(__file__).parent
+_LOG_DIRS = {
+    'app_logs':    _BASE_DIR / 'app_logs',
+    'device_logs': _BASE_DIR / 'device_logs',
+}
+
+@app.route('/api/logs', methods=['GET'])
+def list_logs():
+    """Returns a list of available log files grouped by directory."""
+    result = {}
+    for category, path in _LOG_DIRS.items():
+        if path.exists():
+            files = sorted(f.name for f in path.glob('*.log'))
+        else:
+            files = []
+        result[category] = files
+    return jsonify(result)
+
+@app.route('/api/logs/<category>/<filename>', methods=['GET'])
+def get_log(category, filename):
+    """Returns the last N lines of a log file. Query param: ?lines=200"""
+    if category not in _LOG_DIRS:
+        return jsonify({'message': 'Unknown log category.'}), 404
+    # Prevent path traversal
+    log_path = (_LOG_DIRS[category] / filename).resolve()
+    if not str(log_path).startswith(str(_LOG_DIRS[category].resolve())):
+        return jsonify({'message': 'Invalid path.'}), 400
+    if not log_path.exists():
+        return jsonify({'message': 'Log file not found.'}), 404
+    try:
+        lines = int(request.args.get('lines', 200))
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.readlines()
+        return jsonify({'filename': filename, 'lines': content[-lines:]}), 200
+    except Exception as e:
+        logger.error(f"Failed to read log {filename}: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to read log: {e}'}), 500
 
 
 # --- Cleanup on Server Shutdown ---

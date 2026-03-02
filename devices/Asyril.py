@@ -58,7 +58,7 @@ class AsyrilEyePlus(Device):
             print(f"Failed to shutdown: {e}")
     
     def clear_fault(self):
-        pass
+        self.api._faulted = False
     
 def example_usage():
     print("Initializing Asyril Eye Plus...")

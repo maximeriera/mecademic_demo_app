@@ -73,8 +73,8 @@ class AsyrilEyePlusApi:
         self.recipe = recipe
         
                 
-        self._connected = None
-        self._faulted = False
+        self._connected = False
+        self._faulted = True
         
         self._in_calib = False
         self._calib_pose = 0
@@ -228,6 +228,7 @@ class AsyrilEyePlusApi:
         except socket.timeout:
             self.logger.error("Socket timed out while waiting for response.")
             response = ""
+            self._faulted = True
             raise TimeoutError("Socket timed out while waiting for response.")
         return response
     
