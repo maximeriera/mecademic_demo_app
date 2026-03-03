@@ -15,6 +15,7 @@ from devices import Device
 from demo_code.prod import prod_cycle
 from demo_code.home import home
 from demo_code.shipment import shipment
+from demo_code.calib import calib
 
 from enum import Enum
 
@@ -55,7 +56,7 @@ class Task(threading.Thread):
                 case TaskType.SHIPMENT:
                     self._run_shipment()
                 case TaskType.CALIBRATION:
-                    self.logger.info(f"[{self.name}] CALIBRATION task is not implemented yet.")
+                    self._run_calib()
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
             self.state_change_callback(ControllerState.FAULTED)
@@ -84,11 +85,24 @@ class Task(threading.Thread):
             raise e 
         # --------------------------------------------------------
 
+    def _run_calib(self):
+        """Logic for CALIB task."""
+        try:        
+            calib(self.devices)
+        except Exception as e:
+            self.logger.warning(f"[{self.name}] CALIB task encountered an error: {e}")
+            raise e 
+        # --------------------------------------------------------
+
     def _run_prod_loop(self):
         """Logic for the infinite PROD task."""
         try:
+            self._run_home()
+            index = 1
             while not self.stopped():
-                prod_cycle(self.devices)
+                prod_cycle(self.devices, index)
+                index = (index) % 2 + 1
+            self._run_home()
         except Exception as e:
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
             raise e

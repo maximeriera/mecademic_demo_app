@@ -205,8 +205,10 @@ class AsyrilEyePlusApi:
             if response.startswith("200"):
                 self.stop_calibration()
             else:
+                self.stop_calibration()
                 raise RuntimeError(f"Failed to save calibration: {response}")
         else:
+            self.stop_calibration()
             raise RuntimeError(f"Failed to calibrate: {response}")
         return response
     
@@ -217,6 +219,7 @@ class AsyrilEyePlusApi:
         self.__send_raw__(command)
         response = self.__receive_raw__()
         if not response.startswith("200"):
+            self.stop_calibration()
             raise RuntimeError(f"Failed to take calibration image: {response}")
         self._calib_pose += 1
         return response
@@ -228,6 +231,7 @@ class AsyrilEyePlusApi:
         self.__send_raw__(command)
         response = self.__receive_raw__()
         if not response.startswith("200"):
+            self.stop_calibration()
             raise RuntimeError(f"Failed to set calibration pose: {response}")
         return response
 
