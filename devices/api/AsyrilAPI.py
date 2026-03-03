@@ -210,11 +210,26 @@ class AsyrilEyePlusApi:
             raise RuntimeError(f"Failed to calibrate: {response}")
         return response
     
-    def take_calibration_image(self):
-        raise NotImplementedError("Calibration method not implemented yet.")
+    def take_calibration_image(self, x:float, y:float):
+        if not self._calib_pose in [1, 4]:
+            raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
+        command = "take_calibration_image " + str(self._calib_pose)
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        if not response.startswith("200"):
+            raise RuntimeError(f"Failed to take calibration image: {response}")
+        self._calib_pose += 1
+        return response
     
-    def set_calibration_pose(self, n:int, x:float, y:float):
-        raise NotImplementedError("Calibration method not implemented yet.")
+    def set_calibration_pose(self, x:float, y:float):
+        if not self._calib_pose in [1, 4]:
+            raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
+        command = "set_calibration_point " + str(self._calib_pose) + " " + str(x) + " " + str(y)
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        if not response.startswith("200"):
+            raise RuntimeError(f"Failed to set calibration pose: {response}")
+        return response
 
     def __send_raw__(self, command):
         self.logger.info(f"Sending command: {command}")
