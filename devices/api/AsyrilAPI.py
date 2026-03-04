@@ -74,7 +74,7 @@ class AsyrilEyePlusApi:
         
                 
         self._connected = False
-        self._faulted = True
+        self._faulted = False
         
         self._in_calib = False
         self._calib_pose = 0
@@ -136,6 +136,7 @@ class AsyrilEyePlusApi:
         return response
 
     def start_production(self):
+        self.reset_state()
         command = "start production " + str(self.recipe)
         self.__send_raw__(command)
         response = self.__receive_raw__()
@@ -145,10 +146,11 @@ class AsyrilEyePlusApi:
         command = "get_part"
         self.__send_raw__(command)
         response = self.__receive_raw__()
+        response_dict = {}
         if response.startswith("200"):
             response_dict = self.extract_to_dict(response)
         else:
-            response_dict = {response}
+            response_dict['resp'] = {response}
         return response_dict
 
     def force_take_image(self):
@@ -176,6 +178,7 @@ class AsyrilEyePlusApi:
         return response
     
     def start_calibration(self, recipe:int = None):
+        self.reset_state()
         if recipe is None:
             recipe = self.recipe
         command = "start handeye_calibration " + str(recipe)
@@ -224,6 +227,20 @@ class AsyrilEyePlusApi:
         self._calib_pose += 1
         return response
     
+    def reset_state(self):
+        command = "get_state"
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        if response.startswith("200"):
+            command = "stop " + response[4:]
+            self.__send_raw__(command)
+            response = self.__receive_raw__()
+            if not response.startswith("200"):  
+                raise RuntimeError(f"Failed to take calibration image: {response}")
+            return response
+        else:
+            raise RuntimeError(f"Failed to get state for reset: {response}")
+    
     def set_calibration_pose(self, x:float, y:float):
         if not self._calib_pose in [1, 4]:
             raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
@@ -253,15 +270,15 @@ class AsyrilEyePlusApi:
     
     def __handle_response__(self, response:str):
         if response.startswith("200"):
-            return True
+            return True, response
         elif response.startswith("201"):
             return True, response
         elif response.startswith("400"):
             self.logger.error(f"Bad request: {response} - {EyePlusErrorCode(int(response))}")
-            return False
+            return False, response
         else:
             self.logger.error(f"Received error response: {response} - {EyePlusErrorCode(int(response))}")
-            return None
+            return None, None
 
     @staticmethod
     def extract_status(response):
@@ -295,3 +312,23 @@ class AsyrilEyePlusApi:
             result['resp'] = int(first_element)
 
         return result
+
+def example_usage():
+    api = AsyrilEyePlusApi(logger=logging.getLogger("AsyrilEyePlusApiExample"), ip_address="192.168.0.50", recipe=3276)
+    try:
+        api.connect()
+        api.start_production()
+        api.set_part_timeout(3)
+        timeout = api.get_part_timeout()
+        print(f"Current part timeout: {timeout}")
+        part_info = api.get_part()
+        print(f"Part info: {part_info}")
+        print(f"{part_info['resp']}: Part position X={part_info['x']}, Y={part_info['y']}, Rz={part_info['rz']}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        api.stop_production()
+        api.disconnect()
+        
+if __name__ == "__main__":
+    example_usage()
