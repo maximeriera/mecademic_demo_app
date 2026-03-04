@@ -228,7 +228,7 @@ class AsyrilEyePlusApi:
         return response
     
     def reset_state(self):
-        command = "get_state"
+        command = "get_parameter state"
         self.__send_raw__(command)
         response = self.__receive_raw__()
         if response.startswith("200"):
