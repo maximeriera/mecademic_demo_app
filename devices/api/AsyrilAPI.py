@@ -215,7 +215,7 @@ class AsyrilEyePlusApi:
             raise RuntimeError(f"Failed to calibrate: {response}")
         return response
     
-    def take_calibration_image(self, x:float, y:float):
+    def take_calibration_image(self):
         if not self._calib_pose in [1, 4]:
             raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
         command = "take_calibration_image " + str(self._calib_pose)
@@ -231,13 +231,16 @@ class AsyrilEyePlusApi:
         command = "get_parameter state"
         self.__send_raw__(command)
         response = self.__receive_raw__()
+        state = response[4:-1]
+        self.logger.error(f"Current state before reset: {state}")
         if response.startswith("200"):
-            command = "stop " + response[4:]
-            self.__send_raw__(command)
-            response = self.__receive_raw__()
-            if not response.startswith("200"):  
-                raise RuntimeError(f"Failed to take calibration image: {response}")
-            return response
+            if state != "ready":
+                command = "stop " + state
+                self.__send_raw__(command)
+                response = self.__receive_raw__()
+                if not response.startswith("200"):  
+                    raise RuntimeError(f"Failed to take calibration image: {response}")
+                return response
         else:
             raise RuntimeError(f"Failed to get state for reset: {response}")
     
@@ -317,13 +320,7 @@ def example_usage():
     api = AsyrilEyePlusApi(logger=logging.getLogger("AsyrilEyePlusApiExample"), ip_address="192.168.0.50", recipe=3276)
     try:
         api.connect()
-        api.start_production()
-        api.set_part_timeout(3)
-        timeout = api.get_part_timeout()
-        print(f"Current part timeout: {timeout}")
-        part_info = api.get_part()
-        print(f"Part info: {part_info}")
-        print(f"{part_info['resp']}: Part position X={part_info['x']}, Y={part_info['y']}, Rz={part_info['rz']}")
+        api.reset_state()
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
