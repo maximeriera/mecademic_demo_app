@@ -1,10 +1,12 @@
 from typing import Dict
-from threading import Thread
-import time
 
 from devices import Device
 
-from devices import MecaRobot, AsyrilEyePlus
+from devices.MecaRobot import MecaRobot
+from devices.PlanarMotor import PlanarMotor
+
+from devices.api import PlanarMotorApi as pmp
+
 
 JOINT_VEL = 15
 CARTLIN_VEL = 100
@@ -17,155 +19,138 @@ TRAILS_OFFSET = 20
 def prod_cycle(devices: Dict[str, Device], index:int):
     """Logic for PROD task."""
     
-    scara:MecaRobot = devices["scara"]
-    trail:MecaRobot = devices["meca_trail"]
-    dispenser:MecaRobot = devices["meca_dispenser"]
-    asyril:AsyrilEyePlus = devices["asyril_1"]
+    dispenser:MecaRobot = devices["meca_500_1"]
+    nester:MecaRobot = devices["meca_500_2"]
+    changer:MecaRobot = devices["meca_500_3"]
     
-    if not scara_trail:
-        def scara_trail(trail_id:int, scara:MecaRobot, asyril:AsyrilEyePlus) -> None:
-            try:
-                asyril.logger.info("force taking image for pick")
-                asyril.api.force_take_image()
-                for i in PARTS_PER_TRAIL:
-                    # asyril.force_take_image()
-                    asyril.logger.info("getting part pose for pick")
-                    pose = asyril.api.get_part()
-                    asyril.logger.info(f"pose response: {pose}")
-                    if pose['resp'] == 200:
-                        # print(f"Part detected at position X: {pose['x']}, Y: {pose['y']}")
-                        scara.api.SetVariable(name='PickPose.x', value=pose['x'])
-                        scara.api.SetVariable(name='PickPose.y', value=pose['y'])
-                    else:
-                        asyril.logger.error("Failed to get part pose")
-                        continue
+    planar_motor:PlanarMotor = devices["planar_motor_1"]
 
-                    pose_x = (i // 4) * TRAILS_OFFSET
-                    pose_y = (i % 4) * TRAILS_OFFSET
+    dispenser.api.SetJointVel(75)
 
-                    scara.logger.info(f"Setting place pose for part {i} to X: {pose_x}, Y: {pose_y}")
-                    scara.api.SetVariable(name='PlacePose.x', value=pose_x)
-                    scara.api.SetVariable(name='PlacePose.y', value=pose_y)
+    changer.api.SetJointVel(100)
 
-                    scara.logger.info(f"waiting for scara to be IDLE (timeout=30s) before starting pick_place_{trail_id} program")
-                    scara.api.WaitIdle(timeout=30)
-                    scara.logger.info(f"scara IDLE")
-                    # scara.StartProgram('pick')
+    nester.api.SetJointVel(115)
+    nester.api.SetCartLinVel(250)
 
-                    # scara.WaitIdle()
-                    # scara.StartProgram('place' + str(trail_id))
-
-                    scara.logger.info(f"starting pick_place_{trail_id} program")
-                    scara.api.ExpectExternalCheckpoint(1)
-                    scara.api.StartProgram(f'pick_place_{trail_id}')
-                    scara.logger.info(f"waiting for scara checkpoint")
-                    scara.api.WaitForAnyCheckpoint(timeout=3)
-
-                scara.logger.info(f"waiting for IDLE (timeout=30s)")
-                scara.api.WaitIdle(timeout=30)
-                scara.logger.info(f"scara IDLE")
-            except Exception as e:
-                scara.logger.error(f"Exception while handling scara vision pick: {e}")
-                asyril.logger.error(f"Exception while handling scara vision pick: {e}")
-
-    if not scara_capture:
-        def scara_capture(scara:MecaRobot) -> None:
-            scara.logger.info("Capturing image with scara IO")
-            data = scara.api.GetRtOutputState().data
-            data[4] = 1
-            scara.api.SetOutputState_Immediate(1, *data[:])
-            time.sleep(0.1)
-            data = scara.api.GetRtOutputState().data
-            data[4] = 0
-            scara.api.SetOutputState_Immediate(1, *data[:])
-            time.sleep(0.1)
     
-    scara.logger.info("Waiting IDLE (no timeout)")
-    scara.api.WaitIdle()
-    scara.logger.info("Idle")
-    trail.logger.info("Waiting IDLE (no timeout)")
-    trail.api.WaitIdle()
-    trail.logger.info("Idle")
-    
-    trail.api.ExpectExternalCheckpoint(11)
-    trail.api.StartProgram(f"pick{index}")
-    trail.api.StartProgram("place_exchange")
-    trail.logger.info("Waiting for any checkpoint (no timeout)")
-    trail.api.WaitForAnyCheckpoint()
-    trail.logger.info("Checkpoint reached, waiting for IDLE (no timeout)")
-    trail.logger.info("Waiting IDLE (no timeout)")
-    trail.api.WaitIdle()
-    trail.logger.info("Idle")
+    def swap_nearest_2_positions(planar_motor: PlanarMotor, pose_id_list):
 
-    vision_pick_thread = Thread(target=scara_trail, args=(index, scara, asyril))
-    vision_pick_thread.start()
-    
-    trail.logger.info("Waiting IDLE (no timeout)")
-    trail.api.WaitIdle()
-    trail.logger.info("Idle")
-    dispenser.logger.info("Waiting IDLE (no timeout)")
+        xlist = [0.120 + (i-1) * 0.240 for i in pose_id_list]
+        ylist = [0.120 for i in pose_id_list]
+
+        pos1_bot = planar_motor.api.get_xbot_at_pos(xlist[0], ylist[0])
+        pos2_bot = planar_motor.api.get_xbot_at_pos(xlist[1], ylist[1])
+
+        planar_motor.api.send_multi_linear_commands(
+            [pmp.PlanarMotorMove(pos1_bot, xlist[0], ylist[0] + 0.060), pmp.PlanarMotorMove(pos2_bot, xlist[1], ylist[1] - 0.060)]
+        )
+        
+        planar_motor.api.send_multi_linear_commands(
+            [pmp.PlanarMotorMove(pos1_bot, xlist[1], ylist[0] + 0.060), pmp.PlanarMotorMove(pos2_bot, xlist[0], ylist[1] - 0.060)]
+        )
+
+        planar_motor.api.send_multi_linear_commands(
+            [pmp.PlanarMotorMove(pos1_bot, xlist[1], ylist[1]), pmp.PlanarMotorMove(pos2_bot, xlist[0], ylist[0])]
+        )
+
+    def swap_4_parallel(planar_motor: PlanarMotor):
+
+        xlist = [0.120 + (i-1) * 0.240 for i in [1, 2, 3, 4]]
+        ylist = [0.120 for i in [1, 2, 3, 4]]
+
+        pos1_bot = planar_motor.api.get_xbot_at_pos(xlist[0], ylist[0])
+        pos2_bot = planar_motor.api.get_xbot_at_pos(xlist[1], ylist[1])
+        pos3_bot = planar_motor.api.get_xbot_at_pos(xlist[2], ylist[2])
+        pos4_bot = planar_motor.api.get_xbot_at_pos(xlist[3], ylist[3])
+
+        planar_motor.api.send_multi_linear_commands(
+            [pmp.PlanarMotorMove(pos1_bot, xlist[0], ylist[0] + 0.060),
+             pmp.PlanarMotorMove(pos2_bot, xlist[1], ylist[1] + 0.060),
+             pmp.PlanarMotorMove(pos3_bot, xlist[2], ylist[2] - 0.060),
+             pmp.PlanarMotorMove(pos4_bot, xlist[3], ylist[3] - 0.060),
+             ]
+        )
+        
+        planar_motor.api.send_multi_linear_commands(
+            [pmp.PlanarMotorMove(pos1_bot, xlist[2], ylist[0] + 0.060),
+             pmp.PlanarMotorMove(pos2_bot, xlist[3], ylist[1] + 0.060),
+             pmp.PlanarMotorMove(pos3_bot, xlist[0], ylist[2] - 0.060),
+             pmp.PlanarMotorMove(pos4_bot, xlist[1], ylist[3] - 0.060),
+             ]
+        )
+
+        planar_motor.api.send_multi_linear_commands(
+            [pmp.PlanarMotorMove(pos1_bot, xlist[2], ylist[2]),
+             pmp.PlanarMotorMove(pos2_bot, xlist[3], ylist[3]),
+             pmp.PlanarMotorMove(pos3_bot, xlist[0], ylist[0]),
+             pmp.PlanarMotorMove(pos4_bot, xlist[1], ylist[1])
+             ]
+        )
+
+    def spin_position(planar_motor: PlanarMotor, pose_id_list, time:float=1):
+        xlist = [0.120 + (i-1) * 0.240 for i in pose_id_list]
+        ylist = [0.120 for i in pose_id_list]
+
+        bot_list = [planar_motor.api.get_xbot_at_pos(xlist[i], ylist[i]) for i in range(len(xlist))]
+
+        for bot_id in bot_list:
+            planar_motor.api.send_rotation(bot_id, time, target_angle=0)
+
+    dispenser.api.StartProgram('nest')
+
+    if index % 2 == 1:
+        changer.api.StartProgram('change_A')
+    else:
+        changer.api.StartProgram('change_B')
+
+    nester.api.StartProgram('pick_curring')
+    nester.api.StartProgram('drop_inspect')
+    nester.api.StartProgram('pick_buffer')
+    nester.api.StartProgram('drop_curring')
+    nester.api.StartProgram('pick_inspect')
+    nester.api.StartProgram('drop_buffer')
+
+    spin_position(planar_motor, [3], time=12)
+    spin_position(planar_motor, [2], time=12)
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
+
     dispenser.api.WaitIdle()
-    dispenser.logger.info("Idle")
-    
-    dispenser.api.GripperClose()
-    trail.api.Delay(0.5)
-    trail.api.GripperOpen()
-    trail.api.Delay(1)
-    dispenser.api.Delay(1)
-    
-    trail.api.ExpectExternalCheckpoint(1)
-    trail.logger.info("Starting change program")
-    trail.api.StartProgram("change")
-    dispenser.logger.info("Starting dispense program")
-    dispenser.api.StartProgram("Dispense")
-    
-    trail.api.ExpectExternalCheckpoint(1)
-    trail.api.ExpectExternalCheckpoint(2)
-    trail.api.ExpectExternalCheckpoint(3)
-    trail.api.ExpectExternalCheckpoint(4)
-    trail.api.ExpectExternalCheckpoint(5)
-    trail.api.ExpectExternalCheckpoint(6)
-    trail.logger.info("Starting scan program")
-    trail.api.StartProgram("scan")
-    
-    trail.logger.info("Waiting for any checkpoint (timeout=3s)")
-    trail.api.WaitForAnyCheckpoint(timeout=3)
-    trail.logger.info("Checkpoint reached")
-    scara_capture(scara)
-    trail.logger.info("Waiting for any checkpoint (timeout=3s)")
-    trail.api.WaitForAnyCheckpoint(timeout=3)
-    trail.logger.info("Checkpoint reached")
-    scara_capture(scara)
-    trail.logger.info("Waiting for any checkpoint (timeout=3s)")
-    trail.api.WaitForAnyCheckpoint(timeout=3)
-    trail.logger.info("Checkpoint reached")
-    scara_capture(scara)
-    trail.logger.info("Waiting for any checkpoint (timeout=3s)")
-    trail.api.WaitForAnyCheckpoint(timeout=3)
-    trail.logger.info("Checkpoint reached")
-    scara_capture(scara)
-    trail.logger.info("Waiting for any checkpoint (timeout=3s)")
-    trail.api.WaitForAnyCheckpoint(timeout=3)
-    trail.logger.info("Checkpoint reached")
-    scara_capture(scara)
-    trail.logger.info("Waiting for any checkpoint (timeout=3s)")
-    trail.api.WaitForAnyCheckpoint(timeout=3)
-    trail.logger.info("Checkpoint reached")
-    scara_capture(scara)
-    # 
-    vision_pick_thread.join()
-    scara.logger.info("Waiting for scara to be IDLE (timeout=30s)")
-    scara.api.WaitIdle(timeout=30)
 
-    # trail.api.StartProgram(f"pick{index}")
-    # trail.api.StartProgram("dump")
-    # trail.api.StartProgram(f"drop{index}")
-    #
-    # trail.api.WaitIdle()
+    swap_nearest_2_positions(planar_motor, [4, 3])
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
 
-    trail.logger.info("Starting pick and place programs")
-    trail.api.StartProgram("dump")
-    trail.api.StartProgram(f"drop{index}")
+    dispenser.api.StartProgram('vials')
+
+    swap_nearest_2_positions(planar_motor, [2, 3])
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
+
+    nester.api.StartProgram('pick_conv')
+    nester.api.StartProgram('drop_inspect')
+    nester.api.StartProgram('pick_buffer')
+    nester.api.StartProgram('drop_conv')
+
+    spin_position(planar_motor, [3], time=3)
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
+
+    dispenser.api.WaitIdle()
+
+    swap_nearest_2_positions(planar_motor, [3, 4])
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
+
+    dispenser.api.StartProgram('vials')
+
+    spin_position(planar_motor, [3], time=3)
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
+
+    nester.api.WaitIdle()
+
+    nester.api.StartProgram('pick_inspect')
+    nester.api.StartProgram('drop_buffer')
+
+    dispenser.api.WaitIdle()
+
+    swap_4_parallel(planar_motor)
+    planar_motor.api.wait_multiple_move_done([1, 2, 3, 4])
 
 
 

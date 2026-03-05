@@ -5,35 +5,21 @@ from devices.MecaRobot import MecaRobot
 
 def shipment(devices: Dict[str, Device]):
     """Logic for SHIPMENT task."""
-    scara:MecaRobot = devices["scara"]
-    trail:MecaRobot = devices["meca_trail"]
-    dispenser:MecaRobot = devices["meca_dispenser"]
-
-    scara.logger.info("Moving to shipment position...")
-    trail.logger.info("Moving to shipment position...")
-    dispenser.logger.info("Moving to shipment position...")
+    dispenser:MecaRobot = devices["meca_500_1"]
+    nester:MecaRobot = devices["meca_500_2"]
+    changer:MecaRobot = devices["meca_500_3"]
     
-    scara.api.SetJointVel(40)
-    trail.api.SetJointVel(40)
-    dispenser.api.SetJointVel(40)
-
-    dispenser.api.GripperClose()
-    dispenser.api.Delay(1)
-
-    scara.api.MoveJoints(65, -145, -33, 80)
-    trail.api.MoveJoints(0, 30, 60, 0, 0, 0)
-    dispenser.api.MoveJoints(0, -60, 60, 0, 30, 0)
     
-    scara.logger.info("Robot waiting for completion...")
-    trail.logger.info("Robot waiting for completion...")
-    dispenser.logger.info("Robot waiting for completion...")
+    dispenser.api.MoveJoints(0, -60, 40, 0, 20, 0)
 
-    scara.api.WaitIdle()
-    trail.api.WaitIdle()
+    nester.api.GripperOpen()
+    nester.api.MoveJoints(90, -20, 60, 0, 30, 0)
+
+    changer.api.GripperOpen()
+    changer.api.MoveJoints(0, -40, 40, 0, 40, 0)
+
+    changer.api.WaitIdle()
+    nester.api.WaitIdle()
     dispenser.api.WaitIdle()
-    
-    scara.logger.info("Moving to shipment position complete.")
-    trail.logger.info("Moving to shipment position complete.")
-    dispenser.logger.info("Moving to shipment position complete.")
-    
+
     return
