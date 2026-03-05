@@ -232,7 +232,7 @@ class AsyrilEyePlusApi:
         self.__send_raw__(command)
         response = self.__receive_raw__()
         state = response[4:-1]
-        self.logger.error(f"Current state before reset: {state}")
+        self.logger.info(f"Current state before reset: {state}")
         if response.startswith("200"):
             if state != "ready":
                 command = "stop " + state
