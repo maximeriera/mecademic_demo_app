@@ -82,12 +82,7 @@ devices:
     type: "mecademic"
     ip_address: "192.168.0.102"
 
-  arduino_io:
-    type: "arduino"
-    port: "COM3"
 ```
-
-Supported `type` values: `mecademic`, `arduino`.
 
 ---
 
