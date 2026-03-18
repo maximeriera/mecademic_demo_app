@@ -12,10 +12,10 @@ from typing import Dict
 from .ControllerState import ControllerState
 from devices import Device
 
-from demo_code.prod import prod_cycle
-from demo_code.home import home
-from demo_code.shipment import shipment
-from demo_code.calib import calib
+from application_code.prod import prod_cycle
+from application_code.home import home
+from application_code.shipment import shipment
+from application_code.calib import calib
 
 from enum import Enum
 

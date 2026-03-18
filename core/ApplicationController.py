@@ -65,13 +65,6 @@ class ApplicationController:
                 device = MecaRobot(ip_address=device_info.get('ip_address', ''), name=device_name)
                 self.devices[device_name] = device
             
-            #elif device_type == 'arduino':
-            #    from devices import Arduino
-            #    self.logger.info(f"Creating Arduino IO API for device: {device_name}")
-            #    import accessories_api.ArduinoBoard as arduino_api_module
-            #    # Placeholder for actual Arduino API creation
-            #    arduino_api = arduino_api_module.ArduinoBoard(port=device_info.get('Port', 'COM3'))
-            #    
             #elif device_type == 'zaber':
             #    self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
             #    import accessories_api.ZaberAxis as zaber_api_module
@@ -87,6 +80,12 @@ class ApplicationController:
                 from devices import AsyrilEyePlus
                 self.logger.info(f"Creating Asyril API for device: {device_name}")
                 device = AsyrilEyePlus(ip_address=device_info.get('ip_address', ''), recipe=device_info.get('recipe', 0), name=device_name)
+                self.devices[device_name] = device
+                
+            elif device_type == 'arduino':
+                from devices import ArduinoBoard
+                self.logger.info(f"Creating Arduino IO API for device: {device_name}")
+                device = ArduinoBoard(port=device_info.get('Port', 'COM3'), name=device_name)
                 self.devices[device_name] = device
                 
             else:

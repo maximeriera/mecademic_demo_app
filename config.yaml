@@ -2,6 +2,16 @@
 
 devices:
   # --- Robots ---
-  meca_robot_1:
+  mirror_robot:
     type: "mecademic"
-    ip_address: "192.168.0.100"
+    ip_address: "192.168.0.101"
+
+  dispenser_robot:
+    type: "mecademic"
+    ip_address: "192.168.0.102"
+    
+  # --- Accessories/Controllers ---
+
+  arduino_io:
+    type: "arduino"
+    port: "COM3"
