@@ -2,21 +2,6 @@
 
 devices:
   # --- Robots ---
-  scara:
+  meca_robot_1:
     type: "mecademic"
-    ip_address: "192.168.0.101"
-  
-  # meca_trail:
-  #   type: "mecademic"
-  #   ip_address: "192.168.0.100"
-  # 
-  # meca_dispenser:
-  #   type: "mecademic"
-  #   ip_address: "192.168.0.102"
-    
-  # --- Accessories/Controllers ---
-
-  asyril_1:
-    type: "asyril"
-    ip_address: "192.168.0.50"
-    recipe: 63083
+    ip_address: "192.168.0.100"

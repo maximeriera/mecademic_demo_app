@@ -1,19 +1,18 @@
-import mecademicpy.robot as mdr
+from devices import Device
+from typing import Dict
 
+from devices.MecaRobot import MecaRobot
 
-from typing import Tuple
-
-from typing import Tuple, Any
-
-def home(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
+def home(devices: Dict[str, Device]):
     """Logic for HOME task."""
+    meca_robot_1:MecaRobot = devices["meca_robot_1"]
     
-    scara:mdr.Robot = robot_apis[0]
-    trail:mdr.Robot = robot_apis[1]
-    dispenser:mdr.Robot = robot_apis[2]
-    
-    scara.MoveJoints(65, -145, -33, 80)
-    trail.MoveJoints(0, -40, 10, 0, 30, 0)
-    dispenser.MoveJoints(-15, -30, 30, 0, 0, 0)
+    meca_robot_1.api.MoveJoints(0, 0, 0, 0, 0, 0)
 
+    meca_robot_1.logger.info("Robot waiting for completion...")
+
+    meca_robot_1.api.WaitIdle()
+    
+    meca_robot_1.logger.info("Moving to home position complete.")
+    
     return
