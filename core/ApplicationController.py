@@ -1,23 +1,65 @@
 
-import mecademicpy.robot as mdr
+"""
+core/ApplicationController.py
+------------------------------
+Central orchestrator for the robotic cell.
 
+The ``ApplicationController`` owns all :class:`~devices.Device` instances,
+drives the :class:`~core.ControllerState` state machine, and manages the
+lifecycle of :class:`~core.Task` threads.  It also runs a lightweight
+background monitor thread that polls every device for faults and automatically
+aborts the running task if any device enters an error state.
+
+Typical lifecycle
+-----------------
+1. Instantiate: ``ctrl = ApplicationController()``
+2. Initialize: ``ctrl.initialize()``  →  state becomes ``READY``
+3. Start tasks: ``ctrl.start_task(TaskType.PROD)``  →  state becomes ``BUSY``
+4. Stop / abort: ``ctrl.stop_current_task()`` or ``ctrl.abort_current_task()``
+5. Shutdown: ``ctrl.shutdown()``  →  state becomes ``OFF``
+"""
+
+import os
 import threading
 import time
-
-from devices import Device
-
 import yaml
-from typing import Dict, List, Any
+
+from typing import Dict, Any
 
 import logging
 from logging.handlers import RotatingFileHandler
-import os
+
+from devices import Device
 
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
 
-
 class ApplicationController:
+    """
+    Orchestrates the full robotic cell: device creation, state management,
+    task execution, fault monitoring, and graceful shutdown.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to the YAML configuration file that declares all devices.
+        Defaults to ``'config.yaml'`` (relative to the current working
+        directory).
+
+    Attributes
+    ----------
+    devices : Dict[str, Device]
+        Map of ``device_id → Device`` for every device loaded from config.
+    config : Dict
+        Raw configuration dictionary loaded from ``config_path``.
+
+    State machine
+    -------------
+    OFF  ──► INITIALIZING  ──► READY  ──► BUSY
+                ▲         
+                └─ FAULTED
+    """
+
     def __init__(self, config_path: str = 'config.yaml'):
         
         self.logger = self._setup_logger()
@@ -40,7 +82,12 @@ class ApplicationController:
 
     
     def _setup_logger(self):
-        """Creates a unique, rotating log file for this specific device."""
+        """Create a rotating log file at ``logs/app/ApplicationController.log``.
+
+        Returns
+        -------
+        logging.Logger
+        """
         # Ensure the log directory exists
         os.makedirs("logs/app", exist_ok=True)
         
@@ -57,6 +104,13 @@ class ApplicationController:
         return logger
     
     def _create_devices(self):
+        """Instantiate all devices declared in the config and store them in
+        :attr:`devices`.
+
+        Supported ``type`` values (case-insensitive):
+        ``mecademic``, ``asyril``, ``arduino``.
+        Unknown types are skipped with a warning.
+        """
         for device_name, device_info in self.config.get('devices', {}).items():
             device_type = device_info.get('type', '').lower()
             if device_type == 'mecademic':
@@ -65,13 +119,6 @@ class ApplicationController:
                 device = MecaRobot(ip_address=device_info.get('ip_address', ''), name=device_name)
                 self.devices[device_name] = device
             
-            #elif device_type == 'arduino':
-            #    from devices import Arduino
-            #    self.logger.info(f"Creating Arduino IO API for device: {device_name}")
-            #    import accessories_api.ArduinoBoard as arduino_api_module
-            #    # Placeholder for actual Arduino API creation
-            #    arduino_api = arduino_api_module.ArduinoBoard(port=device_info.get('Port', 'COM3'))
-            #    
             #elif device_type == 'zaber':
             #    self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
             #    import accessories_api.ZaberAxis as zaber_api_module
@@ -89,11 +136,31 @@ class ApplicationController:
                 device = AsyrilEyePlus(ip_address=device_info.get('ip_address', ''), recipe=device_info.get('recipe', 0), name=device_name)
                 self.devices[device_name] = device
                 
+            elif device_type == 'arduino':
+                from devices import ArduinoBoard
+                self.logger.info(f"Creating Arduino IO API for device: {device_name}")
+                device = ArduinoBoard(port=device_info.get('Port', 'COM3'), name=device_name)
+                self.devices[device_name] = device
+                
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 
     def initialize(self):
-        """Perform initial setup and start the monitor."""
+        """Connect and initialise every device, then transition to ``READY``.
+
+        Steps
+        -----
+        1. Set state to ``INITIALIZING``.
+        2. Call :meth:`~devices.Device.initialize` on each device in order.
+        3. Restart the monitor thread if it is not alive.
+        4. Set state to ``READY``.
+
+        Raises
+        ------
+        Exception
+            Re-raised from the failing device's ``initialize()`` after the
+            controller is transitioned to ``FAULTED``.
+        """
         self.set_state(ControllerState.INITIALIZING)   
         for _, device in self.devices.items():
             try:
@@ -115,22 +182,42 @@ class ApplicationController:
         
         self.set_state(ControllerState.READY)
 
-    def set_state(self, new_state: ControllerState):
-        """Thread-safe state change with transition checks."""
+    def set_state(self, new_state: ControllerState) -> ControllerState:
+        """Thread-safe state transition.
+
+        Logs the transition only when the state actually changes.
+
+        Parameters
+        ----------
+        new_state : ControllerState
+            The desired next state.
+
+        Returns
+        -------
+        ControllerState
+            The current state after the call (may be unchanged).
+        """
         with self._state_lock:
             if self._state != new_state:
                 self.logger.info(f"--- State Change: {self._state.value} -> {new_state.value} ---")
                 self._state = new_state
             return self._state
 
-    def get_state(self):
-        """Get the current robot state."""
+    def get_state(self) -> ControllerState:
+        """Return the current controller state (thread-safe)."""
         with self._state_lock:
             return self._state
         
-    def get_devices_info(self) -> List[Dict[str, Any]]:
-        """
-        Gathers and returns static information about ALL devices in a list of dictionaries.
+    def get_devices_info(self) -> Dict[str, Dict[str, Any]]:
+        """Return static info for every device, keyed by ``device_id``.
+
+        Each value is the dict returned by :attr:`~devices.Device.info`.
+        Used by the ``/api/info`` endpoint to populate the device cards.
+
+        Returns
+        -------
+        Dict[str, Dict[str, Any]]
+            ``{ device_id: { ...info fields... } }``
         """
         all_info = {}
         
@@ -143,8 +230,20 @@ class ApplicationController:
 
     # --- Task Management ---
 
-    def start_task(self, task_type: TaskType):
-        """Starts a new task if the robot is READY."""
+    def start_task(self, task_type: TaskType) -> bool:
+        """Spawn a new :class:`~core.Task` thread if the controller is ``READY``.
+
+        Parameters
+        ----------
+        task_type : TaskType
+            The task to execute (``HOME``, ``SHIPMENT``, ``PROD``, ``CALIBRATION``).
+
+        Returns
+        -------
+        bool
+            ``True`` if the task was successfully started, ``False`` if the
+            controller is not in ``READY`` state or a task is already running.
+        """
         if self.get_state() != ControllerState.READY:
             self.logger.info(f"Cannot start task. Robot is {self.get_state().value}.")
             return False
@@ -165,7 +264,12 @@ class ApplicationController:
         return True
 
     def stop_current_task(self):
-        """Stops the currently running task."""
+        """Gracefully stop the running task (user-initiated).
+
+        Signals the task to stop after its current cycle completes, then runs
+        the home sequence before returning to ``READY``.  Has no effect if
+        the controller is not in ``BUSY`` state.
+        """
         if self.get_state() != ControllerState.BUSY or not self._current_task:
             self.logger.info("No active task to stop.")
             return
@@ -175,14 +279,23 @@ class ApplicationController:
 
 
     def abort_current_task(self):
-        """Public: immediately abort the current task (user-initiated emergency stop)."""
+        """Immediately abort the running task (user-initiated emergency stop).
+
+        Calls :meth:`~core.Task.abort` which sets the stop flag **and** calls
+        :meth:`~devices.Device.abort` on every device, unblocking any in-flight
+        hardware call (e.g. ``WaitIdle()``) right away.  Has no effect if no
+        task is currently alive.
+        """
         if not self._current_task or not self._current_task.is_alive():
             self.logger.info("No active task to abort.")
             return
         self._abort_current_task()
 
     def _abort_current_task(self):
-        """Internal: abort the current task regardless of controller state (fault or user)."""
+        """Internal abort — used by both the fault monitor and :meth:`abort_current_task`.
+
+        Safe to call regardless of the current controller state.
+        """
         if self._current_task and self._current_task.is_alive():
             self.logger.warning("Aborting current task due to device fault or stop request.")
             self._current_task.abort()
@@ -191,7 +304,19 @@ class ApplicationController:
     # --- Monitoring Thread ---
 
     def _monitor_devices_status(self):
-        """Dedicated thread to monitor the devices' hardware status."""
+        """Background monitor thread — polls device health every 200 ms.
+
+        Behaviour
+        ---------
+        - Skips polling while the controller is ``OFF`` or ``INITIALIZING``.
+        - If any device reports ``faulted == True``, transitions to ``FAULTED``
+          and calls :meth:`_abort_current_task` to interrupt the running task.
+        - If all devices are healthy and ready and no task is running, promotes
+          state back to ``READY`` (covers automatic recovery after clear-fault).
+        - Joins and clears :attr:`_current_task` once the task thread exits.
+
+        Stops when :attr:`_monitor_stop_event` is set (via :meth:`shutdown`).
+        """
         while not self._monitor_stop_event.is_set():
             # self.logger.debug("Monitoring devices status...")
             if self.get_state() in [ControllerState.INITIALIZING, ControllerState.OFF]:
@@ -236,6 +361,11 @@ class ApplicationController:
         pass
     
     def clear_faults(self):
+        """Call :meth:`~devices.Device.clear_fault` on every device.
+
+        Errors from individual devices are logged as warnings and do not
+        prevent the remaining devices from being cleared.
+        """
         for _, device in self.devices.items():
             try:
                 device.clear_fault()
@@ -243,7 +373,22 @@ class ApplicationController:
                 self.logger.warning(f"Error clearing faults on device {device.device_id}: {e}")
         
     def shutdown(self):
-        """Gracefully stop all threads and clean up."""
+        """Gracefully shut down the controller and all devices.
+
+        Steps
+        -----
+        1. Set state to ``FAULTED`` so no new tasks can start.
+        2. Signal the monitor thread to stop.
+        3. Stop the running task (if any) and wait up to 5 s.
+        4. Wait up to 10 s for the monitor thread to exit.
+        5. Call :meth:`~devices.Device.shutdown` on each device.
+        6. Set state to ``OFF``.
+
+        Raises
+        ------
+        Exception
+            If the monitor thread does not exit within the timeout.
+        """
         self.logger.info("Shutting down Robot Controller...")
         self.set_state(ControllerState.FAULTED)
         self._monitor_stop_event.set()
@@ -269,10 +414,25 @@ class ApplicationController:
         
         
     @staticmethod
-    # FIX 3: Remove 'self' from static method definition
     def get_devices_config(config_file_path: str = 'config.yaml') -> Dict[str, Any]:
-        """
-        Loads and returns the configuration data from the specified YAML file.
+        """Load and return the raw configuration from a YAML file.
+
+        Parameters
+        ----------
+        config_file_path : str
+            Path to the YAML file.  Defaults to ``'config.yaml'``.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Parsed YAML content, or an empty dict if the file is empty.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist at the given path.
+        yaml.YAMLError
+            If the file is not valid YAML.
         """
         try:
             with open(config_file_path, 'r') as file:
