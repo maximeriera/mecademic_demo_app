@@ -35,6 +35,7 @@ except Exception as e:
         def get_state(self): return ControllerState.OFF
         def start_task(self, task): print("Mocked start task.")
         def stop_current_task(self): print("Mocked stop task.")
+        def abort_current_task(self): print("Mocked abort task.")
         def initialize(self): return True
         def shutdown(self): pass
         def get_devices_info(self): return {}
@@ -102,10 +103,17 @@ def shutdown_system():
 
 @app.route('/api/stop', methods=['POST'])
 def stop_task():
-    """API endpoint to stop the current task."""
+    """API endpoint to stop the current task gracefully (finishes current cycle)."""
     logger.info("POST /api/stop - Stop signal sent.")
     APPLICATION.stop_current_task()
-    return jsonify({'message': 'Stop signal sent.', 'success': True}), 200
+    return jsonify({'message': 'Stop signal sent. Current cycle will finish.', 'success': True}), 200
+
+@app.route('/api/abort', methods=['POST'])
+def abort_task():
+    """API endpoint to abort the current task immediately."""
+    logger.info("POST /api/abort - Abort signal sent.")
+    APPLICATION.abort_current_task()
+    return jsonify({'message': 'Abort signal sent. Task interrupted immediately.', 'success': True}), 200
 
 @app.route('/api/info', methods=['GET'])
 def get_APPLICATION_info():

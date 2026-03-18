@@ -166,9 +166,38 @@
 
         .btn-task     { background-color: var(--color-muted); }
         .btn-stop     { background-color: var(--color-red); }
+        .btn-abort    { background-color: var(--color-yellow); }
         .btn-init     { background-color: var(--color-blue); }
         .btn-clear    { background-color: var(--color-orange); }
         .btn-shutdown { background-color: var(--color-header); }
+
+        /* --- Task split layout --- */
+        .task-split {
+            display: flex;
+            gap: 0;
+            align-items: stretch;
+        }
+        .task-col {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+        }
+        .task-separator {
+            width: 1px;
+            background-color: var(--color-border);
+            margin: 0 12px;
+            flex-shrink: 0;
+        }
+        .task-col-label {
+            font-size: 0.68em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--color-muted);
+            text-align: center;
+            margin-bottom: 2px;
+        }
 
         /* --- Device Cards --- */
         .device-card {
@@ -303,12 +332,20 @@
 
             <div class="section">
                 <div class="section-title">Tasks</div>
-                <div class="btn-grid">
-                    <button class="btn-task" onclick="sendTask('prod')">PROD</button>
-                    <button class="btn-stop"  onclick="sendStop()">STOP</button>
-                    <button class="btn-task" onclick="sendTask('home')">HOME</button>
-                    <button class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
-                    <button class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
+                <div class="task-split">
+                    <div class="task-col">
+                        <div class="task-col-label">Manual</div>
+                        <button class="btn-task" onclick="sendTask('home')">HOME</button>
+                        <button class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
+                        <button class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
+                    </div>
+                    <div class="task-separator"></div>
+                    <div class="task-col">
+                        <div class="task-col-label">Auto</div>
+                        <button class="btn-task" onclick="sendTask('prod')">PROD</button>
+                        <button class="btn-stop"  onclick="sendStop()">STOP</button>
+                        <button class="btn-abort" onclick="sendAbort()">ABORT</button>
+                    </div>
                 </div>
             </div>
 
@@ -388,6 +425,11 @@
             fetch('/api/stop', { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending stop command.'));
+        }
+        function sendAbort() {
+            fetch('/api/abort', { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending abort command.'));
         }
         function sendInitialize() {
             fetch('/api/initialize', { method: 'POST' })

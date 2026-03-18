@@ -100,13 +100,20 @@ class Task(threading.Thread):
             self._run_home()
             index = 1
             while not self.stopped():
-                prod_cycle(self.devices, index)
+                try:
+                    prod_cycle(self.devices, index)
+                except Exception as e:
+                    if self.stopped():
+                        # abort() called mid-cycle: ClearMotion() unblocked WaitIdle() — clean exit
+                        self.logger.info(f"[{self.name}] Prod cycle interrupted by abort: {e}")
+                        return
+                    raise  # genuine device error → propagate → FAULTED
                 index = (index) % 2 + 1
+            # stop() called between cycles: finish the loop cleanly
             self._run_home()
         except Exception as e:
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
             raise e
-            # -------------------------------------------------------------------------
             
     def stop(self):
         """Signal the task to stop execution gracefully."""
@@ -116,6 +123,21 @@ class Task(threading.Thread):
     def stopped(self):
         """Check if the stop signal has been received."""
         return self._stop_event.is_set()
+    
+    def abort(self):
+        """Abort the task immediately: unblocks any in-flight hardware call right away.
+        
+        Unlike stop(), this does NOT wait for the current cycle to finish.
+        Sets the stop flag AND calls device.abort() on every device so that
+        blocking calls like WaitIdle() raise immediately.
+        """
+        self.logger.warning(f"[{self.name}] Aborting task immediately!")
+        self._stop_event.set()
+        for device in self.devices.values():
+            try:
+                device.abort()
+            except Exception as e:
+                self.logger.warning(f"[{self.name}] Error aborting device {device.device_id}: {e}")
 
     def is_done(self):
         """Check if the task has completed."""

@@ -59,6 +59,9 @@ class AsyrilEyePlus(Device):
     
     def clear_fault(self):
         self.api._faulted = False
+
+    def abort(self):
+        self.logger.warning(f"[{self.device_id}] Abort requested (no motion to clear).")
     
 def example_usage():
     print("Initializing Asyril Eye Plus...")

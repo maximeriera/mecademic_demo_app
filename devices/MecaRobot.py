@@ -63,7 +63,19 @@ class MecaRobot(Device):
         except Exception as e:
             self.logger.error(f"Failed to connect to MecaRobot at {self._ip_address}: {e}")
             raise ConnectionError(f"Failed to connect: {e}")
-        self._api.ActivateAndHome()
+        try:
+            self._api.ClearMotion()
+            self._api.ResumeMotion()
+            self._api.ResetError()
+            self._api.ActivateRobot()
+            self._api.WaitActivated()
+            if self._api.GetStatusRobot().error_status:
+                raise Exception(f"{self._api.GetStatusRobot().error_code}")
+            self._api.ActivateAndHome()
+            self._api.WaitIdle()
+        except Exception as e:
+            self.logger.error(f"Error during MecaRobot initialization sequence: {e}")
+            raise e
         
     def deactivate(self):
         self.logger.info("Deactivating MecaRobot.")
@@ -81,6 +93,14 @@ class MecaRobot(Device):
         self._api.ResetError()
         self._api.ClearMotion()
         self._api.ResumeMotion()
+
+    def abort(self):
+        self.logger.warning(f"[{self.device_id}] Aborting: clearing motion queue.")
+        try:
+            self._api.ClearMotion()
+            self._api.ResumeMotion()
+        except Exception as e:
+            self.logger.error(f"[{self.device_id}] Error during abort: {e}")
         
 def example_usage():
     robot = MecaRobot("192.168.0.100")

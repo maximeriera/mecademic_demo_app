@@ -170,9 +170,24 @@ class ApplicationController:
         if self.get_state() != ControllerState.BUSY or not self._current_task:
             self.logger.info("No active task to stop.")
             return
-
+        
         self._current_task.stop()
         # The Task thread will handle the transition back to READY or FAULTED
+
+
+    def abort_current_task(self):
+        """Public: immediately abort the current task (user-initiated emergency stop)."""
+        if not self._current_task or not self._current_task.is_alive():
+            self.logger.info("No active task to abort.")
+            return
+        self._abort_current_task()
+
+    def _abort_current_task(self):
+        """Internal: abort the current task regardless of controller state (fault or user)."""
+        if self._current_task and self._current_task.is_alive():
+            self.logger.warning("Aborting current task due to device fault or stop request.")
+            self._current_task.abort()
+            # The Task thread will handle the transition back to READY or FAULTED
 
     # --- Monitoring Thread ---
 
@@ -192,8 +207,9 @@ class ApplicationController:
             for _, device in self.devices.items():
                 if device.faulted:
                     if self.get_state() != ControllerState.FAULTED:
-                        self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state.")
+                        self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state and aborting task.")
                         self.set_state(ControllerState.FAULTED)
+                        self._abort_current_task()
                     all_healthy = False
                     all_ready = False
                     break # Break the inner loop, controller is faulted

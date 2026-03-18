@@ -101,3 +101,11 @@ class Device(ABC):
         # TO DO
         # To be implemented by accessories that support fault clearing, if needed
         pass
+
+    @abstractmethod
+    def abort(self):
+        """
+        Immediately abort any ongoing operation on the device.
+        Called when a fault is detected on any device to halt the whole cell.
+        """
+        pass

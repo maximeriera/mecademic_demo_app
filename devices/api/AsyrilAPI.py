@@ -1,6 +1,8 @@
 import socket
 import re
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, Future
 
 TIMEOUT = 35
 
@@ -78,6 +80,10 @@ class AsyrilEyePlusApi:
         
         self._in_calib = False
         self._calib_pose = 0
+
+        # Async support: single-worker executor to serialise background recv calls
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="asyril_async")
+        self._pending_future: Future | None = None
         
     @property
     def connected(self):
@@ -121,6 +127,7 @@ class AsyrilEyePlusApi:
     
     def disconnect(self):
         self.logger.info("Disconnecting from Asyril Eye Plus...")
+        self._executor.shutdown(wait=False, cancel_futures=True)
         if self._connection:
             self._connection.close()
             self._connection = None
@@ -143,6 +150,7 @@ class AsyrilEyePlusApi:
         return response
 
     def get_part(self):
+        """Blocking get_part. Waits until the device finds a part and returns the pose dict."""
         command = "get_part"
         self.__send_raw__(command)
         response = self.__receive_raw__()
@@ -152,6 +160,55 @@ class AsyrilEyePlusApi:
         else:
             response_dict['resp'] = {response}
         return response_dict
+
+    def get_part_async(self) -> Future:
+        """Non-blocking get_part. Sends the get_part command immediately and returns a
+        ``concurrent.futures.Future`` that resolves to the same dict as :meth:`get_part`.
+
+        The device starts searching as soon as this method returns, so the caller is free
+        to do other work (e.g. move the robot to the pick position) and only block when
+        the result is actually needed::
+
+            future = api.get_part_async()   # device starts searching
+            robot.MoveJoints(...)            # motion happens in parallel
+            pose = future.result(timeout=35) # block only when pose is required
+
+        Raises:
+            RuntimeError: if a previous async call is still pending.
+
+        Note:
+            Do not call other AsyrilAPI methods while the future is pending — the
+            underlying socket is not safe for concurrent use.
+        """
+        if self._pending_future is not None and not self._pending_future.done():
+            raise RuntimeError(
+                "A get_part_async call is already in progress. "
+                "Await the previous future before starting a new one."
+            )
+
+        self.logger.info("Sending asynchronous get_part command...")
+        self.__send_raw__("get_part")
+
+        def _wait_for_response() -> dict:
+            try:
+                response = self.__receive_raw__()
+            except TimeoutError:
+                self.logger.error("get_part_async timed out waiting for a part.")
+                return {"resp": 501, "error": "Timeout finding valid parts"}
+            except Exception as e:
+                self.logger.error(f"get_part_async failed: {e}")
+                self._faulted = True
+                raise
+
+            if response.startswith("200"):
+                return self.extract_to_dict(response)
+            else:
+                code = int(response[:3]) if response and response[:3].isdigit() else 0
+                self.logger.warning(f"get_part_async received non-200 response: {response.strip()}")
+                return {"resp": code, "raw": response.strip()}
+
+        self._pending_future = self._executor.submit(_wait_for_response)
+        return self._pending_future
 
     def force_take_image(self):
         command = "force_take_image"

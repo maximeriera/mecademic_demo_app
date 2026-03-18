@@ -50,7 +50,19 @@ class PlanarMotor(Device):
             self.api.shutdown()
             self.api = None
         self.logger.info("PlanarMotor shut down.")
-        
+
+    def clear_fault(self):
+        self.logger.info("Clearing faults on PlanarMotor.")
+        # Placeholder: implement device-specific fault clearing if supported
+        pass
+
+    def abort(self):
+        self.logger.warning(f"[{self.device_id}] Aborting: stopping all movers.")
+        try:
+            self._api.stop_all()
+        except Exception as e:
+            self.logger.error(f"[{self.device_id}] Error during abort: {e}")
+
     def isFaulted(self):
         if not self.api.is_connected:
             return True
