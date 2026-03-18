@@ -1,19 +1,22 @@
 # app.py
-
 from flask import Flask, render_template, jsonify, request
-from ApplicationController import ApplicationController, TaskType, ControllerState 
-import threading
+
 import logging
 from logging.handlers import RotatingFileHandler
+
 import os
 from pathlib import Path
 
+from core.ApplicationController import ApplicationController
+from core.Task import TaskType
+from core.ControllerState import ControllerState
+
 # --- Logging Setup ---
-os.makedirs("app_logs", exist_ok=True)
+os.makedirs("logs/app", exist_ok=True)
 logger = logging.getLogger("app")
 logger.setLevel(logging.DEBUG)
 if not logger.handlers:
-    _handler = RotatingFileHandler("app_logs/app.log", maxBytes=5*1024*1024, backupCount=2)
+    _handler = RotatingFileHandler("logs/app/app.log", maxBytes=5*1024*1024, backupCount=2)
     _handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
     logger.addHandler(_handler)
 
@@ -158,8 +161,8 @@ def get_state_values():
 # --- Log directories (resolved relative to this file so they work regardless of cwd) ---
 _BASE_DIR = Path(__file__).parent
 _LOG_DIRS = {
-    'app_logs':    _BASE_DIR / 'app_logs',
-    'device_logs': _BASE_DIR / 'device_logs',
+    'app':     _BASE_DIR / 'logs' / 'app',
+    'devices': _BASE_DIR / 'logs' / 'devices',
 }
 
 @app.route('/api/logs', methods=['GET'])

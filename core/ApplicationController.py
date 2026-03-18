@@ -3,19 +3,18 @@ import mecademicpy.robot as mdr
 
 import threading
 import time
-import queue
 
 from devices import Device
 
 import yaml
-from typing import Dict, Tuple, List, Any
+from typing import Dict, List, Any
 
 import logging
 from logging.handlers import RotatingFileHandler
 import os
-from Task import Task, TaskType
 
-from ControllerState import ControllerState
+from .Task import Task, TaskType
+from .ControllerState import ControllerState
 
 
 class ApplicationController:
@@ -43,13 +42,13 @@ class ApplicationController:
     def _setup_logger(self):
         """Creates a unique, rotating log file for this specific device."""
         # Ensure the log directory exists
-        os.makedirs("app_logs", exist_ok=True)
+        os.makedirs("logs/app", exist_ok=True)
         
         logger = logging.getLogger(f"Logger_ApplicationController")
         logger.setLevel(logging.DEBUG) # Capture everything for local files
 
         if not logger.handlers:
-            file_path = f"app_logs/ApplicationController.log"
+            file_path = f"logs/app/ApplicationController.log"
             handler = RotatingFileHandler(file_path, maxBytes=5*1024*1024, backupCount=2)
             formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
             handler.setFormatter(formatter)

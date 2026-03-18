@@ -9,7 +9,7 @@ import mecademicpy.robot as mdr
 
 from typing import Dict
 
-from ControllerState import ControllerState
+from .ControllerState import ControllerState
 from devices import Device
 
 from demo_code.prod import prod_cycle
