@@ -1,17 +1,18 @@
-import mecademicpy.robot as mdr
-from typing import Tuple
+from devices import Device
+from typing import Dict
 
-from typing import Tuple, Any
+from devices.MecaRobot import MecaRobot
 
-def shipment(robot_apis: Tuple[mdr.Robot], accessory_apis: Tuple[Any]):
+def shipment(devices: Dict[str, Device]):
     """Logic for SHIPMENT task."""
+    meca_robot_1:MecaRobot = devices["meca_robot_1"]
     
-    scara:mdr.Robot = robot_apis[0]
-    trail:mdr.Robot = robot_apis[1]
-    dispenser:mdr.Robot = robot_apis[2]
-    
-    scara.MoveJoints(65, -145, -33, 80)
-    trail.MoveJoints(0, -40, 10, 0, 30, 0)
-    dispenser.MoveJoints(-15, -30, 30, 0, 0, 0)
+    meca_robot_1.api.MoveJoints(0, -60, 60, 0, 30, 0)
 
+    meca_robot_1.logger.info("Robot waiting for completion...")
+
+    meca_robot_1.api.WaitIdle()
+    
+    meca_robot_1.logger.info("Moving to shipment position complete.")
+    
     return
