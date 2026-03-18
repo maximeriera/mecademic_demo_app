@@ -6,8 +6,73 @@ from abc import ABC, abstractmethod
 
 class Device(ABC):
     """
-    Base class for all devices in the system, including the robot and accessories.
-    This class defines the common interface and properties that all devices must implement.
+    Abstract base class for all devices in the robotic cell.
+
+    Every device (robot, feeder, motion system, …) must inherit from this class
+    and implement all abstract members listed below.
+
+    Constructor argument
+    --------------------
+    device_id : str
+        Unique name for this device instance (used as the logger name and log
+        file stem, e.g. ``"meca_robot_1"``).
+
+    Attributes set by __init__
+    --------------------------
+    device_id : str
+        The identifier passed at construction time.
+    logger : logging.Logger
+        A dedicated rotating-file logger at ``logs/devices/<device_id>.log``.
+
+    Abstract properties  (must be implemented as @property)
+    --------------------------------------------------------
+    info -> dict
+        Static device information (model, serial number, IP address, …).
+        Returned as a plain dict; all values must be JSON-serialisable.
+    connected -> bool
+        ``True`` if the device currently has an active communication link.
+    ready -> bool
+        ``True`` if the device is connected and ready to accept commands.
+    faulted -> bool
+        ``True`` if the device is in an error/fault state.
+    api
+        The underlying driver / SDK object for direct hardware access.
+
+    Abstract methods  (must be implemented)
+    ----------------------------------------
+    initialize()
+        Open the connection, perform homing or startup sequence, and bring
+        the device to a ``ready`` state.  Raise an exception on failure.
+    shutdown()
+        Gracefully close the connection and release all resources.
+        Must be safe to call even if the device was never initialised.
+    clear_fault()
+        Reset the fault condition so the device can return to ``ready``.
+        Implement as a no-op (``pass``) if the device has no fault-clearing
+        mechanism.
+    abort()
+        Immediately interrupt any in-progress operation (e.g. clear the
+        motion queue on a robot so that a blocking ``WaitIdle()`` call
+        returns right away).  Called by the task system on emergency stop
+        or when any device in the cell faults.
+
+    Example
+    -------
+    >>> class MyDevice(Device):
+    ...     @property
+    ...     def info(self):    return {"ip_address": "192.168.0.1"}
+    ...     @property
+    ...     def connected(self): return self._connected
+    ...     @property
+    ...     def ready(self):   return self._connected and not self._faulted
+    ...     @property
+    ...     def faulted(self): return self._faulted
+    ...     @property
+    ...     def api(self):     return self._driver
+    ...     def initialize(self):  ...
+    ...     def shutdown(self):    ...
+    ...     def clear_fault(self): ...
+    ...     def abort(self):       ...
     """
     
     def __init__(self, device_id: str):

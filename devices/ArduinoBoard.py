@@ -1,10 +1,12 @@
 from .Device import Device
 
-import pyfirmata
+import pyfirmata2 as pyfirmata
 
 class ArduinoBoard(Device):
-    def __init__(self, port):
-        super().__init__(device_id=f"ArduinoBoard_{port}")
+    def __init__(self, port, name=None):
+        if name is None:
+            name = f"ArduinoBoard_{port}"
+        super().__init__(device_id=name)
         self._connected = False
         self._ready = False
         self._faulted = False
