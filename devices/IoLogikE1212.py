@@ -75,11 +75,11 @@ class IoLogikE1212(Device):
 
     @property
     def ready(self) -> bool:
-        return self.connected and not self._api._faulted
+        return not self.api._faulted and self.api.is_connected
 
     @property
     def faulted(self) -> bool:
-        return self._api._faulted
+        return self._api._faulted or not self._api.is_connected
 
     # ------------------------------------------------------------------
     # Lifecycle

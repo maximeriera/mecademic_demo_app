@@ -90,8 +90,8 @@ class IoLogikE1212Api:
         self._port = port
         self._slave_id = slave_id
         self._connected = False
-        self._faulted = False
-        self._client = ModbusTcpClient(host=ip_address, port=port)
+        self._faulted = True
+        self._client: ModbusTcpClient | None = None
 
     # ------------------------------------------------------------------
     # Connection management
@@ -100,6 +100,7 @@ class IoLogikE1212Api:
     def connect(self) -> None:
         """Open the Modbus TCP connection to the device."""
         self.logger.info(f"Connecting to ioLogik E1212 at {self._ip_address}:{self._port}")
+        self._client = ModbusTcpClient(host=self._ip_address, port=self._port)
         if not self._client.connect():
             msg = f"Could not reach ioLogik E1212 at {self._ip_address}:{self._port}"
             self.logger.error(msg)
@@ -111,13 +112,18 @@ class IoLogikE1212Api:
     def disconnect(self) -> None:
         """Close the Modbus TCP connection."""
         self.logger.info("Disconnecting from ioLogik E1212.")
-        self._client.close()
+        if self._client:
+            self._client.close()
+            self._client = None
         self._connected = False
 
     @property
     def is_connected(self) -> bool:
         """True if the socket is currently open."""
-        self._connected = self._client.is_socket_open()
+        if self._client:
+            self._connected = self._client.is_socket_open()
+        else:
+            self._connected = False
         return self._connected
 
     # ------------------------------------------------------------------
