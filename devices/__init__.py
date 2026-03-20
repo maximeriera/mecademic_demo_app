@@ -3,8 +3,9 @@ from .MecaRobot import MecaRobot
 from .Device import Device
 from .PlanarMotor import PlanarMotor
 from .ArduinoBoard import ArduinoBoard
+from .IoLogikE1212 import IoLogikE1212
 
 """Devices module for Mecademic demo application."""
 
 
-__all__ = ["AsyrilEyePlus", "MecaRobot", "PlanarMotor", "ArduinoBoard", "Device"]
+__all__ = ["AsyrilEyePlus", "MecaRobot", "PlanarMotor", "ArduinoBoard", "Device", "IoLogikE1212"]
