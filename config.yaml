@@ -32,16 +32,27 @@
 #   port: 502                       # Modbus TCP port (optional, default: 502)
 #   slave_id: 1                     # Modbus slave/unit ID (optional, default: 1)
 #
+# --- LMI Gocator 3D Sensor (LMISensor) ---
+#   type: "lmi"
+#   ip_address: "127.0.0.1"
+#   control_port: 8190   # optional
+#   data_port: 8190      # optional
+#   health_port: 8190    # optional
+#   delimiter: ","      # optional — must match GoPxL setting
+#   terminator: "\r\n"  # optional — must match GoPxL setting
+#
 # ============================================================
 
 devices:
   # --- Robots ---
-  test_robot:
-    type: "mecademic"
-    ip_address: "192.168.0.100"
 
   # --- Accessories/Controllers ---
 
-  remote_io:
-    type: "iologik"
-    ip_address: "192.168.127.254"
+  my_lmi_sensor:
+    type: "lmi"
+    ip_address: "127.0.0.1"
+    control_port: 8190   # optional
+    data_port: 8190      # optional
+    health_port: 8190    # optional
+    delimiter: ","      # optional — must match GoPxL setting
+    terminator: "\r\n"  # optional — must match GoPxL setting
