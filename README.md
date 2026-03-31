@@ -155,8 +155,3 @@ A device fault detected by the monitor thread automatically triggers an **abort*
 2. Add the new `type` string to `_create_devices()` in `core/ApplicationController.py`.
 3. Add an entry under `devices:` in `config.yaml`.
 
----
-
-## License
-
-MIT License

@@ -108,7 +108,7 @@ class ApplicationController:
         :attr:`devices`.
 
         Supported ``type`` values (case-insensitive):
-        ``mecademic``, ``asyril``, ``arduino``.
+        ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``.
         Unknown types are skipped with a warning.
         """
         for device_name, device_info in self.config.get('devices', {}).items():
@@ -125,11 +125,12 @@ class ApplicationController:
             #    # Placeholder for actual Zaber API creation
             #    zaber_api = zaber_api_module.ZaberAxis(port=device_info.get('Port', 'COM3'))
             #    
-            #elif device_type == 'planarmotor':
-            #    self.logger.info(f"Creating Planar Motor API for device: {device_name}")
-            #    import accessories_api.PlanarMotor as planar_motor_module
-            #    planar_motor_api = planar_motor_module.PlanarMotor(add=device_info.get('ip_address', '192.168.10.200'))
-            
+            elif device_type == 'planarmotor':
+                from devices import PlanarMotor
+                self.logger.info(f"Creating Planar Motor API for device: {device_name}")
+                device = PlanarMotor(ip_address=device_info.get('ip_address', '192.168.10.200'), name=device_name)
+                self.devices[device_name] = device
+
             elif device_type == 'asyril':
                 from devices import AsyrilEyePlus
                 self.logger.info(f"Creating Asyril API for device: {device_name}")
@@ -139,9 +140,34 @@ class ApplicationController:
             elif device_type == 'arduino':
                 from devices import ArduinoBoard
                 self.logger.info(f"Creating Arduino IO API for device: {device_name}")
-                device = ArduinoBoard(port=device_info.get('Port', 'COM3'), name=device_name)
+                device = ArduinoBoard(port=device_info.get('port', 'COM3'), name=device_name)
                 self.devices[device_name] = device
-                
+
+            elif device_type == 'iologik':
+                from devices import IoLogikE1212
+                self.logger.info(f"Creating ioLogik E1212 API for device: {device_name}")
+                device = IoLogikE1212(
+                    ip_address=device_info.get('ip_address', ''),
+                    port=device_info.get('port', 502),
+                    slave_id=device_info.get('slave_id', 1),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
+            elif device_type == 'lmi':
+                from devices import LMISensor
+                self.logger.info(f"Creating LMI Sensor API for device: {device_name}")
+                device = LMISensor(
+                    ip_address=device_info.get('ip_address', ''),
+                    control_port=device_info.get('control_port', 3190),
+                    data_port=device_info.get('data_port', 3192),
+                    health_port=device_info.get('health_port', 3194),
+                    delimiter=device_info.get('delimiter', ','),
+                    terminator=device_info.get('terminator', '\r\n'),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 

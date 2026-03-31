@@ -1,17 +1,58 @@
 # config.yaml
+#
+# Declare every device used by the application under the `devices` key.
+# Each entry has a unique name (used as the device_id in code) and a `type`
+# that tells the ApplicationController which driver class to instantiate.
+#
+# ============================================================
+# SUPPORTED DEVICE TYPES — copy, uncomment and fill in values
+# ============================================================
+#
+# --- Mecademic Robot (MecaRobot) ---
+#   type: "mecademic"
+#   ip_address: "192.168.0.100"     # IP address of the robot controller
+#
+# --- Asyril Eye+ Feeder (AsyrilEyePlus) ---
+#   type: "asyril"
+#   ip_address: "192.168.0.50"      # IP address of the Eye+ controller
+#   recipe: 63083                   # Recipe identifier (integer)
+#   port: 7171                      # TCP port (optional, default: 7171)
+#
+# --- Arduino / Firmata I/O board (ArduinoBoard) ---
+#   type: "arduino"
+#   Port: "COM3"                    # Serial port the Arduino is connected to
+#
+# --- Planar Motor System (PlanarMotor) ---
+#   type: "planarmotor"
+#   ip_address: "192.168.10.200"    # IP address of the PMC controller
+#
+# --- Moxa ioLogik E1212 Remote I/O (IoLogikE1212) ---
+#   type: "iologik"
+#   ip_address: "192.168.127.254"   # IP address of the ioLogik unit
+#   port: 502                       # Modbus TCP port (optional, default: 502)
+#   slave_id: 1                     # Modbus slave/unit ID (optional, default: 1)
+#
+# --- LMI Gocator 3D Sensor (LMISensor) ---
+#   type: "lmi"
+#   ip_address: "127.0.0.1"
+#   control_port: 8190   # optional
+#   data_port: 8190      # optional
+#   health_port: 8190    # optional
+#   delimiter: ","      # optional — must match GoPxL setting
+#   terminator: "\r\n"  # optional — must match GoPxL setting
+#
+# ============================================================
 
 devices:
   # --- Robots ---
-  mirror_robot:
-    type: "mecademic"
-    ip_address: "192.168.0.101"
 
-  dispenser_robot:
-    type: "mecademic"
-    ip_address: "192.168.0.102"
-    
   # --- Accessories/Controllers ---
 
-  arduino_io:
-    type: "arduino"
-    port: "COM3"
+  my_lmi_sensor:
+    type: "lmi"
+    ip_address: "127.0.0.1"
+    control_port: 8190   # optional
+    data_port: 8190      # optional
+    health_port: 8190    # optional
+    delimiter: ","      # optional — must match GoPxL setting
+    terminator: "\r\n"  # optional — must match GoPxL setting
