@@ -154,6 +154,20 @@ class ApplicationController:
                 )
                 self.devices[device_name] = device
 
+            elif device_type == 'lmi':
+                from devices import LMISensor
+                self.logger.info(f"Creating LMI Sensor API for device: {device_name}")
+                device = LMISensor(
+                    ip_address=device_info.get('ip_address', ''),
+                    control_port=device_info.get('control_port', 3190),
+                    data_port=device_info.get('data_port', 3192),
+                    health_port=device_info.get('health_port', 3194),
+                    delimiter=device_info.get('delimiter', ','),
+                    terminator=device_info.get('terminator', '\r\n'),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 
