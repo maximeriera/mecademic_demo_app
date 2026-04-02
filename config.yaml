@@ -45,7 +45,9 @@
 
 devices:
   # --- Robots ---
-
+  my_meca_robot:
+    type: "mecademic"
+    ip_address: "192.168.0.100"
   # --- Accessories/Controllers ---
 
   my_lmi_sensor:

@@ -3,26 +3,17 @@ from threading import Thread
 import time
 
 from devices import Device
-from devices import IoLogikE1212
+from devices import LMISensor
 
-JOINT_VEL = 15
-CARTLIN_VEL = 100
-CARTANG_VEL = 45
-
-PARTS_PER_TRAIL = [5, 6, 9, 10]
-# PARTS_PER_TRAIL = range(16)
-TRAILS_OFFSET = 20
 
 def prod_cycle(devices: Dict[str, Device], index:int):
     """Logic for PROD task."""
     
-    io:IoLogikE1212 = devices["remote_io"]
+    lmi_sensor: LMISensor = devices["my_lmi_sensor"]
     
-    io.api.write_do(0, True)  # Start signal for the trail
+    result = lmi_sensor.api.get_result(3, 4)  # Get the latest measurement from sensor 0
+    lmi_sensor.logger.info(f"Latest measurement from sensor 0: {result}")
     
-    time.sleep(1)  # Simulate time for the trail to be completed
-    
-    io.api.write_do(0, False)  # End signal for the trail
 
     time.sleep(1)  # Simulate time before the next trail starts
 
