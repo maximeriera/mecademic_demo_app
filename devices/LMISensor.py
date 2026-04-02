@@ -99,7 +99,7 @@ class LMISensor(Device):
 
     @property
     def faulted(self) -> bool:
-        return self._api._faulted
+        return self._api._faulted or not self.connected
 
     # ------------------------------------------------------------------
     # Lifecycle

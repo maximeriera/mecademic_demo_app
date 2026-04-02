@@ -109,7 +109,7 @@ class LMISensorApi:
         self._ctrl_connected = False
         self._data_connected = False
         self._health_connected = False
-        self._faulted = False
+        self._faulted = True
 
         self._ctrl_lock = threading.Lock()
         self._data_lock = threading.Lock()
