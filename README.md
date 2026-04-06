@@ -109,8 +109,8 @@ devices/
 application_code/
     home.py                   # HOME task — move all robots to home positions
     shipment.py               # SHIPMENT task — move robots to storage positions
-    prod.py                   # PROD task — infinite pick-and-place loop
-    calib.py                  # CALIBRATION task — hand-eye calibration sequence
+    prod.py                   # PROD task — looped production sequence
+    calib.py                  # CALIBRATION task — calibration sequence (if needed)
 
 templates/index.html          # Single-page web UI (Jinja2)
 static/css/app.css            # Styles
