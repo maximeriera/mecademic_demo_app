@@ -398,6 +398,10 @@ class ApplicationController:
             except Exception as e:
                 self.logger.warning(f"Error clearing faults on device {device.device_id}: {e}")
         
+        # Full shutdown and re-initialization to ensure clean state
+        self.shutdown()
+        self.initialize() 
+        
     def shutdown(self):
         """Gracefully shut down the controller and all devices.
 
