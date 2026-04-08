@@ -136,14 +136,17 @@ class Task(threading.Thread):
     def _run_home(self):
         """Execute the HOME sequence via :func:`~application_code.home.home`.
 
-        Errors are logged but **not re-raised** so a failed home call does not
-        fault the controller on its own.  Used both as a standalone task and
-        as the entry/exit step of the PROD loop.
+        Raises
+        ------
+        Exception
+            Re-raised from the underlying function so the controller
+            transitions to ``FAULTED``.
         """
         try:
             home(self.devices)
         except Exception as e:
             self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
+            raise e
         # --------------------------------------------------------
     
     def _run_shipment(self):
