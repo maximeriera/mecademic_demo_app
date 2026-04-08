@@ -1,5 +1,9 @@
 # Mecademic Demo App
 
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/license/mit)
+[![Python 3.10+](https://shields.io/badge/Python-3.10+-blue?logo=Python)](https://www.python.org/downloads/)
+
+
 A Flask-based web application for controlling a robotic cell built around [Mecademic](https://www.mecademic.com/) robots.
 Provides a single-page web UI and a REST API to initialize, monitor, and run tasks across all connected devices.
 
