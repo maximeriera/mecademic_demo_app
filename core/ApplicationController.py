@@ -168,6 +168,19 @@ class ApplicationController:
                 )
                 self.devices[device_name] = device
 
+            elif device_type == 'boaspot':
+                from devices import BOASpot
+                self.logger.info(f"Creating BOA Spot Camera API for device: {device_name}")
+                device = BOASpot(
+                    ip_address=device_info.get('ip_address', '192.168.0.100'),
+                    port=device_info.get('port', 5024),
+                    result_port=device_info.get('result_port', None),
+                    terminator=device_info.get('terminator', '\r\n'),
+                    timeout=device_info.get('timeout', 5.0),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
             else:
                 self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
                 

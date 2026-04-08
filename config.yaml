@@ -41,6 +41,14 @@
 #   delimiter: ","      # optional — must match GoPxL setting
 #   terminator: "\r\n"  # optional — must match GoPxL setting
 #
+# --- Teledyne BOA Spot Camera (BOASpot) ---
+#   type: "boaspot"
+#   ip_address: "192.168.0.100"   # IP address of the BOA Spot
+#   port: 5024                    # Command TCP port (optional, default: 5024)
+#   result_port: 5025             # Result TCP port (optional, default: None)
+#   terminator: "\r\n"            # optional
+#   timeout: 5.0                  # optional — socket timeout in seconds
+#
 # ============================================================
 
 devices:
@@ -48,13 +56,19 @@ devices:
   my_meca_robot:
     type: "mecademic"
     ip_address: "192.168.0.100"
-  # --- Accessories/Controllers ---
 
-  # my_lmi_sensor:
-  #   type: "lmi"
-  #   ip_address: "127.0.0.1"
-  #   control_port: 8190   # optional
-  #   data_port: 8190      # optional
-  #   health_port: 8190    # optional
-  #   delimiter: ","      # optional — must match GoPxL setting
-  #   terminator: "\r\n"  # optional — must match GoPxL setting
+  # --- Accessories/Controllers ---
+  my_boa_spot:
+    type: "boaspot"
+    ip_address: "192.168.0.110"
+    port: 5025                    # Command TCP port (optional, default: 5024)
+    result_port: 5026             # Result TCP port (optional, default: None)
+    terminator: "\r\n"            # optional
+    timeout: 5.0                  # optional — socket timeout in seconds
+  
+  
+  
+  
+  
+  
+  
