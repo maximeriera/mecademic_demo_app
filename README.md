@@ -23,7 +23,6 @@ Users can build their own application logic in `application_code/` and trigger i
     - [Typical workflow](#typical-workflow)
   - [Configuration](#configuration)
     - [Supported device types](#supported-device-types)
-    - [Example](#example)
   - [Web UI](#web-ui)
     - [Control tab](#control-tab)
     - [Logs tab](#logs-tab)
@@ -114,48 +113,14 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 
 ### Supported device types
 
-| `type` value | Driver class | Required fields | Optional fields |
-|---|---|---|---|
-| `mecademic` | `MecaRobot` | `ip_address` | — |
-| `asyril` | `AsyrilEyePlus` | `ip_address`, `recipe` | `port` (default 7171) |
-| `arduino` | `ArduinoBoard` | `port` (e.g. `"COM3"`) | — |
-| `planarmotor` | `PlanarMotor` | `ip_address` | — |
-| `iologik` | `IoLogikE1212` | `ip_address` | `port` (default 502), `slave_id` (default 1) |
-| `lmi` | `LMISensor` | `ip_address` | `control_port`, `data_port`, `health_port`, `delimiter`, `terminator` |
-
-### Example
-
-```yaml
-devices:
-  mirror_robot:
-    type: "mecademic"
-    ip_address: "192.168.0.101"
-
-  dispenser_robot:
-    type: "mecademic"
-    ip_address: "192.168.0.102"
-
-  feeder:
-    type: "asyril"
-    ip_address: "192.168.0.50"
-    recipe: 63083
-
-  io_board:
-    type: "arduino"
-    port: "COM3"
-
-  planar:
-    type: "planarmotor"
-    ip_address: "192.168.10.200"
-
-  remote_io:
-    type: "iologik"
-    ip_address: "192.168.127.254"
-
-  sensor:
-    type: "lmi"
-    ip_address: "192.168.1.10"
-```
+| Device type | Driver class | Description |
+|---|---|---|
+| `mecademic` | `MecaRobot` | Mecademic robot via [mecademicpy](https://github.com/Mecademic/mecademicpy) |
+| `asyril` | `AsyrilEyePlus` | Asyril Eye+ intelligent feeder (REST API) |
+| `arduino` | `ArduinoBoard` | Arduino I/O board via Firmata protocol |
+| `planarmotor` | `PlanarMotor` | Planar motor system |
+| `iologik` | `IoLogikE1212` | Moxa ioLogik E1212 remote I/O (Modbus TCP) |
+| `lmi` | `LMISensor` | LMI Gocator 3D sensor (Ethernet ASCII) |
 
 ---
 
@@ -280,7 +245,7 @@ You do **not** need to check for stop/abort signals inside your functions — th
 ```python
 # application_code/prod.py
 from typing import Dict
-from devices import Device, MecaRobot, AsyrilEyePlus
+from devices import Device, MecaRobot
 
 def prod_cycle(devices: Dict[str, Device], index: int):
     robot: MecaRobot = devices["my_meca_robot"]
