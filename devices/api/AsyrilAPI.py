@@ -1,3 +1,17 @@
+"""Low-level TCP/IP client for the Asyril Eye+ intelligent feeder.
+
+Communicates with the Eye+ controller over a plain TCP socket using the
+Asyril ASCII command protocol (newline-terminated). Every command returns
+a three-digit status code followed by optional payload data.
+
+Classes
+-------
+EyePlusErrorCode
+    Enum mapping every known Eye+ status code to a human-readable name.
+AsyrilEyePlusApi
+    Socket client exposing production, calibration, and imaging commands.
+"""
+
 import socket
 import re
 import logging
@@ -9,6 +23,11 @@ TIMEOUT = 35
 from enum import Enum
 
 class EyePlusErrorCode(Enum):
+    """Eye+ ASCII protocol status codes.
+
+    4xx codes indicate client errors (bad command, invalid state, etc.).
+    5xx codes indicate server-side errors (hardware faults, timeouts, etc.).
+    """
     # --- Client Error Codes ---
     RECEIVED_COMMAND_UNKNOWN = 401
     INVALID_ARGUMENT = 402
@@ -63,6 +82,31 @@ class EyePlusErrorCode(Enum):
     INTERNAL_ERROR_SYSTEM = 599
 
 class AsyrilEyePlusApi:
+    """TCP client for the Asyril Eye+ feeder.
+
+    Wraps the Eye+ ASCII command protocol, providing methods for connection
+    management, production control, part detection, imaging, and hand-eye
+    calibration.
+
+    Parameters
+    ----------
+    logger : logging.Logger
+        Logger instance for this device.
+    ip_address : str
+        IP address of the Eye+ controller.
+    recipe : int
+        Default recipe ID to use for production and calibration.
+    port : int, optional
+        TCP port of the Eye+ command interface (default ``7171``).
+
+    Attributes
+    ----------
+    recipe : int
+        Active recipe ID.
+    connected : bool
+        ``True`` if the TCP socket is currently open and responsive.
+    """
+
     def __init__(self, logger:logging.Logger, ip_address: str, recipe:int, port: int = 7171):
         self.logger = logger
         
@@ -87,6 +131,15 @@ class AsyrilEyePlusApi:
         
     @property
     def connected(self):
+        """Check whether the TCP connection to the Eye+ is still alive.
+
+        Uses a non-consuming ``MSG_PEEK`` recv to detect a closed socket
+        without disturbing any pending data.
+
+        Returns
+        -------
+        bool
+        """
         try:
             # Peek at 1 byte of data without removing it from the buffer
             data = self._connection.recv(1, socket.MSG_PEEK)
@@ -101,6 +154,13 @@ class AsyrilEyePlusApi:
         return self._connected
     
     def connect(self):
+        """Open a TCP connection to the Eye+ controller.
+
+        Raises
+        ------
+        ConnectionError
+            If the socket cannot reach the device within the timeout.
+        """
         try:
             self.logger.info(f"Attempting to connect to Asyril Eye Plus at {self._ip_address}:{self._port}")
             self._connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -113,6 +173,18 @@ class AsyrilEyePlusApi:
             raise ConnectionError(f"Failed to connect: {e}")
 
     def set_part_timeout(self, timeout:float = 30.0):
+        """Set the maximum time (in seconds) the Eye+ waits to find a valid part.
+
+        Parameters
+        ----------
+        timeout : float
+            Timeout in seconds (default ``30.0``).
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         self.logger.info(f"Setting get_part timeout to {timeout} seconds.")
         command = "set_parameter timeout " + str(timeout)
         self.__send_raw__(command)
@@ -120,12 +192,20 @@ class AsyrilEyePlusApi:
         return response
     
     def get_part_timeout(self):
+        """Query the current ``get_part`` timeout value from the device.
+
+        Returns
+        -------
+        str
+            Raw response containing the timeout value.
+        """
         command = "get_parameter timeout"
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
     
     def disconnect(self):
+        """Close the TCP connection and shut down the async executor."""
         self.logger.info("Disconnecting from Asyril Eye Plus...")
         self._executor.shutdown(wait=False, cancel_futures=True)
         if self._connection:
@@ -137,12 +217,29 @@ class AsyrilEyePlusApi:
             self.logger.warning("No active connection to disconnect.")
             
     def stop_production(self):
+        """Transition the Eye+ out of the production state.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         command = "stop production"
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
 
     def start_production(self):
+        """Start the production state with the configured recipe.
+
+        Automatically calls :meth:`reset_state` first to ensure the device
+        is in the ``ready`` state before starting production.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         self.reset_state()
         command = "start production " + str(self.recipe)
         self.__send_raw__(command)
@@ -211,30 +308,90 @@ class AsyrilEyePlusApi:
         return self._pending_future
 
     def force_take_image(self):
+        """Force the Eye+ to capture an image immediately, regardless of the
+        ``can_take_image`` flag.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         command = "force_take_image"
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
 
     def prepare_part(self):
+        """Ask the Eye+ to prepare (flip/vibrate) parts on the Asycube
+        platform so they are in a pickable orientation.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         command = "prepare_part"
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
 
     def can_take_image(self, value):
+        """Tell the Eye+ whether it is safe to take an image.
+
+        The robot should call this with ``True`` once it has cleared the
+        camera's field of view and ``False`` while it is in the way.
+
+        Parameters
+        ----------
+        value : bool
+            ``True`` to allow imaging, ``False`` to block it.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         command = "can_take_image " + str(value).lower()
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
 
     def set_parameter(self, parameter):
+        """Set an arbitrary Eye+ parameter.
+
+        Parameters
+        ----------
+        parameter : str
+            Parameter string in the form ``"<name> <value>"``.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         command = "set_parameter " + str(parameter)
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
     
     def start_calibration(self, recipe:int = None):
+        """Enter the hand-eye calibration state.
+
+        Resets the device to ``ready``, then starts the calibration workflow
+        for the given recipe. After this call, use :meth:`take_calibration_image`
+        and :meth:`set_calibration_pose` to capture the required poses, then
+        call :meth:`calibrate` to compute and save the result.
+
+        Parameters
+        ----------
+        recipe : int, optional
+            Recipe ID. Defaults to :attr:`recipe` if not provided.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
         self.reset_state()
         if recipe is None:
             recipe = self.recipe
@@ -247,6 +404,7 @@ class AsyrilEyePlusApi:
         return response
     
     def stop_calibration(self):
+        """Exit the hand-eye calibration state and reset internal pose counter."""
         command = "stop handeye_calibration"
         self.__send_raw__(command)
         response = self.__receive_raw__()
@@ -255,6 +413,21 @@ class AsyrilEyePlusApi:
             self._calib_pose = 0
     
     def calibrate(self):
+        """Compute and save the hand-eye calibration from the captured poses.
+
+        Sends ``calibrate`` followed by ``save_calibration``. If either step
+        fails, the calibration state is stopped and a ``RuntimeError`` is raised.
+
+        Returns
+        -------
+        str
+            Raw response from the ``save_calibration`` command.
+
+        Raises
+        ------
+        RuntimeError
+            If the calibration computation or save fails.
+        """
         command = "calibrate"
         self.__send_raw__(command)
         response = self.__receive_raw__()
@@ -273,6 +446,23 @@ class AsyrilEyePlusApi:
         return response
     
     def take_calibration_image(self):
+        """Capture a calibration image at the current pose index.
+
+        The pose index auto-increments after each successful capture
+        (1 → 2 → 3 → 4). Must be called after :meth:`start_calibration`.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+
+        Raises
+        ------
+        ValueError
+            If the internal pose counter is out of the valid range [1, 4].
+        RuntimeError
+            If the device returns a non-200 response.
+        """
         if not self._calib_pose in [1, 4]:
             raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
         command = "take_calibration_image " + str(self._calib_pose)
@@ -285,6 +475,21 @@ class AsyrilEyePlusApi:
         return response
     
     def reset_state(self):
+        """Return the Eye+ to the ``ready`` state.
+
+        Queries the current state and, if it is not already ``ready``,
+        sends the appropriate ``stop`` command to transition back.
+
+        Returns
+        -------
+        str or None
+            Raw response from the ``stop`` command, or ``None`` if already ready.
+
+        Raises
+        ------
+        RuntimeError
+            If the state query or the stop command fails.
+        """
         command = "get_parameter state"
         self.__send_raw__(command)
         response = self.__receive_raw__()
@@ -302,6 +507,27 @@ class AsyrilEyePlusApi:
             raise RuntimeError(f"Failed to get state for reset: {response}")
     
     def set_calibration_pose(self, x:float, y:float):
+        """Register the robot TCP position for the current calibration pose.
+
+        Parameters
+        ----------
+        x : float
+            X coordinate of the robot TCP in the robot frame.
+        y : float
+            Y coordinate of the robot TCP in the robot frame.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+
+        Raises
+        ------
+        ValueError
+            If the internal pose counter is out of the valid range [1, 4].
+        RuntimeError
+            If the device returns a non-200 response.
+        """
         if not self._calib_pose in [1, 4]:
             raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
         command = "set_calibration_point " + str(self._calib_pose) + " " + str(x) + " " + str(y)
@@ -313,11 +539,24 @@ class AsyrilEyePlusApi:
         return response
 
     def __send_raw__(self, command):
+        """Send a raw ASCII command over the socket (adds termination character)."""
         self.logger.info(f"Sending command: {command}")
         self._connection.send(
             bytes(f'{command}{self.termination}', encoding="ascii"))
 
     def __receive_raw__(self):
+        """Block until a response is received on the socket.
+
+        Returns
+        -------
+        str
+            Decoded ASCII response.
+
+        Raises
+        ------
+        TimeoutError
+            If the socket times out before data arrives.
+        """
         try:
             response = self._connection.recv(4096).decode("ascii")
             self.logger.info(f"Received response: {response[:-1]}")
@@ -342,11 +581,21 @@ class AsyrilEyePlusApi:
 
     @staticmethod
     def extract_status(response):
+        """Extract the three-digit status code from a raw response string."""
         status = int(response[:3])
         return status
 
     @staticmethod
     def extract_position(response: str):
+        """Parse a response string into ``[x, y, rz]`` coordinates.
+
+        Expects the format: ``"200 x=<val> y=<val> rz=<val>"``.
+
+        Returns
+        -------
+        list[float]
+            ``[x, y, rz]``
+        """
         split_response = response.split(' ')
         x = float(split_response[1][2:])
         y = float(split_response[2][2:])
@@ -355,6 +604,23 @@ class AsyrilEyePlusApi:
     
     @staticmethod
     def extract_to_dict(data_str:str) -> dict:
+        """Parse a key-value response string into a dictionary.
+
+        Extracts all ``key=value`` pairs from the response. If the response
+        starts with a numeric status code, it is stored under the ``'resp'`` key.
+
+        Example: ``"200 x=1.5 y=2.3 rz=0.0"`` → ``{'resp': 200, 'x': 1.5, 'y': 2.3, 'rz': 0.0}``
+
+        Parameters
+        ----------
+        data_str : str
+            Raw response string from the Eye+.
+
+        Returns
+        -------
+        dict
+            Parsed key-value pairs with float values.
+        """
         # Regex pattern to find keys and their numeric values
         # It looks for word characters (a-z), an equals sign, and then a number
         pattern = r'([a-zA-Z]+)=([-+]?\d*\.\d+|\d+)'
