@@ -203,7 +203,7 @@ Every function receives `devices` — a dictionary mapping device names (as defi
 Retrieve a device by its `config.yaml` name and cast it to the specific type for auto-complete:
 
 ```python
-from devices import MecaRobot, AsyrilEyePlus
+from devices import MecaRobot
 
 def home(devices: Dict[str, Device]):
     robot: MecaRobot = devices["my_meca_robot"]
