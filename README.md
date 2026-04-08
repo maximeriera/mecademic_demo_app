@@ -237,11 +237,11 @@ Retrieve a device by its `config.yaml` name and cast it to the specific type for
 from devices import MecaRobot, AsyrilEyePlus
 
 def home(devices: Dict[str, Device]):
-    robot: MecaRobot = devices["mirror_robot"]
-    feeder: AsyrilEyePlus = devices["feeder"]
+    robot: MecaRobot = devices["my_meca_robot"]
 
     robot.api.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.api.WaitIdle()
+    robot.logger.info("Moved to home position")
 ```
 
 Each device exposes:
@@ -279,20 +279,21 @@ from typing import Dict
 from devices import Device, MecaRobot, AsyrilEyePlus
 
 def prod_cycle(devices: Dict[str, Device], index: int):
-    robot: MecaRobot = devices["mirror_robot"]
-    feeder: AsyrilEyePlus = devices["feeder"]
+    robot: MecaRobot = devices["my_meca_robot"]
 
     # Pick
     robot.api.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.api.WaitIdle()
-    robot.api.GripperOpen()
+    robot.api.GripperClose()
     robot.api.WaitIdle()
+    robot.logger.info("Picked part")
 
     # Place
     robot.api.MoveJoints(90, -60, 60, 0, 0, 0)
     robot.api.WaitIdle()
-    robot.api.GripperClose()
+    robot.api.GripperOpen()
     robot.api.WaitIdle()
+    robot.logger.info("Placed part")
 
     robot.logger.info(f"Cycle {index} complete")
 ```
