@@ -108,7 +108,7 @@ class ApplicationController:
         :attr:`devices`.
 
         Supported ``type`` values (case-insensitive):
-        ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``.
+        ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``, ``zaber``.
         Unknown types are skipped with a warning.
         """
         for device_name, device_info in self.config.get('devices', {}).items():
@@ -119,12 +119,16 @@ class ApplicationController:
                 device = MecaRobot(ip_address=device_info.get('ip_address', ''), name=device_name)
                 self.devices[device_name] = device
             
-            #elif device_type == 'zaber':
-            #    self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
-            #    import accessories_api.ZaberAxis as zaber_api_module
-            #    # Placeholder for actual Zaber API creation
-            #    zaber_api = zaber_api_module.ZaberAxis(port=device_info.get('Port', 'COM3'))
-            #    
+            elif device_type == 'zaber':
+                from devices import ZaberAxis
+                self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
+                device = ZaberAxis(
+                    port=device_info.get('port', 'COM3'),
+                    axis_number=device_info.get('axis_number', 1),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
             elif device_type == 'planarmotor':
                 from devices import PlanarMotor
                 self.logger.info(f"Creating Planar Motor API for device: {device_name}")

@@ -5,8 +5,9 @@ from .PlanarMotor import PlanarMotor
 from .ArduinoBoard import ArduinoBoard
 from .IoLogikE1212 import IoLogikE1212
 from .LMISensor import LMISensor
+from .OLD_ZaberAxis import ZaberAxis
 
 """Devices module for Mecademic demo application."""
 
 
-__all__ = ["AsyrilEyePlus", "MecaRobot", "PlanarMotor", "ArduinoBoard", "Device", "IoLogikE1212", "LMISensor"]
+__all__ = ["AsyrilEyePlus", "MecaRobot", "PlanarMotor", "ArduinoBoard", "Device", "IoLogikE1212", "LMISensor", "ZaberAxis"]
