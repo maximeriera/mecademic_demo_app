@@ -1,7 +1,7 @@
 @echo off
 
 REM Replace C:\Path\To\Your\Flask\App with the actual path to your project folder
-cd /d "C:\Path\To\Your\Flask\App"
+cd /d "C:\Users\BENDERMECA\Documents\mecademic_demo_app"
 
 REM Replace .venv with the name of your virtual environment folder
 REM This calls the activate script inside your venv
