@@ -49,14 +49,3 @@ devices:
   my_meca_robot:
     type: "mecademic"
     ip_address: "192.168.0.100"
-
-  # --- Accessories/Controllers ---
-
-  my_lmi_sensor:
-    type: "lmi"
-    ip_address: "127.0.0.1"
-    control_port: 8190   # optional
-    data_port: 8190      # optional
-    health_port: 8190    # optional
-    delimiter: ","      # optional — must match GoPxL setting
-    terminator: "\r\n"  # optional — must match GoPxL setting
