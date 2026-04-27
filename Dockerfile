@@ -40,7 +40,7 @@ server { \
 } \
 server { \
     listen 80; \
-    server_name mecademo.link; \
+    server_name mecademo.link meca.demo; \
     root /var/www/html; \
     index index.html; \
     location = /app { \
