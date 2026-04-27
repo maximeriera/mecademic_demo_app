@@ -3,10 +3,20 @@ const messageLog   = document.getElementById('message-log');
 
 /* ---- Tab switching ---- */
 function switchTab(name, btn) {
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('tab-' + name).classList.add('active');
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+        panel.classList.remove('active');
+        panel.hidden = true;
+    });
+    document.querySelectorAll('.tab-btn').forEach(tabButton => {
+        tabButton.classList.remove('active');
+        tabButton.setAttribute('aria-selected', 'false');
+    });
+
+    const activePanel = document.getElementById('tab-' + name);
+    activePanel.classList.add('active');
+    activePanel.hidden = false;
     btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true');
     if (name === 'logs') populateLogFileList();
 }
 
@@ -24,7 +34,7 @@ function updateRobotStatus() {
         });
 }
 
-function setMessage(text) { messageLog.textContent = text || '—'; }
+function setMessage(text) { messageLog.textContent = text || 'No recent command activity.'; }
 
 /* ---- Task / control commands ---- */
 function sendTask(task) {
@@ -66,7 +76,7 @@ function loadRobotInfo() {
             const container = document.getElementById('robot-info-container');
             container.innerHTML = '';
             if (!Array.isArray(data) || data.length === 0) {
-                container.innerHTML = '<p style="color:var(--color-muted);font-size:0.85em">No devices configured.</p>';
+                container.innerHTML = '<p class="empty-state">No devices configured.</p>';
                 return;
             }
             const statusKeys = new Set(['connected', 'ready', 'faulted', 'device_id']);
@@ -130,7 +140,7 @@ function loadRobotInfo() {
         })
         .catch(() => {
             document.getElementById('robot-info-container').innerHTML =
-                '<p style="color:var(--color-red);font-size:0.85em">Error loading device info.</p>';
+            '<p class="empty-state empty-state-error">Error loading device info.</p>';
         });
 }
 
@@ -141,7 +151,7 @@ function populateLogFileList() {
         .then(data => {
             const sel = document.getElementById('log-file-select');
             const current = sel.value;
-            sel.innerHTML = '<option value="">— Select a log file —</option>';
+            sel.innerHTML = '<option value="">Select a log file</option>';
             for (const [category, files] of Object.entries(data)) {
                 if (files.length === 0) continue;
                 const group = document.createElement('optgroup');

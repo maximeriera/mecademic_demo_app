@@ -1,18 +1,9 @@
-from typing import Dict
-from threading import Thread
-import time
-
 from devices import Device
 from devices import MecaRobot
 from devices import ArduinoBoard
 
-JOINT_VEL = 15
-CARTLIN_VEL = 100
-CARTANG_VEL = 45
+import time
 
-PARTS_PER_TRAIL = [5, 6, 9, 10]
-# PARTS_PER_TRAIL = range(16)
-TRAILS_OFFSET = 20
 
 def prod_cycle(devices: Dict[str, Device], index:int):
     """Logic for PROD task."""

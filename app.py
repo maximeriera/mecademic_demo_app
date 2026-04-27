@@ -7,7 +7,6 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 
-from core.ApplicationController import ApplicationController
 from core.Task import TaskType
 from core.ControllerState import ControllerState
 
@@ -28,6 +27,7 @@ app = Flask(__name__)
 # NOTE: Replace dummy config with your actual Meca 500 connection details
 try:
     # We must start the controller in the main thread before starting Flask's server
+    from core.ApplicationController import ApplicationController
     APPLICATION = ApplicationController()
     logger.info("ApplicationController initialized successfully.")
 except Exception as e:
