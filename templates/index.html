@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Demo Application Control</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
@@ -9,20 +10,22 @@
     <div class="control-panel">
 
         <div class="panel-header">
+            <div class="panel-kicker">Mecademic Demo Network</div>
             <h1>Demo Application Controller</h1>
-            <div class="tab-bar">
-                <button class="tab-btn active" onclick="switchTab('control', this)">Control</button>
-                <button class="tab-btn"        onclick="switchTab('logs', this)">Logs</button>
+            <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity from a single control surface.</p>
+            <div class="tab-bar" role="tablist" aria-label="Application panels">
+                <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
             </div>
         </div>
 
         <!-- ===== CONTROL TAB ===== -->
-        <div id="tab-control" class="tab-panel active panel-body">
+        <div id="tab-control" class="tab-panel active panel-body" role="tabpanel" aria-labelledby="tab-btn-control">
 
             <div class="section">
                 <div class="section-title">System Status</div>
                 <div id="robot-state" class="status-box">Loading...</div>
-                <div id="message-log" class="message-log">None</div>
+                <div id="message-log" class="message-log">No recent command activity.</div>
             </div>
 
             <div class="section">
@@ -61,20 +64,20 @@
         </div>
 
         <!-- ===== LOGS TAB ===== -->
-        <div id="tab-logs" class="tab-panel panel-body">
+        <div id="tab-logs" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-logs" hidden>
 
             <div class="section">
                 <div class="section-title">Log Viewer</div>
                 <div class="log-toolbar">
                     <select id="log-file-select" onchange="loadSelectedLog()">
-                        <option value="">â€” Select a log file â€”</option>
+                        <option value="">Select a log file</option>
                     </select>
                     <label>
                         <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
                     </label>
-                    <button onclick="loadSelectedLog()">&#8635; Refresh</button>
+                    <button type="button" onclick="loadSelectedLog()">Refresh</button>
                 </div>
-                <div id="log-output">Select a log file above.</div>
+                <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
             </div>
 
         </div>

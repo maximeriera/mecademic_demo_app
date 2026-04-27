@@ -114,13 +114,13 @@ class ApplicationController:
         for device_name, device_info in self.config.get('devices', {}).items():
             device_type = device_info.get('type', '').lower()
             if device_type == 'mecademic':
-                from devices import MecaRobot
+                from devices.MecaRobot import MecaRobot
                 self.logger.info(f"Creating Mecademic Robot API for device: {device_name}")
                 device = MecaRobot(ip_address=device_info.get('ip_address', ''), name=device_name)
                 self.devices[device_name] = device
             
             elif device_type == 'zaber':
-                from devices import ZaberAxis
+                from devices.OLD_ZaberAxis import ZaberAxis
                 self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
                 device = ZaberAxis(
                     port=device_info.get('port', 'COM3'),
@@ -130,25 +130,25 @@ class ApplicationController:
                 self.devices[device_name] = device
 
             elif device_type == 'planarmotor':
-                from devices import PlanarMotor
+                from devices.PlanarMotor import PlanarMotor
                 self.logger.info(f"Creating Planar Motor API for device: {device_name}")
                 device = PlanarMotor(ip_address=device_info.get('ip_address', '192.168.10.200'), name=device_name)
                 self.devices[device_name] = device
 
             elif device_type == 'asyril':
-                from devices import AsyrilEyePlus
+                from devices.Asyril import AsyrilEyePlus
                 self.logger.info(f"Creating Asyril API for device: {device_name}")
                 device = AsyrilEyePlus(ip_address=device_info.get('ip_address', ''), recipe=device_info.get('recipe', 0), name=device_name)
                 self.devices[device_name] = device
                 
             elif device_type == 'arduino':
-                from devices import ArduinoBoard
+                from devices.ArduinoBoard import ArduinoBoard
                 self.logger.info(f"Creating Arduino IO API for device: {device_name}")
                 device = ArduinoBoard(port=device_info.get('port', 'COM3'), name=device_name)
                 self.devices[device_name] = device
 
             elif device_type == 'iologik':
-                from devices import IoLogikE1212
+                from devices.IoLogikE1212 import IoLogikE1212
                 self.logger.info(f"Creating ioLogik E1212 API for device: {device_name}")
                 device = IoLogikE1212(
                     ip_address=device_info.get('ip_address', ''),
@@ -159,7 +159,7 @@ class ApplicationController:
                 self.devices[device_name] = device
 
             elif device_type == 'lmi':
-                from devices import LMISensor
+                from devices.LMISensor import LMISensor
                 self.logger.info(f"Creating LMI Sensor API for device: {device_name}")
                 device = LMISensor(
                     ip_address=device_info.get('ip_address', ''),
