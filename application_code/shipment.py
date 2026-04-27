@@ -1,15 +1,21 @@
 from devices import Device
 from typing import Dict
 
-
-from devices import MecaRobot
+from devices.MecaRobot import MecaRobot
 
 def shipment(devices: Dict[str, Device]):
     """Logic for SHIPMENT task."""
-    for device_name, device in devices.items():
-        if isinstance(device, MecaRobot.MecaRobot):
-            device.api.SetJointVel(40)
-            device.api.MoveJoints(0, -60, 60, 0, 30, 0)
-            device.logger.info(f"Sent MoveJoints command to {device_name} for zero position.")
-            device.api.WaitIdle()
+    mirror:MecaRobot = devices["mirror_robot"]
+    dispenser:MecaRobot = devices["dispenser_robot"]
+
+    JOINT_VEL = 30
+
+    mirror.api.SetJointVel(JOINT_VEL + 10)
+    dispenser.api.SetJointVel(JOINT_VEL)
+
+    mirror.api.MoveJoints(0, -60, 60, 90, 0, 0)
+    dispenser.api.MoveJoints(0, -60, 60, 90, 0, -45)
+
+    mirror.api.WaitIdle()
+    dispenser.api.WaitIdle()
     return

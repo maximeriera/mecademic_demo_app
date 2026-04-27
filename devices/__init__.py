@@ -1,6 +1,10 @@
 """Devices module for Mecademic demo application."""
 
 from .Device import Device
+# from .PlanarMotor import PlanarMotor
+from .ArduinoBoard import ArduinoBoard
+from .IoLogikE1212 import IoLogikE1212
+from .LMISensor import LMISensor
 
 __all__ = [
 	"AsyrilEyePlus",
@@ -42,5 +46,4 @@ def __getattr__(name):
 	if name == "ZaberAxis":
 		from .OLD_ZaberAxis import ZaberAxis
 
-		return ZaberAxis
-	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+__all__ = ["AsyrilEyePlus", "MecaRobot", "ArduinoBoard", "Device", "IoLogikE1212", "LMISensor"]
