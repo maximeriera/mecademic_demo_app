@@ -43,6 +43,9 @@ server { \
     server_name mecademo.link meca.demo; \
     root /var/www/html; \
     index index.html; \
+    location = / { \
+        return 302 /app/; \
+    } \
     location = /app { \
         proxy_pass http://127.0.0.1:5000/; \
         proxy_set_header Host $host; \

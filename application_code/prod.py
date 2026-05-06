@@ -4,6 +4,9 @@ from devices import ArduinoBoard
 
 import time
 
+JOINT_VEL = 15
+CARTLIN_VEL = 100
+CARTANG_VEL = 45
 
 def prod_cycle(devices: Dict[str, Device], index:int):
     """Logic for PROD task."""
