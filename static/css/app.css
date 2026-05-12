@@ -77,7 +77,7 @@ body {
     display: flex;
     flex-direction: row;
     width: min(100%, 1200px);
-    height: 80vh;
+    min-height: 80vh;
     background: var(--color-panel);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
@@ -124,6 +124,10 @@ body {
     overflow-y: auto;
     position: relative;
     height: 100%;
+    scrollbar-width: none; /* Firefox */
+}
+.main-content::-webkit-scrollbar {
+    display: none; /* Chrome, Safari, Edge */
 }
 
 /* --- Panel --- */
@@ -735,7 +739,7 @@ button:active { transform: scale(0.98); }
     padding: 20px;
     border-radius: var(--radius);
     flex: 1;
-    min-height: 200px;
+    min-height: 800px;
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-all;
