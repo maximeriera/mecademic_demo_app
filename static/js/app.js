@@ -124,10 +124,46 @@ function sendClearFaults() {
         .then(r => r.json()).then(d => setMessage(d.message))
         .catch(() => setMessage('Error sending clear faults command.'));
 }
+function showConfirmModal(title, message, onConfirm) {
+    const modal = document.getElementById('confirm-modal');
+    const titleEl = document.getElementById('modal-title');
+    const messageEl = document.getElementById('modal-message');
+    const confirmBtn = document.getElementById('modal-confirm');
+    const cancelBtn = document.getElementById('modal-cancel');
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    modal.hidden = false;
+
+    const cleanup = () => {
+        modal.hidden = true;
+        confirmBtn.removeEventListener('click', handleConfirm);
+        cancelBtn.removeEventListener('click', handleCancel);
+    };
+
+    const handleConfirm = () => {
+        onConfirm();
+        cleanup();
+    };
+
+    const handleCancel = () => {
+        cleanup();
+    };
+
+    confirmBtn.addEventListener('click', handleConfirm);
+    cancelBtn.addEventListener('click', handleCancel);
+}
+
 function sendShutdown() {
-    fetch('/api/shutdown', { method: 'POST' })
-        .then(r => r.json()).then(d => setMessage(d.message))
-        .catch(() => setMessage('Error sending shutdown command.'));
+    showConfirmModal(
+        "Confirm System Shutdown",
+        "Are you sure you want to shut down the system? This will disconnect all devices and stop all ongoing processes.",
+        () => {
+            fetch('/api/shutdown', { method: 'POST' })
+                .then(r => r.json()).then(d => setMessage(d.message))
+                .catch(() => setMessage('Error sending shutdown command.'));
+        }
+    );
 }
 
 /* ---- Production context ---- */
@@ -243,14 +279,14 @@ function renderProdMetrics(data) {
     if (!metricsContainer) return;
 
     const cards = [
-        renderMetricCard('State', metrics.running ? 'RUN' : 'IDLE', metrics.running ? 'prod-metric-on' : 'prod-metric-off'),
-        renderMetricCard('Cycles', metrics.completed_cycles ?? 0),
-        renderMetricCard('Parts', metrics.part_count ?? 0),
-        renderMetricCard('Run Time', formatDurationSeconds(metrics.elapsed_production_s)),
-        renderMetricCard('Last Cycle', formatDurationSeconds(metrics.last_cycle_duration_s)),
-        renderMetricCard('Avg Cycle', formatDurationSeconds(metrics.average_cycle_duration_s)),
-        renderMetricCard('Total Time', formatDurationSeconds(metrics.total_cycle_time_s)),
-        renderMetricCard('Error', metrics.last_error || 'None', metrics.last_error ? 'prod-metric-warn' : ''),
+        renderMetricCard('Operational State', metrics.running ? 'RUNNING' : 'IDLE', metrics.running ? 'prod-metric-on' : 'prod-metric-off'),
+        renderMetricCard('Completed Cycles', metrics.completed_cycles ?? 0),
+        renderMetricCard('Total Part Count', metrics.part_count ?? 0),
+        renderMetricCard('Current Run Time', formatDurationSeconds(metrics.elapsed_production_s)),
+        renderMetricCard('Last Cycle Duration', formatDurationSeconds(metrics.last_cycle_duration_s)),
+        renderMetricCard('Average Cycle Time', formatDurationSeconds(metrics.average_cycle_duration_s)),
+        renderMetricCard('Cumulative Time', formatDurationSeconds(metrics.total_cycle_time_s)),
+        renderMetricCard('Last Error State', metrics.last_error || 'NO ERRORS', metrics.last_error ? 'prod-metric-warn' : ''),
     ].join('');
 
     metricsContainer.innerHTML = `
@@ -446,6 +482,18 @@ function updateProdValue(namespace, key) {
 }
 
 function resetProdContext(namespace, key = null) {
+    if (namespace === 'all' || !key) {
+        showConfirmModal(
+            "Confirm Reset All",
+            "Are you sure you want to reset all production parameters and variables to their default values? This cannot be undone.",
+            () => executeReset(namespace, key)
+        );
+    } else {
+        executeReset(namespace, key);
+    }
+}
+
+function executeReset(namespace, key) {
     const payload = { namespace };
     if (key) payload.key = key;
 
