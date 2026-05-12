@@ -15,7 +15,12 @@
             <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity from a single control surface.</p>
             <div class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
+            </div>
+            <div class="global-status-wrap">
+                <div class="global-status-label">System Status</div>
+                <div id="robot-state-global" class="status-box status-box-compact js-robot-state">Loading...</div>
             </div>
         </div>
 
@@ -24,7 +29,7 @@
 
             <div class="section">
                 <div class="section-title">System Status</div>
-                <div id="robot-state" class="status-box">Loading...</div>
+                <div id="robot-state" class="status-box js-robot-state">Loading...</div>
                 <div id="message-log" class="message-log">No recent command activity.</div>
             </div>
 
@@ -59,6 +64,38 @@
             <div class="section">
                 <div class="section-title">Devices</div>
                 <div id="robot-info-container">Loading device info...</div>
+            </div>
+
+        </div>
+
+        <!-- ===== PRODUCTION TAB ===== -->
+        <div id="tab-production" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-production" hidden>
+
+            <div class="section">
+                <div class="section-title">Production Control</div>
+                <div class="prod-control-row">
+                    <button type="button" class="btn-task" onclick="sendTask('prod')">PROD</button>
+                    <button type="button" class="btn-stop" onclick="sendStop()">STOP</button>
+                    <button type="button" class="btn-abort" onclick="sendAbort()">ABORT</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Variables</div>
+                <div id="prod-variables-container">Loading variables...</div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Params</div>
+                <div id="prod-params-container">Loading params...</div>
+            </div>
+
+            <div class="section">
+                <div id="prod-action-log" class="message-log">No recent production context action.</div>
+                <div class="prod-toolbar">
+                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                    <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
+                </div>
             </div>
 
         </div>

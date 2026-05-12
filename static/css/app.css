@@ -161,6 +161,19 @@ body {
     box-shadow: 0 8px 18px rgba(0,255,153,0.22);
 }
 
+.global-status-wrap {
+    padding: 0 0 14px;
+}
+
+.global-status-label {
+    font-size: 0.68em;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    margin-bottom: 8px;
+}
+
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 
@@ -202,6 +215,11 @@ body {
 .INITIALIZING { background: linear-gradient(135deg, #57cfff, #3bb8ff); color: #04141f; box-shadow: 0 0 24px rgba(59,184,255,0.18); }
 .FAULTED      { background: linear-gradient(135deg, #ff7b88, #ff5a6b); color: white; box-shadow: 0 0 24px rgba(255,90,107,0.18); }
 .OFF          { background: linear-gradient(135deg, #3b3b3b, #2b2b2b); color: #d8d8d8; }
+
+.status-box-compact {
+    font-size: 1em;
+    padding: 10px;
+}
 
 /* --- Message Log --- */
 .message-log {
@@ -452,6 +470,162 @@ button:active { transform: scale(0.98); }
 #log-output .log-critical{ color: var(--color-red); font-weight: bold; }
 #log-output .log-debug   { color: #888; }
 
+#log-output,
+.prod-table-wrap {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,255,153,0.35) rgba(255,255,255,0.06);
+}
+
+#log-output::-webkit-scrollbar,
+.prod-table-wrap::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+#log-output::-webkit-scrollbar-track,
+.prod-table-wrap::-webkit-scrollbar-track {
+    background: rgba(255,255,255,0.06);
+    border-radius: 999px;
+}
+
+#log-output::-webkit-scrollbar-thumb,
+.prod-table-wrap::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(0,255,153,0.75), rgba(0,201,122,0.75));
+    border-radius: 999px;
+    border: 2px solid rgba(24,24,24,0.95);
+}
+
+#log-output::-webkit-scrollbar-thumb:hover,
+.prod-table-wrap::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(124,255,198,0.85), rgba(0,255,153,0.85));
+}
+
+/* --- Production Context --- */
+.prod-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.prod-control-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+}
+
+.prod-unlocked {
+    border-color: rgba(0,255,153,0.28);
+    color: var(--color-accent-soft);
+}
+
+.prod-locked {
+    border-color: rgba(255,90,107,0.26);
+    color: #ff9ba5;
+}
+
+/* --- Production Context cards --- */
+.prod-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.prod-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.02);
+}
+
+.prod-card-editable {
+    border-left: 3px solid rgba(0,255,153,0.45);
+}
+
+.prod-card-locked {
+    border-left: 3px solid rgba(255,90,107,0.3);
+    opacity: 0.85;
+}
+
+.prod-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.prod-card-key {
+    font-weight: 700;
+    color: #e9fff6;
+    font-size: 0.9em;
+}
+
+.prod-card-type {
+    font-size: 0.72em;
+    color: var(--color-muted);
+    background: rgba(255,255,255,0.06);
+    border-radius: 4px;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.prod-card-body {
+    display: grid;
+    grid-template-columns: 160px 1fr auto;
+    gap: 10px;
+    align-items: start;
+}
+
+.prod-card-value input[type="text"] {
+    width: 100%;
+    padding: 7px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: #202020;
+    color: var(--color-text);
+    box-sizing: border-box;
+}
+
+.prod-card-value input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin-top: 4px;
+}
+
+.prod-card-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    font-size: 0.78em;
+    color: #d6ddd9;
+    line-height: 1.5;
+}
+
+.prod-card-desc {
+    width: 100%;
+    color: var(--color-muted);
+    font-style: italic;
+}
+
+.prod-detail-label {
+    color: var(--color-muted);
+    font-weight: 700;
+    margin-right: 4px;
+}
+
+.prod-card-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-end;
+}
+
+.prod-card-actions button {
+    padding: 6px 12px;
+    font-size: 0.74em;
+    white-space: nowrap;
+}
+
 @media (max-width: 640px) {
     body {
         padding: 18px 10px;
@@ -489,6 +663,10 @@ button:active { transform: scale(0.98); }
 
     .btn-grid-3,
     .btn-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .prod-control-row {
         grid-template-columns: 1fr;
     }
 

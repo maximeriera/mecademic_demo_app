@@ -35,6 +35,7 @@ from application_code.prod import prod_cycle
 from application_code.home import home
 from application_code.shipment import shipment
 from application_code.calib import calib
+from .ProductionContext import ProductionContext
 
 # --- Enums for State Management ---
 
@@ -87,7 +88,7 @@ class Task(threading.Thread):
     4. :meth:`abort` — request an immediate hardware-level stop.
     """
 
-    def __init__(self, logger: logging.Logger, task_type: TaskType, state_change_callback, devices: Dict[str, Device]):
+    def __init__(self, logger: logging.Logger, task_type: TaskType, state_change_callback, devices: Dict[str, Device], production_context: ProductionContext):
         super().__init__()
         
         self.logger = logger
@@ -97,6 +98,7 @@ class Task(threading.Thread):
         self.state_change_callback = state_change_callback
         self.name = f"TaskThread-{task_type.name}"
         self.devices = devices
+        self.production_context = production_context
 
     def run(self):
         """Entry point called by ``threading.Thread.start()``.
@@ -124,6 +126,9 @@ class Task(threading.Thread):
                     self._run_calib()
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
+            if self.task_type == TaskType.PROD:
+                self.production_context.apply_event("fault")
+                self.production_context.mark_prod_running(False)
             self.state_change_callback(ControllerState.FAULTED)
             faulted = True
         finally:
@@ -187,8 +192,8 @@ class Task(threading.Thread):
         Steps
         -----
         1. Execute the home sequence.
-        2. Alternate ``prod_cycle(devices, index)`` with ``index`` cycling
-           between 1 and 2 until :meth:`stopped` returns ``True``.
+          2. Repeatedly call ``prod_cycle(devices, context)`` until
+              :meth:`stopped` returns ``True``.
         3. If an exception occurs inside a cycle **and** :meth:`stopped` is
            ``True``, the exception is treated as a clean abort (``ClearMotion``
            unblocked ``WaitIdle``) and the method returns without raising.
@@ -202,20 +207,25 @@ class Task(threading.Thread):
         """
         try:
             self._run_home()
-            index = 1
             while not self.stopped():
+                self.production_context.mark_cycle_start()
                 try:
-                    prod_cycle(self.devices, index)
+                    prod_cycle(self.devices, self.production_context)
+                    self.production_context.mark_cycle_end()
                 except Exception as e:
+                    self.production_context.mark_cycle_error(str(e))
                     if self.stopped():
                         # abort() called mid-cycle: ClearMotion() unblocked WaitIdle() — clean exit
                         self.logger.info(f"[{self.name}] Prod cycle interrupted by abort: {e}")
+                        self.production_context.mark_prod_running(False)
                         return
                     raise  # genuine device error → propagate → FAULTED
-                index = (index) % 2 + 1
             # stop() called between cycles: finish the loop cleanly
+            self.production_context.apply_event("prod_stop")
+            self.production_context.mark_prod_running(False)
             self._run_home()
         except Exception as e:
+            self.production_context.mark_prod_running(False)
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
             raise e
             

@@ -1,5 +1,6 @@
-const stateDisplay = document.getElementById('robot-state');
+const stateDisplays = () => Array.from(document.querySelectorAll('.js-robot-state'));
 const messageLog   = document.getElementById('message-log');
+let latestProdContext = null;
 
 /* ---- Tab switching ---- */
 function switchTab(name, btn) {
@@ -18,6 +19,7 @@ function switchTab(name, btn) {
     btn.classList.add('active');
     btn.setAttribute('aria-selected', 'true');
     if (name === 'logs') populateLogFileList();
+    if (name === 'production') refreshProdContext();
 }
 
 /* ---- Status polling ---- */
@@ -25,32 +27,63 @@ function updateRobotStatus() {
     fetch('/api/status')
         .then(r => r.json())
         .then(data => {
-            stateDisplay.textContent = data.status;
-            stateDisplay.className = 'status-box ' + data.status.toUpperCase();
+            stateDisplays().forEach((el) => {
+                const compact = el.classList.contains('status-box-compact');
+                el.textContent = data.status;
+                el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state ' + data.status.toUpperCase();
+            });
         })
         .catch(() => {
-            stateDisplay.textContent = 'COMMUNICATION ERROR';
-            stateDisplay.className = 'status-box FAULTED';
+            stateDisplays().forEach((el) => {
+                const compact = el.classList.contains('status-box-compact');
+                el.textContent = 'COMMUNICATION ERROR';
+                el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state FAULTED';
+            });
         });
 }
 
 function setMessage(text) { messageLog.textContent = text || 'No recent command activity.'; }
 
+function setProdActionMessage(text, isError = false) {
+    const actionLog = document.getElementById('prod-action-log');
+    if (!actionLog) return;
+    actionLog.textContent = text || 'No recent production context action.';
+    actionLog.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
 /* ---- Task / control commands ---- */
 function sendTask(task) {
     fetch(`/api/task/${task}`, { method: 'POST' })
-        .then(r => r.json()).then(d => setMessage(d.message))
-        .catch(() => setMessage('Error sending task command.'));
+        .then(r => r.json()).then(d => {
+            setMessage(d.message);
+            setProdActionMessage(d.message, !d.success);
+        })
+        .catch(() => {
+            setMessage('Error sending task command.');
+            setProdActionMessage('Error sending task command.', true);
+        });
 }
 function sendStop() {
     fetch('/api/stop', { method: 'POST' })
-        .then(r => r.json()).then(d => setMessage(d.message))
-        .catch(() => setMessage('Error sending stop command.'));
+        .then(r => r.json()).then(d => {
+            setMessage(d.message);
+            setProdActionMessage(d.message, !d.success);
+        })
+        .catch(() => {
+            setMessage('Error sending stop command.');
+            setProdActionMessage('Error sending stop command.', true);
+        });
 }
 function sendAbort() {
     fetch('/api/abort', { method: 'POST' })
-        .then(r => r.json()).then(d => setMessage(d.message))
-        .catch(() => setMessage('Error sending abort command.'));
+        .then(r => r.json()).then(d => {
+            setMessage(d.message);
+            setProdActionMessage(d.message, !d.success);
+        })
+        .catch(() => {
+            setMessage('Error sending abort command.');
+            setProdActionMessage('Error sending abort command.', true);
+        });
 }
 function sendInitialize() {
     fetch('/api/initialize', { method: 'POST' })
@@ -66,6 +99,182 @@ function sendShutdown() {
     fetch('/api/shutdown', { method: 'POST' })
         .then(r => r.json()).then(d => setMessage(d.message))
         .catch(() => setMessage('Error sending shutdown command.'));
+}
+
+/* ---- Production context ---- */
+function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function parseFieldValue(typeName, inputEl) {
+    if (typeName === 'bool') return !!inputEl.checked;
+    const raw = inputEl.value;
+    if (typeName === 'int') return parseInt(raw, 10);
+    if (typeName === 'float') return parseFloat(raw);
+    return raw;
+}
+
+function isProdUserInteracting() {
+    const active = document.activeElement;
+    if (active && (active.closest('#prod-params-container') || active.closest('#prod-variables-container'))) {
+        return true;
+    }
+    return false;
+}
+
+function captureProdScrollState() {
+    const panel = document.getElementById('tab-production');
+    return { panelScrollTop: panel ? panel.scrollTop : 0 };
+}
+
+function restoreProdScrollState(state) {
+    const panel = document.getElementById('tab-production');
+    if (panel) panel.scrollTop = state.panelScrollTop || 0;
+}
+
+function renderProdContext(data) {
+    const scrollState = captureProdScrollState();
+    latestProdContext = data;
+    const paramsContainer = document.getElementById('prod-params-container');
+    const varsContainer = document.getElementById('prod-variables-container');
+
+    const locked = !!data.locked;
+
+    paramsContainer.innerHTML = renderNamespaceTable('params', data.params || {}, locked);
+    varsContainer.innerHTML = renderNamespaceTable('variables', data.variables || {}, locked);
+    restoreProdScrollState(scrollState);
+}
+
+function renderNamespaceTable(namespace, entries, locked) {
+    const keys = Object.keys(entries);
+    if (keys.length === 0) {
+        return '<p class="empty-state">No entries defined.</p>';
+    }
+
+    const cards = keys.map((key) => {
+        const entry = entries[key];
+        const editable = !locked && !!entry.editable_when_idle;
+        const inputId = `prod-${namespace}-${key}-value`;
+        const resetOn = Array.isArray(entry.reset_on) ? entry.reset_on.join(', ') : 'default policy';
+        const scope = entry.persist_scope || 'default';
+
+        let editorHtml = '';
+        if (entry.type === 'bool') {
+            editorHtml = `<input id="${inputId}" type="checkbox" ${entry.value ? 'checked' : ''} ${editable ? '' : 'disabled'}>`;
+        } else {
+            editorHtml = `<input id="${inputId}" type="text" value="${escapeHtml(entry.value)}" ${editable ? '' : 'disabled'}>`;
+        }
+
+        return `
+            <div class="prod-card${editable ? ' prod-card-editable' : ' prod-card-locked'}">
+                <div class="prod-card-header">
+                    <span class="prod-card-key">${escapeHtml(key)}</span>
+                    <span class="prod-card-type">${escapeHtml(entry.type)}</span>
+                </div>
+                <div class="prod-card-body">
+                    <div class="prod-card-value">${editorHtml}</div>
+                    <div class="prod-card-details">
+                        <span><span class="prod-detail-label">Default:</span> ${escapeHtml(String(entry.default))}</span>
+                        <span><span class="prod-detail-label">Reset:</span> ${escapeHtml(resetOn)}</span>
+                        <span><span class="prod-detail-label">Scope:</span> ${escapeHtml(scope)}</span>
+                        ${entry.description ? `<span class="prod-card-desc">${escapeHtml(entry.description)}</span>` : ''}
+                    </div>
+                    <div class="prod-card-actions">
+                        <button type="button" class="btn-task" onclick="updateProdValue('${namespace}','${key}')" ${editable ? '' : 'disabled'}>Apply</button>
+                        <button type="button" class="btn-shutdown" onclick="resetProdContext('${namespace}','${key}')" ${locked ? 'disabled' : ''}>Reset</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    return `<div class="prod-cards">${cards}</div>`;
+}
+
+function refreshProdContext(auto = false) {
+    if (auto && isProdUserInteracting()) {
+        return;
+    }
+    fetch('/api/prod/context')
+        .then(r => r.json())
+        .then(data => renderProdContext(data))
+        .catch(() => {
+            setProdActionMessage('Failed to load production context.', true);
+        });
+}
+
+function updateProdValue(namespace, key) {
+    if (!latestProdContext || !latestProdContext[namespace] || !latestProdContext[namespace][key]) return;
+
+    const entry = latestProdContext[namespace][key];
+    const input = document.getElementById(`prod-${namespace}-${key}-value`);
+    if (!input) return;
+
+    const value = parseFieldValue(entry.type, input);
+    if ((entry.type === 'int' || entry.type === 'float') && Number.isNaN(value)) {
+        setMessage(`Invalid numeric value for ${namespace}.${key}.`);
+        return;
+    }
+
+    const payload = { [namespace]: { [key]: { value } } };
+    fetch('/api/prod/context', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success === false) {
+                const details = Array.isArray(d.errors) && d.errors.length > 0
+                    ? ` (${d.errors.join('; ')})`
+                    : '';
+                const msg = (d.message || `Failed to update ${namespace}.${key}.`) + details;
+                setMessage(msg);
+                setProdActionMessage(msg, true);
+            } else {
+                const msg = d.message || `${namespace}.${key} updated.`;
+                setMessage(msg);
+                setProdActionMessage(msg, false);
+            }
+            refreshProdContext();
+        })
+        .catch(() => {
+            const msg = 'Error updating production context value.';
+            setMessage(msg);
+            setProdActionMessage(msg, true);
+        });
+}
+
+function resetProdContext(namespace, key = null) {
+    const payload = { namespace };
+    if (key) payload.key = key;
+
+    fetch('/api/prod/context/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success === false) {
+                const msg = d.message || 'Failed to reset production context.';
+                setMessage(msg);
+                setProdActionMessage(msg, true);
+            } else {
+                const msg = d.message || 'Production context reset.';
+                setMessage(msg);
+                setProdActionMessage(msg, false);
+            }
+            refreshProdContext();
+        })
+        .catch(() => {
+            const msg = 'Error resetting production context.';
+            setMessage(msg);
+            setProdActionMessage(msg, true);
+        });
 }
 
 /* ---- Device info cards ---- */
@@ -203,8 +412,15 @@ setInterval(() => {
     }
 }, 3000);
 
+setInterval(() => {
+    if (document.getElementById('tab-production').classList.contains('active')) {
+        refreshProdContext(true);
+    }
+}, 1000);
+
 /* ---- Startup ---- */
 setInterval(updateRobotStatus, 100);
 setInterval(loadRobotInfo, 1000);
 updateRobotStatus();
 loadRobotInfo();
+refreshProdContext();

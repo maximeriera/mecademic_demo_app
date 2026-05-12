@@ -33,6 +33,7 @@ from devices import Device
 
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
+from .ProductionContext import ProductionContext
 
 class ApplicationController:
     """
@@ -75,6 +76,8 @@ class ApplicationController:
         
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
+        production_context_file = self.config.get('production_context_file', 'production_context.yaml')
+        self.production_context = ProductionContext(self.logger, config_path=production_context_file)
 
         self._create_devices()
         self.logger.info("ApplicationController initialized with devices: " + ", ".join(self.devices.keys())) 
@@ -210,6 +213,7 @@ class ApplicationController:
             self._monitor_stop_event.clear()
             self._monitor_thread.start()
         
+        self.production_context.apply_event("initialize")
         self.set_state(ControllerState.READY)
 
     def set_state(self, new_state: ControllerState) -> ControllerState:
@@ -284,11 +288,16 @@ class ApplicationController:
              return False
 
         # Start the new task
+        if task_type == TaskType.PROD:
+            self.production_context.apply_event("prod_start")
+            self.production_context.mark_prod_running(True)
+
         self._current_task = Task(
             logger=self.logger,
             task_type=task_type, 
             state_change_callback=self.set_state, 
             devices=self.devices,
+            production_context=self.production_context,
         )
         self._current_task.start()
         return True
@@ -328,8 +337,24 @@ class ApplicationController:
         """
         if self._current_task and self._current_task.is_alive():
             self.logger.warning("Aborting current task due to device fault or stop request.")
+            self.production_context.apply_event("abort")
+            self.production_context.mark_prod_running(False)
             self._current_task.abort()
             # The Task thread will handle the transition back to READY or FAULTED
+
+    def get_prod_context_snapshot(self) -> Dict[str, Any]:
+        """Return a full production context snapshot for API/UI consumption."""
+        return self.production_context.snapshot(self.get_state().value)
+
+    def update_prod_context(self, payload: Dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Update production context entries from an API payload."""
+        locked = self.get_state() == ControllerState.BUSY
+        return self.production_context.update_from_payload(payload, locked=locked)
+
+    def reset_prod_context(self, namespace: str, key: str | None = None, event: str | None = None) -> None:
+        """Reset production context values to their defaults."""
+        locked = self.get_state() == ControllerState.BUSY
+        self.production_context.reset(namespace_name=namespace, key=key, event=event, locked=locked)
 
     # --- Monitoring Thread ---
 
@@ -362,6 +387,8 @@ class ApplicationController:
                 if device.faulted:
                     if self.get_state() != ControllerState.FAULTED:
                         self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state and aborting task.")
+                        self.production_context.apply_event("fault")
+                        self.production_context.mark_prod_running(False)
                         self.set_state(ControllerState.FAULTED)
                         self._abort_current_task()
                     all_healthy = False
@@ -424,6 +451,7 @@ class ApplicationController:
             If the monitor thread does not exit within the timeout.
         """
         self.logger.info("Shutting down Robot Controller...")
+        self.production_context.mark_prod_running(False)
         self.set_state(ControllerState.FAULTED)
         self._monitor_stop_event.set()
         if self._current_task and self._current_task.is_alive():
