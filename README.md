@@ -194,9 +194,15 @@ All user-facing task logic lives in the **`application_code/`** folder. Each fil
 | `home.py` | `home()` | `home(devices: Dict[str, Device])` | HOME task, and automatically before/after the PROD loop |
 | `shipment.py` | `shipment()` | `shipment(devices: Dict[str, Device])` | SHIPMENT task |
 | `calib.py` | `calib()` | `calib(devices: Dict[str, Device])` | CALIBRATION task |
-| `prod.py` | `prod_cycle()` | `prod_cycle(devices: Dict[str, Device], index: int)` | Each iteration of the PROD loop |
+| `prod.py` | `prod_cycle()` | `prod_cycle(devices: Dict[str, Device], context: ProductionContext \| None = None)` | Each iteration of the PROD loop |
 
-Every function receives `devices` — a dictionary mapping device names (as defined in `config.yaml`) to their `Device` instances. `prod_cycle` additionally receives an `index` that alternates between `1` and `2` on each iteration, which can be used to alternate between two positions or routines.
+Every function receives `devices` — a dictionary mapping device names (as defined in `config.yaml`) to their `Device` instances. `prod_cycle` additionally receives a shared `context` object for persistent params/variables across cycles.
+
+The production context configuration is stored in `production_context.yaml` (or a custom path via `production_context_file` in `config.yaml`).
+It defines:
+- `params`: behavior inputs for prod logic
+- `variables`: runtime values that can be reused and updated every cycle
+- global default reset events with per-entry `reset_on` overrides
 
 ### Accessing devices
 
@@ -224,8 +230,7 @@ When the user starts the **PROD** task, the framework runs this sequence:
 ```
 home(devices)            ← entry home
 while not stopped:
-    prod_cycle(devices, index)   ← your production logic
-    index alternates 1 → 2 → 1 → …
+    prod_cycle(devices, context)   ← your production logic
 home(devices)            ← exit home (on graceful stop only)
 ```
 
@@ -247,7 +252,7 @@ You do **not** need to check for stop/abort signals inside your functions — th
 from typing import Dict
 from devices import Device, MecaRobot
 
-def prod_cycle(devices: Dict[str, Device], index: int):
+def prod_cycle(devices: Dict[str, Device], context=None):
     robot: MecaRobot = devices["my_meca_robot"]
 
     # Pick
@@ -264,7 +269,7 @@ def prod_cycle(devices: Dict[str, Device], index: int):
     robot.api.WaitIdle()
     robot.logger.info("Placed part")
 
-    robot.logger.info(f"Cycle {index} complete")
+    robot.logger.info("Cycle complete")
 ```
 
 ---
@@ -405,6 +410,33 @@ logs/
 | `POST` | `/api/abort` | Immediate abort — clear motion on all robots |
 
 ### Logs
+
+### Production Context
+
+- `GET /api/prod/context`
+  - Returns params, variables, runtime metadata (cycle count, timestamps, last error), and lock state.
+- `PATCH /api/prod/context`
+  - Updates context values/settings when controller is not BUSY.
+  - Example payload:
+    ```json
+    {
+      "params": {
+        "cycle_wait_s": { "value": 0.5 }
+      },
+      "variables": {
+        "part_count": { "value": 0 }
+      }
+    }
+    ```
+- `POST /api/prod/context/reset`
+  - Resets a namespace/key to defaults.
+  - Example payloads:
+    ```json
+    { "namespace": "all" }
+    ```
+    ```json
+    { "namespace": "variables", "key": "part_count" }
+    ```
 
 | Method | Endpoint | Description |
 |---|---|---|

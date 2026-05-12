@@ -7,58 +7,155 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body>
-    <div class="control-panel">
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="panel-header">
+                <div class="panel-kicker">Mecademic Demo Network</div>
+                <h1>Demo Application Controller</h1>
+                <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity.</p>
+            </div>
 
-        <div class="panel-header">
-            <div class="panel-kicker">Mecademic Demo Network</div>
-            <h1>Demo Application Controller</h1>
-            <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity from a single control surface.</p>
-            <div class="tab-bar" role="tablist" aria-label="Application panels">
+            <div class="global-status-wrap">
+                <div class="global-status-label">System Status</div>
+                <div id="robot-state-global" class="status-box status-box-compact js-robot-state">Loading...</div>
+            </div>
+
+            <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
+            </nav>
+        </aside>
+
+        <main class="main-content">
+        <!-- ===== CONTROL TAB ===== -->
+        <div id="tab-control" class="tab-panel active panel-body" role="tabpanel" aria-labelledby="tab-btn-control">
+            <div class="control-main-grid">
+                <div class="control-side">
+                    <div class="section">
+                        <div class="section-title">System Status</div>
+                        <div id="robot-state" class="status-box js-robot-state">Loading...</div>
+                        <div id="message-log" class="message-log">No recent command activity.</div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">System Control</div>
+                        <div class="btn-column">
+                            <button type="button" class="btn-init" onclick="sendInitialize()">INITIALIZE</button>
+                            <button type="button" class="btn-clear" onclick="sendClearFaults()">CLEAR FAULTS</button>
+                            <button type="button" class="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-main">
+                    <div class="section">
+                        <div class="section-title">Operations & Tasks</div>
+                        <div class="ops-grid">
+                            <div class="ops-card">
+                                <div class="ops-card-label">Manual Tasks</div>
+                                <div class="btn-column">
+                                    <button type="button" class="btn-task" onclick="sendTask('home')">HOME</button>
+                                    <button type="button" class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
+                                    <button type="button" class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
+                                </div>
+                            </div>
+                            <div class="ops-card">
+                                <div class="ops-card-label">Autonomous Mode</div>
+                                <div class="btn-column">
+                                    <button type="button" class="btn-start" onclick="sendTask('prod')">START PROD</button>
+                                    <button type="button" class="btn-stop" onclick="sendStop()">STOP</button>
+                                    <button type="button" class="btn-abort" onclick="sendAbort()">ABORT</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">Device Network</div>
+                        <div id="robot-info-container">Loading device info...</div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- ===== CONTROL TAB ===== -->
-        <div id="tab-control" class="tab-panel active panel-body" role="tabpanel" aria-labelledby="tab-btn-control">
+        <!-- ===== PRODUCTION TAB ===== -->
+        <div id="tab-production" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-production" hidden>
 
             <div class="section">
-                <div class="section-title">System Status</div>
-                <div id="robot-state" class="status-box">Loading...</div>
-                <div id="message-log" class="message-log">No recent command activity.</div>
-            </div>
-
-            <div class="section">
-                <div class="section-title">Tasks</div>
-                <div class="task-split">
-                    <div class="task-col">
-                        <div class="task-col-label">Manual</div>
-                        <button class="btn-task" onclick="sendTask('home')">HOME</button>
-                        <button class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
-                        <button class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
-                    </div>
-                    <div class="task-separator"></div>
-                    <div class="task-col">
-                        <div class="task-col-label">Auto</div>
-                        <button class="btn-task" onclick="sendTask('prod')">PROD</button>
-                        <button class="btn-stop"  onclick="sendStop()">STOP</button>
-                        <button class="btn-abort" onclick="sendAbort()">ABORT</button>
-                    </div>
+                <div class="section-title">Production Control</div>
+                <div class="prod-control-row">
+                    <button type="button" class="btn-start" onclick="sendTask('prod')">START PROD</button>
+                    <button type="button" class="btn-stop" onclick="sendStop()">STOP</button>
+                    <button type="button" class="btn-abort" onclick="sendAbort()">ABORT</button>
                 </div>
             </div>
 
-            <div class="section">
-                <div class="section-title">System Control</div>
-                <div class="btn-grid-3">
-                    <button class="btn-init"     onclick="sendInitialize()">INITIALIZE</button>
-                    <button class="btn-clear"    onclick="sendClearFaults()">CLEAR FAULTS</button>
-                    <button class="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button>
-                </div>
-            </div>
+            <div class="section prod-context-section">
+                <div class="section-title">Production Data</div>
+                <div class="prod-subtab-shell">
+                    <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
+                        <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
+                            <span class="prod-subtab-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M4 19V5"></path>
+                                    <path d="M4 19h16"></path>
+                                    <path d="M8 15v-4"></path>
+                                    <path d="M12 15V8"></path>
+                                    <path d="M16 15v-6"></path>
+                                </svg>
+                            </span>
+                            <span class="prod-subtab-label">Metrics</span>
+                        </button>
+                        <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
+                            <span class="prod-subtab-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M4 7h16"></path>
+                                    <path d="M7 7v10"></path>
+                                    <path d="M4 17h16"></path>
+                                    <path d="M14 7v10"></path>
+                                </svg>
+                            </span>
+                            <span class="prod-subtab-label">Variables / Params</span>
+                        </button>
+                    </div>
 
-            <div class="section">
-                <div class="section-title">Devices</div>
-                <div id="robot-info-container">Loading device info...</div>
+                    <div class="prod-subtab-content">
+                        <div id="prod-subtab-metrics" class="prod-subtab-panel active" role="tabpanel" aria-labelledby="prod-subtab-btn-metrics">
+                            <div class="section">
+                                <div class="section-title">Production Metrics</div>
+                                <div id="prod-metrics-container">Loading metrics...</div>
+                            </div>
+
+                            <div class="section">
+                                <div id="prod-action-log" class="message-log">No recent production context action.</div>
+                                <div class="prod-toolbar">
+                                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                                    <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="prod-subtab-context" class="prod-subtab-panel" role="tabpanel" aria-labelledby="prod-subtab-btn-context" hidden>
+                            <div class="section">
+                                <div class="section-title">Variables</div>
+                                <div id="prod-variables-container">Loading variables...</div>
+                            </div>
+
+                            <div class="section">
+                                <div class="section-title">Params</div>
+                                <div id="prod-params-container">Loading params...</div>
+                            </div>
+
+                            <div class="section">
+                                <div class="prod-toolbar">
+                                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                                    <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
         </div>
@@ -68,20 +165,49 @@
 
             <div class="section">
                 <div class="section-title">Log Viewer</div>
-                <div class="log-toolbar">
-                    <select id="log-file-select" onchange="loadSelectedLog()">
-                        <option value="">Select a log file</option>
-                    </select>
-                    <label>
-                        <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
-                    </label>
-                    <button type="button" onclick="loadSelectedLog()">Refresh</button>
-                </div>
-                <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
+                    <div class="log-toolbar">
+                        <div class="log-select" id="log-file-picker">
+                            <button
+                                type="button"
+                                id="log-file-trigger"
+                                class="log-select-trigger"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                                aria-controls="log-file-menu"
+                            >
+                                <span class="log-select-label">Select a log file</span>
+                            </button>
+                            <div id="log-file-menu" class="log-select-menu" role="listbox" aria-label="Log file selector"></div>
+                            <select id="log-file-select" class="log-native-select" onchange="loadSelectedLog()" tabindex="-1" aria-hidden="true">
+                                <option value="">Select a log file</option>
+                            </select>
+                        </div>
+                        <label>
+                            <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+                        </label>
+                        <button type="button" onclick="loadSelectedLog()">Refresh</button>
+                    </div>
+                    <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
+
             </div>
 
         </div>
+        </main>
+    </div>
 
+    <div id="confirm-modal" class="modal-overlay" hidden>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">Confirm Action</h2>
+            </div>
+            <div class="modal-body">
+                <p id="modal-message">Are you sure you want to proceed?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-shutdown" id="modal-cancel">Cancel</button>
+                <button type="button" class="btn-init" id="modal-confirm">Confirm</button>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>

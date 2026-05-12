@@ -42,10 +42,43 @@
 #   terminator: "\r\n"  # optional — must match GoPxL setting
 #
 # ============================================================
+# PRODUCTION CONTEXT CONFIGURATION
+# ============================================================
+#
+# The production runtime context (params/variables/reset rules) is loaded
+# from a separate YAML file.
+#
+# Top-level key:
+#   production_context_file: "production_context.yaml"
+#
+# Notes:
+# - This key must be at top level (same level as `devices`), not nested
+#   under `devices`.
+# - If omitted, default file is: production_context.yaml
+# - The file defines:
+#   - settings: persistence mode and default reset events
+#   - params: production behavior inputs
+#   - variables: runtime values reused between cycles
+#
+# Example:
+# production_context_file: "production_context.yaml"
+production_context_file: "production_context.yaml"
 
 devices:
 
   # --- Robots ---
   my_meca_robot:
+    type: "mecademic"
+    ip_address: "192.168.0.100"
+
+  my_meca_robot1:
+    type: "mecademic"
+    ip_address: "192.168.0.100"
+
+  my_meca_robot2:
+    type: "mecademic"
+    ip_address: "192.168.0.100"
+
+  my_meca_robot3:
     type: "mecademic"
     ip_address: "192.168.0.100"

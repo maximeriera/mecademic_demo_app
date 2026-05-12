@@ -43,6 +43,18 @@ except Exception as e:
         def shutdown(self): pass
         def get_devices_info(self): return {}
         def clear_faults(self): pass
+        def get_prod_context_snapshot(self):
+            return {
+                'state': ControllerState.OFF.value,
+                'locked': False,
+                'settings': {'storage_scope': 'memory', 'auto_persist': True, 'default_reset_events': []},
+                'metadata': {},
+                'metrics': {},
+                'params': {},
+                'variables': {},
+            }
+        def update_prod_context(self, payload): return ([], ['Production context unavailable'])
+        def reset_prod_context(self, namespace, key=None, event=None): return None
     APPLICATION = MockApplicationController()
 
 
@@ -156,6 +168,62 @@ def clear_faults():
 def get_state_values():
     """Returns all valid ControllerState values for the UI."""
     return jsonify([s.value for s in ControllerState])
+
+
+@app.route('/api/prod/context', methods=['GET'])
+def get_prod_context():
+    """Return production params/variables, settings and runtime metadata."""
+    try:
+        return jsonify(APPLICATION.get_prod_context_snapshot()), 200
+    except Exception as e:
+        logger.error(f"Failed to get production context: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get production context: {e}'}), 500
+
+
+@app.route('/api/prod/runs', methods=['GET'])
+def get_prod_runs():
+    """Return archived production run summaries for export or reporting."""
+    try:
+        snapshot = APPLICATION.get_prod_context_snapshot()
+        metrics = snapshot.get('metrics', {}) if isinstance(snapshot, dict) else {}
+        runs = metrics.get('run_history', []) if isinstance(metrics, dict) else []
+        return jsonify({'runs': runs, 'count': len(runs)}), 200
+    except Exception as e:
+        logger.error(f"Failed to get production run history: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get production run history: {e}'}), 500
+
+
+@app.route('/api/prod/context', methods=['PATCH'])
+def patch_prod_context():
+    """Update production context values/settings when controller is not BUSY."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({'message': 'Invalid payload format.', 'success': False}), 400
+
+    try:
+        updated, errors = APPLICATION.update_prod_context(payload)
+        if errors:
+            return jsonify({'message': 'Production context updated with errors.', 'success': False, 'updated': updated, 'errors': errors}), 400
+        return jsonify({'message': 'Production context updated.', 'success': True, 'updated': updated}), 200
+    except Exception as e:
+        logger.error(f"Failed to update production context: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to update production context: {e}', 'success': False}), 500
+
+
+@app.route('/api/prod/context/reset', methods=['POST'])
+def reset_prod_context():
+    """Reset production context values to defaults, optionally filtered by event/key."""
+    payload = request.get_json(silent=True) or {}
+    namespace = payload.get('namespace', 'all')
+    key = payload.get('key')
+    event = payload.get('event')
+
+    try:
+        APPLICATION.reset_prod_context(namespace=namespace, key=key, event=event)
+        return jsonify({'message': 'Production context reset applied.', 'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to reset production context: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to reset production context: {e}', 'success': False}), 400
 
 
 # --- Log directories (resolved relative to this file so they work regardless of cwd) ---
