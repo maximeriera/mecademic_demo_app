@@ -2,6 +2,7 @@ const stateDisplays = () => Array.from(document.querySelectorAll('.js-robot-stat
 const messageLog   = document.getElementById('message-log');
 let latestProdContext = null;
 let activeProdSubTab = 'metrics';
+let logDropdownInitialized = false;
 
 /* ---- Tab switching ---- */
 function switchTab(name, btn) {
@@ -599,7 +600,113 @@ function loadRobotInfo() {
 }
 
 /* ---- Log viewer ---- */
+function setLogDropdownOpen(isOpen) {
+    const picker = document.getElementById('log-file-picker');
+    const trigger = document.getElementById('log-file-trigger');
+    if (!picker || !trigger) return;
+    picker.classList.toggle('open', isOpen);
+    trigger.setAttribute('aria-expanded', String(isOpen));
+}
+
+function updateLogSelectionLabel() {
+    const sel = document.getElementById('log-file-select');
+    const label = document.querySelector('.log-select-label');
+    if (!sel || !label) return;
+
+    const selected = sel.selectedOptions[0];
+    if (!selected || !selected.value) {
+        label.textContent = 'Select a log file';
+        return;
+    }
+
+    const group = selected.parentElement?.label;
+    label.textContent = group ? `${group} / ${selected.textContent}` : selected.textContent;
+}
+
+function selectLogFile(value, shouldLoad = true) {
+    const sel = document.getElementById('log-file-select');
+    const menu = document.getElementById('log-file-menu');
+    if (!sel || !menu) return;
+
+    sel.value = value;
+    menu.querySelectorAll('.log-select-option').forEach((button) => {
+        button.classList.toggle('active', button.dataset.value === value);
+        button.setAttribute('aria-selected', String(button.dataset.value === value));
+    });
+    updateLogSelectionLabel();
+    setLogDropdownOpen(false);
+    if (shouldLoad) loadSelectedLog();
+}
+
+function renderLogFileMenu(data, currentValue) {
+    const menu = document.getElementById('log-file-menu');
+    if (!menu) return;
+
+    menu.innerHTML = '';
+
+    const placeholder = document.createElement('button');
+    placeholder.type = 'button';
+    placeholder.className = 'log-select-placeholder';
+    placeholder.textContent = 'Select a log file';
+    placeholder.setAttribute('role', 'option');
+    placeholder.setAttribute('aria-selected', String(currentValue === ''));
+    placeholder.addEventListener('click', () => selectLogFile(''));
+    menu.appendChild(placeholder);
+
+    for (const [category, files] of Object.entries(data)) {
+        if (!files.length) continue;
+
+        const group = document.createElement('div');
+        group.className = 'log-select-group';
+
+        const heading = document.createElement('div');
+        heading.className = 'log-select-group-label';
+        heading.textContent = category;
+        group.appendChild(heading);
+
+        files.forEach((fileName) => {
+            const value = `${category}/${fileName}`;
+            const option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'log-select-option';
+            option.dataset.value = value;
+            option.textContent = fileName;
+            option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', String(value === currentValue));
+            if (value === currentValue) option.classList.add('active');
+            option.addEventListener('click', () => selectLogFile(value));
+            group.appendChild(option);
+        });
+
+        menu.appendChild(group);
+    }
+}
+
+function ensureLogDropdown() {
+    if (logDropdownInitialized) return;
+
+    const picker = document.getElementById('log-file-picker');
+    const trigger = document.getElementById('log-file-trigger');
+    if (!picker || !trigger) return;
+
+    trigger.addEventListener('click', () => {
+        setLogDropdownOpen(!picker.classList.contains('open'));
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!picker.contains(event.target)) setLogDropdownOpen(false);
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') setLogDropdownOpen(false);
+    });
+
+    logDropdownInitialized = true;
+}
+
 function populateLogFileList() {
+    ensureLogDropdown();
+
     fetch('/api/logs')
         .then(r => r.json())
         .then(data => {
@@ -619,6 +726,13 @@ function populateLogFileList() {
                 });
                 sel.appendChild(group);
             }
+
+            if (current && !sel.querySelector(`option[value="${CSS.escape(current)}"]`)) {
+                sel.value = '';
+            }
+
+            renderLogFileMenu(data, sel.value);
+            updateLogSelectionLabel();
         })
         .catch(() => {});
 }

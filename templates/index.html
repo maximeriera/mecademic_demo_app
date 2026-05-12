@@ -63,9 +63,9 @@
                             <div class="ops-card">
                                 <div class="ops-card-label">Autonomous Mode</div>
                                 <div class="btn-column">
-                                    <button type="button" class="btn-init" onclick="sendTask('prod')">START PRODUCTION</button>
-                                    <button type="button" class="btn-stop" onclick="sendStop()">STOP EXECUTION</button>
-                                    <button type="button" class="btn-abort" onclick="sendAbort()">ABORT ALL</button>
+                                    <button type="button" class="btn-start" onclick="sendTask('prod')">START PROD</button>
+                                    <button type="button" class="btn-stop" onclick="sendStop()">STOP</button>
+                                    <button type="button" class="btn-abort" onclick="sendAbort()">ABORT</button>
                                 </div>
                             </div>
                         </div>
@@ -85,70 +85,73 @@
             <div class="section">
                 <div class="section-title">Production Control</div>
                 <div class="prod-control-row">
-                    <button type="button" class="btn-task" onclick="sendTask('prod')">PROD</button>
+                    <button type="button" class="btn-start" onclick="sendTask('prod')">START PROD</button>
                     <button type="button" class="btn-stop" onclick="sendStop()">STOP</button>
                     <button type="button" class="btn-abort" onclick="sendAbort()">ABORT</button>
                 </div>
             </div>
 
-            <div class="prod-subtab-shell">
-                <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
-                    <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
-                        <span class="prod-subtab-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="M4 19V5"></path>
-                                <path d="M4 19h16"></path>
-                                <path d="M8 15v-4"></path>
-                                <path d="M12 15V8"></path>
-                                <path d="M16 15v-6"></path>
-                            </svg>
-                        </span>
-                        <span class="prod-subtab-label">Metrics</span>
-                    </button>
-                    <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
-                        <span class="prod-subtab-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="M4 7h16"></path>
-                                <path d="M7 7v10"></path>
-                                <path d="M4 17h16"></path>
-                                <path d="M14 7v10"></path>
-                            </svg>
-                        </span>
-                        <span class="prod-subtab-label">Variables / Params</span>
-                    </button>
-                </div>
-
-                <div class="prod-subtab-content">
-                    <div id="prod-subtab-metrics" class="prod-subtab-panel active" role="tabpanel" aria-labelledby="prod-subtab-btn-metrics">
-                        <div class="section">
-                            <div class="section-title">Production Metrics</div>
-                            <div id="prod-metrics-container">Loading metrics...</div>
-                        </div>
-
-                        <div class="section">
-                            <div id="prod-action-log" class="message-log">No recent production context action.</div>
-                            <div class="prod-toolbar">
-                                <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
-                                <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
-                            </div>
-                        </div>
+            <div class="section prod-context-section">
+                <div class="section-title">Production Data</div>
+                <div class="prod-subtab-shell">
+                    <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
+                        <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
+                            <span class="prod-subtab-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M4 19V5"></path>
+                                    <path d="M4 19h16"></path>
+                                    <path d="M8 15v-4"></path>
+                                    <path d="M12 15V8"></path>
+                                    <path d="M16 15v-6"></path>
+                                </svg>
+                            </span>
+                            <span class="prod-subtab-label">Metrics</span>
+                        </button>
+                        <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
+                            <span class="prod-subtab-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M4 7h16"></path>
+                                    <path d="M7 7v10"></path>
+                                    <path d="M4 17h16"></path>
+                                    <path d="M14 7v10"></path>
+                                </svg>
+                            </span>
+                            <span class="prod-subtab-label">Variables / Params</span>
+                        </button>
                     </div>
 
-                    <div id="prod-subtab-context" class="prod-subtab-panel" role="tabpanel" aria-labelledby="prod-subtab-btn-context" hidden>
-                        <div class="section">
-                            <div class="section-title">Variables</div>
-                            <div id="prod-variables-container">Loading variables...</div>
+                    <div class="prod-subtab-content">
+                        <div id="prod-subtab-metrics" class="prod-subtab-panel active" role="tabpanel" aria-labelledby="prod-subtab-btn-metrics">
+                            <div class="section">
+                                <div class="section-title">Production Metrics</div>
+                                <div id="prod-metrics-container">Loading metrics...</div>
+                            </div>
+
+                            <div class="section">
+                                <div id="prod-action-log" class="message-log">No recent production context action.</div>
+                                <div class="prod-toolbar">
+                                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                                    <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
+                                </div>
+                            </div>
                         </div>
 
-                        <div class="section">
-                            <div class="section-title">Params</div>
-                            <div id="prod-params-container">Loading params...</div>
-                        </div>
+                        <div id="prod-subtab-context" class="prod-subtab-panel" role="tabpanel" aria-labelledby="prod-subtab-btn-context" hidden>
+                            <div class="section">
+                                <div class="section-title">Variables</div>
+                                <div id="prod-variables-container">Loading variables...</div>
+                            </div>
 
-                        <div class="section">
-                            <div class="prod-toolbar">
-                                <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
-                                <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
+                            <div class="section">
+                                <div class="section-title">Params</div>
+                                <div id="prod-params-container">Loading params...</div>
+                            </div>
+
+                            <div class="section">
+                                <div class="prod-toolbar">
+                                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                                    <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -162,16 +165,30 @@
 
             <div class="section">
                 <div class="section-title">Log Viewer</div>
-                <div class="log-toolbar">
-                    <select id="log-file-select" onchange="loadSelectedLog()">
-                        <option value="">Select a log file</option>
-                    </select>
-                    <label>
-                        <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
-                    </label>
-                    <button type="button" onclick="loadSelectedLog()">Refresh</button>
-                </div>
-                <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
+                    <div class="log-toolbar">
+                        <div class="log-select" id="log-file-picker">
+                            <button
+                                type="button"
+                                id="log-file-trigger"
+                                class="log-select-trigger"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                                aria-controls="log-file-menu"
+                            >
+                                <span class="log-select-label">Select a log file</span>
+                            </button>
+                            <div id="log-file-menu" class="log-select-menu" role="listbox" aria-label="Log file selector"></div>
+                            <select id="log-file-select" class="log-native-select" onchange="loadSelectedLog()" tabindex="-1" aria-hidden="true">
+                                <option value="">Select a log file</option>
+                            </select>
+                        </div>
+                        <label>
+                            <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+                        </label>
+                        <button type="button" onclick="loadSelectedLog()">Refresh</button>
+                    </div>
+                    <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
+
             </div>
 
         </div>
