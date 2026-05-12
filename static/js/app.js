@@ -1,6 +1,7 @@
 const stateDisplays = () => Array.from(document.querySelectorAll('.js-robot-state'));
 const messageLog   = document.getElementById('message-log');
 let latestProdContext = null;
+let activeProdSubTab = 'metrics';
 
 /* ---- Tab switching ---- */
 function switchTab(name, btn) {
@@ -19,7 +20,35 @@ function switchTab(name, btn) {
     btn.classList.add('active');
     btn.setAttribute('aria-selected', 'true');
     if (name === 'logs') populateLogFileList();
-    if (name === 'production') refreshProdContext();
+    if (name === 'production') {
+        refreshProdContext();
+        switchProdSubTab(activeProdSubTab);
+    }
+}
+
+function switchProdSubTab(name, btn) {
+    activeProdSubTab = name;
+
+    document.querySelectorAll('#tab-production .prod-subtab-panel').forEach(panel => {
+        panel.classList.remove('active');
+        panel.hidden = true;
+    });
+    document.querySelectorAll('#tab-production .prod-subtab-btn').forEach(button => {
+        button.classList.remove('active');
+        button.setAttribute('aria-selected', 'false');
+    });
+
+    const activePanel = document.getElementById('prod-subtab-' + name);
+    if (activePanel) {
+        activePanel.classList.add('active');
+        activePanel.hidden = false;
+    }
+
+    const activeButton = btn || document.getElementById('prod-subtab-btn-' + name);
+    if (activeButton) {
+        activeButton.classList.add('active');
+        activeButton.setAttribute('aria-selected', 'true');
+    }
 }
 
 /* ---- Status polling ---- */
@@ -135,16 +164,181 @@ function restoreProdScrollState(state) {
     if (panel) panel.scrollTop = state.panelScrollTop || 0;
 }
 
+function formatDurationSeconds(value) {
+    if (value === null || value === undefined || Number.isNaN(value)) return '—';
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return '—';
+    if (seconds < 60) return `${seconds.toFixed(2)} s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = (seconds - (minutes * 60)).toFixed(2).padStart(5, '0');
+    return `${minutes}m ${remainder}s`;
+}
+
+function formatTimestamp(value) {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '—';
+    return parsed.toLocaleString();
+}
+
+function renderMetricCard(label, value, tone = '') {
+    return `
+        <div class="prod-metric-card ${tone}">
+            <div class="prod-metric-label">${escapeHtml(label)}</div>
+            <div class="prod-metric-value">${escapeHtml(String(value))}</div>
+        </div>
+    `;
+}
+
+function renderRecentCycles(history) {
+    if (!Array.isArray(history) || history.length === 0) {
+        return '<p class="prod-metric-empty">No completed cycles yet.</p>';
+    }
+
+    const rows = history.slice(-5).reverse().map((cycle) => {
+        const title = cycle.cycle_number !== undefined ? `Cycle ${cycle.cycle_number}` : 'Cycle';
+        const duration = formatDurationSeconds(cycle.duration_s);
+        const startedAt = formatTimestamp(cycle.started_at);
+        const endedAt = formatTimestamp(cycle.ended_at);
+        return `
+            <li>
+                <strong>${escapeHtml(title)}</strong>
+                <span>${escapeHtml(duration)}</span>
+                <span>${escapeHtml(startedAt)} → ${escapeHtml(endedAt)}</span>
+            </li>
+        `;
+    }).join('');
+
+    return `<ul class="prod-metric-list">${rows}</ul>`;
+}
+
+function renderRecentRuns(history) {
+    if (!Array.isArray(history) || history.length === 0) {
+        return '<p class="prod-metric-empty">No archived runs yet.</p>';
+    }
+
+    const rows = history.slice(-3).reverse().map((run, index) => {
+        const label = run.end_event ? `${run.end_event} run` : `Run ${history.length - index}`;
+        const cycles = run.cycle_count ?? 0;
+        const elapsed = formatDurationSeconds(run.elapsed_production_s);
+        const endedAt = formatTimestamp(run.run_end);
+        const startedAt = formatTimestamp(run.run_start);
+        return `
+            <li>
+                <strong>${escapeHtml(label)}</strong>
+                <span>${escapeHtml(cycles)} cycles · ${escapeHtml(elapsed)}</span>
+                <span>${escapeHtml(startedAt)} → ${escapeHtml(endedAt)}</span>
+            </li>
+        `;
+    }).join('');
+
+    return `<ul class="prod-metric-list">${rows}</ul>`;
+}
+
+function renderProdMetrics(data) {
+    const metrics = data.metrics || {};
+    const recentCycles = metrics.cycle_history || [];
+    const recentRuns = metrics.run_history || [];
+    const metricsContainer = document.getElementById('prod-metrics-container');
+    if (!metricsContainer) return;
+
+    const cards = [
+        renderMetricCard('State', metrics.running ? 'RUN' : 'IDLE', metrics.running ? 'prod-metric-on' : 'prod-metric-off'),
+        renderMetricCard('Cycles', metrics.completed_cycles ?? 0),
+        renderMetricCard('Parts', metrics.part_count ?? 0),
+        renderMetricCard('Run Time', formatDurationSeconds(metrics.elapsed_production_s)),
+        renderMetricCard('Last Cycle', formatDurationSeconds(metrics.last_cycle_duration_s)),
+        renderMetricCard('Avg Cycle', formatDurationSeconds(metrics.average_cycle_duration_s)),
+        renderMetricCard('Total Time', formatDurationSeconds(metrics.total_cycle_time_s)),
+        renderMetricCard('Error', metrics.last_error || 'None', metrics.last_error ? 'prod-metric-warn' : ''),
+    ].join('');
+
+    metricsContainer.innerHTML = `
+        <div class="prod-metrics-grid">${cards}</div>
+        <div class="prod-metric-history">
+            <div class="prod-metric-history-title">Recent Cycles</div>
+            ${renderRecentCycles(recentCycles)}
+        </div>
+        <div class="prod-metric-history">
+            <div class="prod-metric-history-title">Recent Runs</div>
+            ${renderRecentRuns(recentRuns)}
+        </div>
+    `;
+}
+
+function renderProdUnavailable(message) {
+    const metricsContainer = document.getElementById('prod-metrics-container');
+    const paramsContainer = document.getElementById('prod-params-container');
+    const varsContainer = document.getElementById('prod-variables-container');
+
+    if (metricsContainer) {
+        metricsContainer.innerHTML = `
+            <div class="prod-empty-panel">
+                <div class="prod-empty-title">Production context unavailable</div>
+                <div class="prod-empty-text">${escapeHtml(message || 'Unable to load production context right now.')}</div>
+            </div>
+        `;
+    }
+
+    if (paramsContainer) {
+        paramsContainer.innerHTML = '<p class="empty-state">No production data available.</p>';
+    }
+
+    if (varsContainer) {
+        varsContainer.innerHTML = '<p class="empty-state">No production data available.</p>';
+    }
+}
+
+function exportProdRunHistory() {
+    fetch('/api/prod/runs')
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                const msg = data.message || 'Failed to export production run history.';
+                setMessage(msg);
+                setProdActionMessage(msg, true);
+                return;
+            }
+
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = 'production_run_history.json';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+
+            const msg = `Exported ${data.count || 0} archived run(s).`;
+            setMessage(msg);
+            setProdActionMessage(msg, false);
+        })
+        .catch(() => {
+            const msg = 'Error exporting production run history.';
+            setMessage(msg);
+            setProdActionMessage(msg, true);
+        });
+}
+
 function renderProdContext(data) {
     const scrollState = captureProdScrollState();
     latestProdContext = data;
     const paramsContainer = document.getElementById('prod-params-container');
     const varsContainer = document.getElementById('prod-variables-container');
+    const metricsContainer = document.getElementById('prod-metrics-container');
 
     const locked = !!data.locked;
 
-    paramsContainer.innerHTML = renderNamespaceTable('params', data.params || {}, locked);
-    varsContainer.innerHTML = renderNamespaceTable('variables', data.variables || {}, locked);
+    if (metricsContainer) {
+        renderProdMetrics(data);
+    }
+    if (paramsContainer) {
+        paramsContainer.innerHTML = renderNamespaceTable('params', data.params || {}, locked);
+    }
+    if (varsContainer) {
+        varsContainer.innerHTML = renderNamespaceTable('variables', data.variables || {}, locked);
+    }
     restoreProdScrollState(scrollState);
 }
 
@@ -202,7 +396,10 @@ function refreshProdContext(auto = false) {
         .then(r => r.json())
         .then(data => renderProdContext(data))
         .catch(() => {
-            setProdActionMessage('Failed to load production context.', true);
+            if (!latestProdContext) {
+                renderProdUnavailable('Failed to load production context.');
+            }
+            setProdActionMessage('Production context is temporarily unavailable.', true);
         });
 }
 

@@ -80,21 +80,67 @@
                 </div>
             </div>
 
-            <div class="section">
-                <div class="section-title">Variables</div>
-                <div id="prod-variables-container">Loading variables...</div>
-            </div>
+            <div class="prod-subtab-shell">
+                <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
+                    <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
+                        <span class="prod-subtab-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M4 19V5"></path>
+                                <path d="M4 19h16"></path>
+                                <path d="M8 15v-4"></path>
+                                <path d="M12 15V8"></path>
+                                <path d="M16 15v-6"></path>
+                            </svg>
+                        </span>
+                        <span class="prod-subtab-label">Metrics</span>
+                    </button>
+                    <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
+                        <span class="prod-subtab-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M4 7h16"></path>
+                                <path d="M7 7v10"></path>
+                                <path d="M4 17h16"></path>
+                                <path d="M14 7v10"></path>
+                            </svg>
+                        </span>
+                        <span class="prod-subtab-label">Variables / Params</span>
+                    </button>
+                </div>
 
-            <div class="section">
-                <div class="section-title">Params</div>
-                <div id="prod-params-container">Loading params...</div>
-            </div>
+                <div class="prod-subtab-content">
+                    <div id="prod-subtab-metrics" class="prod-subtab-panel active" role="tabpanel" aria-labelledby="prod-subtab-btn-metrics">
+                        <div class="section">
+                            <div class="section-title">Production Metrics</div>
+                            <div id="prod-metrics-container">Loading metrics...</div>
+                        </div>
 
-            <div class="section">
-                <div id="prod-action-log" class="message-log">No recent production context action.</div>
-                <div class="prod-toolbar">
-                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
-                    <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
+                        <div class="section">
+                            <div id="prod-action-log" class="message-log">No recent production context action.</div>
+                            <div class="prod-toolbar">
+                                <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                                <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="prod-subtab-context" class="prod-subtab-panel" role="tabpanel" aria-labelledby="prod-subtab-btn-context" hidden>
+                        <div class="section">
+                            <div class="section-title">Variables</div>
+                            <div id="prod-variables-container">Loading variables...</div>
+                        </div>
+
+                        <div class="section">
+                            <div class="section-title">Params</div>
+                            <div id="prod-params-container">Loading params...</div>
+                        </div>
+
+                        <div class="section">
+                            <div class="prod-toolbar">
+                                <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
+                                <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

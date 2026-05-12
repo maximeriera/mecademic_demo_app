@@ -49,6 +49,7 @@ except Exception as e:
                 'locked': False,
                 'settings': {'storage_scope': 'memory', 'auto_persist': True, 'default_reset_events': []},
                 'metadata': {},
+                'metrics': {},
                 'params': {},
                 'variables': {},
             }
@@ -177,6 +178,19 @@ def get_prod_context():
     except Exception as e:
         logger.error(f"Failed to get production context: {e}", exc_info=True)
         return jsonify({'message': f'Failed to get production context: {e}'}), 500
+
+
+@app.route('/api/prod/runs', methods=['GET'])
+def get_prod_runs():
+    """Return archived production run summaries for export or reporting."""
+    try:
+        snapshot = APPLICATION.get_prod_context_snapshot()
+        metrics = snapshot.get('metrics', {}) if isinstance(snapshot, dict) else {}
+        runs = metrics.get('run_history', []) if isinstance(metrics, dict) else []
+        return jsonify({'runs': runs, 'count': len(runs)}), 200
+    except Exception as e:
+        logger.error(f"Failed to get production run history: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get production run history: {e}'}), 500
 
 
 @app.route('/api/prod/context', methods=['PATCH'])
