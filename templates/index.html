@@ -7,65 +7,76 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body>
-    <div class="control-panel">
-
-        <div class="panel-header">
-            <div class="panel-kicker">Mecademic Demo Network</div>
-            <h1>Demo Application Controller</h1>
-            <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity from a single control surface.</p>
-            <div class="tab-bar" role="tablist" aria-label="Application panels">
-                <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
-                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
-                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="panel-header">
+                <div class="panel-kicker">Mecademic Demo Network</div>
+                <h1>Demo Application Controller</h1>
+                <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity.</p>
             </div>
+
             <div class="global-status-wrap">
                 <div class="global-status-label">System Status</div>
                 <div id="robot-state-global" class="status-box status-box-compact js-robot-state">Loading...</div>
             </div>
-        </div>
 
+            <nav class="tab-bar" role="tablist" aria-label="Application panels">
+                <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
+            </nav>
+        </aside>
+
+        <main class="main-content">
         <!-- ===== CONTROL TAB ===== -->
         <div id="tab-control" class="tab-panel active panel-body" role="tabpanel" aria-labelledby="tab-btn-control">
-
-            <div class="section">
-                <div class="section-title">System Status</div>
-                <div id="robot-state" class="status-box js-robot-state">Loading...</div>
-                <div id="message-log" class="message-log">No recent command activity.</div>
-            </div>
-
-            <div class="section">
-                <div class="section-title">Tasks</div>
-                <div class="task-split">
-                    <div class="task-col">
-                        <div class="task-col-label">Manual</div>
-                        <button class="btn-task" onclick="sendTask('home')">HOME</button>
-                        <button class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
-                        <button class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
+            <div class="control-main-grid">
+                <div class="control-side">
+                    <div class="section">
+                        <div class="section-title">System Status</div>
+                        <div id="robot-state" class="status-box js-robot-state">Loading...</div>
+                        <div id="message-log" class="message-log">No recent command activity.</div>
                     </div>
-                    <div class="task-separator"></div>
-                    <div class="task-col">
-                        <div class="task-col-label">Auto</div>
-                        <button class="btn-task" onclick="sendTask('prod')">PROD</button>
-                        <button class="btn-stop"  onclick="sendStop()">STOP</button>
-                        <button class="btn-abort" onclick="sendAbort()">ABORT</button>
+
+                    <div class="section">
+                        <div class="section-title">System Control</div>
+                        <div class="btn-column">
+                            <button type="button" class="btn-init" onclick="sendInitialize()">INITIALIZE</button>
+                            <button type="button" class="btn-clear" onclick="sendClearFaults()">CLEAR FAULTS</button>
+                            <button type="button" class="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-main">
+                    <div class="section">
+                        <div class="section-title">Operations & Tasks</div>
+                        <div class="ops-grid">
+                            <div class="ops-card">
+                                <div class="ops-card-label">Manual Tasks</div>
+                                <div class="btn-column">
+                                    <button type="button" class="btn-task" onclick="sendTask('home')">HOME</button>
+                                    <button type="button" class="btn-task" onclick="sendTask('shipment')">SHIPMENT</button>
+                                    <button type="button" class="btn-task" onclick="sendTask('calibration')">CALIBRATION</button>
+                                </div>
+                            </div>
+                            <div class="ops-card">
+                                <div class="ops-card-label">Autonomous Mode</div>
+                                <div class="btn-column">
+                                    <button type="button" class="btn-init" onclick="sendTask('prod')">START PRODUCTION</button>
+                                    <button type="button" class="btn-stop" onclick="sendStop()">STOP EXECUTION</button>
+                                    <button type="button" class="btn-abort" onclick="sendAbort()">ABORT ALL</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">Device Network</div>
+                        <div id="robot-info-container">Loading device info...</div>
                     </div>
                 </div>
             </div>
-
-            <div class="section">
-                <div class="section-title">System Control</div>
-                <div class="btn-grid-3">
-                    <button class="btn-init"     onclick="sendInitialize()">INITIALIZE</button>
-                    <button class="btn-clear"    onclick="sendClearFaults()">CLEAR FAULTS</button>
-                    <button class="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button>
-                </div>
-            </div>
-
-            <div class="section">
-                <div class="section-title">Devices</div>
-                <div id="robot-info-container">Loading device info...</div>
-            </div>
-
         </div>
 
         <!-- ===== PRODUCTION TAB ===== -->
@@ -164,7 +175,22 @@
             </div>
 
         </div>
+        </main>
+    </div>
 
+    <div id="confirm-modal" class="modal-overlay" hidden>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">Confirm Action</h2>
+            </div>
+            <div class="modal-body">
+                <p id="modal-message">Are you sure you want to proceed?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-shutdown" id="modal-cancel">Cancel</button>
+                <button type="button" class="btn-init" id="modal-confirm">Confirm</button>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
