@@ -116,7 +116,10 @@ class ApplicationController:
         ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``, ``zaber``.
         Unknown types are skipped with a warning.
         """
-        for device_name, device_info in self.config.get('devices', {}).items():
+        devices_config = self.config.get('devices', {})
+        if devices_config is None:
+            devices_config = {}
+        for device_name, device_info in devices_config.items():
             device_type = device_info.get('type', '').lower()
             if device_type == 'mecademic':
                 from devices.MecaRobot import MecaRobot

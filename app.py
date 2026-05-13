@@ -40,8 +40,13 @@ app = Flask(__name__)
 try:
     # We must start the controller in the main thread before starting Flask's server
     from core.ApplicationController import ApplicationController
-    config_path = os.path.join(workspace_path, "config.yaml")
-    prod_ctx_path = os.path.join(workspace_path, "production_context.yaml")
+    app_logic_dir = os.path.join(workspace_path, "app_logic")
+    if os.path.isdir(app_logic_dir):
+        config_path = os.path.join(app_logic_dir, "config.yaml")
+        prod_ctx_path = os.path.join(app_logic_dir, "production_context.yaml")
+    else:
+        config_path = os.path.join(workspace_path, "config.yaml")
+        prod_ctx_path = os.path.join(workspace_path, "production_context.yaml")
     APPLICATION = ApplicationController(config_path=config_path, production_context_path=prod_ctx_path)
     logger.info("ApplicationController initialized successfully.")
 except Exception as e:

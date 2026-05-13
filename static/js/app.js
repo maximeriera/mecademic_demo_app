@@ -105,15 +105,21 @@ function sendStop() {
         });
 }
 function sendAbort() {
-    fetch('/api/abort', { method: 'POST' })
-        .then(r => r.json()).then(d => {
-            setMessage(d.message);
-            setProdActionMessage(d.message, !d.success);
-        })
-        .catch(() => {
-            setMessage('Error sending abort command.');
-            setProdActionMessage('Error sending abort command.', true);
-        });
+    showConfirmModal(
+        "Confirm System Abort",
+        "Are you sure you want to abort the system? This will immediately stop all ongoing processes.",
+        () => {
+            fetch('/api/abort', { method: 'POST' })
+                .then(r => r.json()).then(d => {
+                    setMessage(d.message);
+                    setProdActionMessage(d.message, !d.success);
+                })
+                .catch(() => {
+                    setMessage('Error sending abort command.');
+                    setProdActionMessage('Error sending abort command.', true);
+                });
+        }
+    );
 }
 function sendInitialize() {
     fetch('/api/initialize', { method: 'POST' })
