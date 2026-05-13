@@ -31,10 +31,10 @@ from .ControllerState import ControllerState
 
 from devices import Device
 
-from application_code.prod import prod_cycle
-from application_code.home import home
-from application_code.shipment import shipment
-from application_code.calib import calib
+from app_logic.prod import prod_cycle
+from app_logic.home import home
+from app_logic.shipment import shipment
+from app_logic.calib import calib
 from .ProductionContext import ProductionContext
 
 # --- Enums for State Management ---
@@ -139,7 +139,7 @@ class Task(threading.Thread):
             self.logger.info(f"[{self.name}] Task finished.")
             
     def _run_home(self):
-        """Execute the HOME sequence via :func:`~application_code.home.home`.
+        """Execute the HOME sequence via :func:`~app_logic.home.home`.
 
         Raises
         ------
@@ -155,7 +155,7 @@ class Task(threading.Thread):
         # --------------------------------------------------------
     
     def _run_shipment(self):
-        """Execute the SHIPMENT sequence via :func:`~application_code.shipment.shipment`.
+        """Execute the SHIPMENT sequence via :func:`~app_logic.shipment.shipment`.
 
         Raises
         ------
@@ -171,7 +171,7 @@ class Task(threading.Thread):
         # --------------------------------------------------------
 
     def _run_calib(self):
-        """Execute the calibration sequence via :func:`~application_code.calib.calib`.
+        """Execute the calibration sequence via :func:`~app_logic.calib.calib`.
 
         Raises
         ------

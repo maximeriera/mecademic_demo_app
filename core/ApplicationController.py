@@ -61,7 +61,7 @@ class ApplicationController:
                 └─ FAULTED
     """
 
-    def __init__(self, config_path: str = 'config.yaml'):
+    def __init__(self, config_path: str = 'config.yaml', production_context_path: str = None):
         
         self.logger = self._setup_logger()
         
@@ -76,8 +76,10 @@ class ApplicationController:
         
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
-        production_context_file = self.config.get('production_context_file', 'production_context.yaml')
-        self.production_context = ProductionContext(self.logger, config_path=production_context_file)
+        
+        if production_context_path is None:
+            production_context_path = self.config.get('production_context_file', 'production_context.yaml')
+        self.production_context = ProductionContext(self.logger, config_path=production_context_path)
 
         self._create_devices()
         self.logger.info("ApplicationController initialized with devices: " + ", ".join(self.devices.keys())) 

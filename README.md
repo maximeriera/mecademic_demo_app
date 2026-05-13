@@ -9,7 +9,7 @@ Provides a single-page web UI and a REST API to initialize, monitor, and run tas
 
 Users can define their cell configuration in `config.yaml`, and the app will automatically connect to all declared devices, monitor their status, and provide unified controls and logging.
 
-Users can build their own application logic in `application_code/` and trigger it via the web UI, while the core framework handles all device management, state transitions, and fault monitoring.
+Users can build their own application logic in `app_logic/` and trigger it via the web UI, while the core framework handles all device management, state transitions, and fault monitoring.
 
 ---
 
@@ -185,7 +185,7 @@ A device fault detected by the monitor thread automatically triggers an **abort*
 
 ## Build your own application logic
 
-All user-facing task logic lives in the **`application_code/`** folder. Each file exports a single function that the framework's `Task` thread calls automatically when the matching task is triggered from the web UI or REST API.
+All user-facing task logic lives in the **`app_logic/`** folder. Each file exports a single function that the framework's `Task` thread calls automatically when the matching task is triggered from the web UI or REST API.
 
 ### Function signatures
 
@@ -248,7 +248,7 @@ You do **not** need to check for stop/abort signals inside your functions — th
 ### Example — a simple pick-and-place cycle
 
 ```python
-# application_code/prod.py
+# app_logic/prod.py
 from typing import Dict
 from devices import Device, MecaRobot
 
@@ -331,7 +331,7 @@ Logs are viewable in the browser via the **Logs** tab or the `/api/logs` endpoin
 │  │(state machine)  │ (thread) │  │  (fault polling 200ms)│  |
 │  └──────────────┘  └──────────┘  └───────────────────────┘  │
 │  ─ owns all Device instances                                │
-│  ─ delegates task logic to application_code/                │
+│  ─ delegates task logic to app_logic/                       │
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -368,7 +368,7 @@ devices/
     LMISensor.py              # LMI Gocator 3D sensor (Ethernet ASCII)
     api/                      # Low-level device protocol implementations
 
-application_code/
+app_logic/
     home.py                   # HOME task — move all robots to home positions
     shipment.py               # SHIPMENT task — move robots to storage positions
     prod.py                   # PROD task — looped production sequence

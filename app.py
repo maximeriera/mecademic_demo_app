@@ -1,10 +1,22 @@
 # app.py
+import argparse
+import sys
+import os
+
+# --- Workspace Setup ---
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+parser = argparse.ArgumentParser(description="Mecademic Demo App")
+parser.add_argument('--workspace', type=str, default=BASE_DIR, help="Path to the external workspace")
+args, _ = parser.parse_known_args()
+
+workspace_path = os.path.abspath(args.workspace)
+sys.path.insert(0, workspace_path)
+
 from flask import Flask, render_template, jsonify, request
 
 import logging
 from logging.handlers import RotatingFileHandler
-
-import os
 from pathlib import Path
 
 from core.Task import TaskType
@@ -28,7 +40,9 @@ app = Flask(__name__)
 try:
     # We must start the controller in the main thread before starting Flask's server
     from core.ApplicationController import ApplicationController
-    APPLICATION = ApplicationController()
+    config_path = os.path.join(workspace_path, "config.yaml")
+    prod_ctx_path = os.path.join(workspace_path, "production_context.yaml")
+    APPLICATION = ApplicationController(config_path=config_path, production_context_path=prod_ctx_path)
     logger.info("ApplicationController initialized successfully.")
 except Exception as e:
     # If connection fails, set a permanent FAULT state
