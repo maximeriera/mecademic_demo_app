@@ -71,14 +71,3 @@ devices:
     type: "mecademic"
     ip_address: "192.168.0.100"
 
-  my_meca_robot1:
-    type: "mecademic"
-    ip_address: "192.168.0.100"
-
-  my_meca_robot2:
-    type: "mecademic"
-    ip_address: "192.168.0.100"
-
-  my_meca_robot3:
-    type: "mecademic"
-    ip_address: "192.168.0.100"
