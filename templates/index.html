@@ -23,6 +23,7 @@
             <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
             </nav>
         </aside>
@@ -156,6 +157,89 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+        </div>
+
+        <!-- ===== BACKUP / RESTORE TAB ===== -->
+        <div id="tab-backup-restore" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-backup-restore" hidden>
+
+            <div class="section">
+                <div class="section-title">Backup</div>
+                <div class="backup-restore-grid">
+                    <div class="backup-restore-card backup-restore-card-wide">
+                        <div class="backup-restore-label">Target</div>
+                        <div class="log-select" id="backup-robot-picker">
+                            <button
+                                type="button"
+                                id="backup-robot-trigger"
+                                class="log-select-trigger"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                                aria-controls="backup-robot-menu"
+                            >
+                                <span class="log-select-label">All Connected Robots (Default)</span>
+                            </button>
+                            <div id="backup-robot-menu" class="log-select-menu" role="listbox" aria-label="Backup robot selector"></div>
+                            <select id="backup-robot-select" class="log-native-select" tabindex="-1" aria-hidden="true">
+                                <option value="" selected>All Connected Robots (Default)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="backup-restore-card">
+                        <div class="backup-restore-label">Action</div>
+                        <button type="button" class="btn-start" onclick="runBackupAction()">Run Backup</button>
+                    </div>
+                </div>
+                <div id="backup-result-container" class="backup-restore-results">
+                    <p class="empty-state">No backup action started yet.</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Restore Selected Robot</div>
+                <div class="backup-restore-grid">
+                    <div class="backup-restore-card backup-restore-card-full">
+                        <div class="backup-restore-label">Archive Upload</div>
+                        <div id="restore-dropzone" class="restore-dropzone" onclick="openRestoreArchivePicker()">
+                            Drag and drop a .zip archive here, or click to choose a file.
+                        </div>
+                        <input type="file" id="restore-archive-input" accept=".zip" hidden>
+                        <div id="restore-file-chip" class="restore-file-chip">No archive selected.</div>
+                    </div>
+                    <div class="backup-restore-card backup-restore-card-wide">
+                        <div class="backup-restore-label">Target Robot</div>
+                        <div class="log-select" id="restore-robot-picker">
+                            <button
+                                type="button"
+                                id="restore-robot-trigger"
+                                class="log-select-trigger"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                                aria-controls="restore-robot-menu"
+                            >
+                                <span class="log-select-label">Select a robot</span>
+                            </button>
+                            <div id="restore-robot-menu" class="log-select-menu" role="listbox" aria-label="Restore robot selector"></div>
+                            <select id="restore-robot-select" class="log-native-select" tabindex="-1" aria-hidden="true">
+                                <option value="">Select a robot</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="backup-restore-card">
+                        <div class="backup-restore-label">Action</div>
+                        <div class="btn-column">
+                            <button type="button" class="btn-clear" onclick="runRestoreAction(false)">Proceed Restore</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="restore-result-container" class="backup-restore-results">
+                    <p class="empty-state">No restore action started yet.</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <div id="backup-restore-action-log" class="message-log">No backup/restore command activity.</div>
             </div>
 
         </div>
