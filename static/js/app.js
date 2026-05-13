@@ -3,6 +3,8 @@ const messageLog   = document.getElementById('message-log');
 let latestProdContext = null;
 let activeProdSubTab = 'metrics';
 let logDropdownInitialized = false;
+let backupRestoreRobots = [];
+let restoreArchiveFile = null;
 
 /* ---- Tab switching ---- */
 function switchTab(name, btn) {
@@ -24,6 +26,9 @@ function switchTab(name, btn) {
     if (name === 'production') {
         refreshProdContext();
         switchProdSubTab(activeProdSubTab);
+    }
+    if (name === 'backup-restore') {
+        loadBackupRestoreRobots();
     }
 }
 
@@ -79,6 +84,13 @@ function setProdActionMessage(text, isError = false) {
     if (!actionLog) return;
     actionLog.textContent = text || 'No recent production context action.';
     actionLog.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function setBackupRestoreMessage(text, isError = false) {
+    const log = document.getElementById('backup-restore-action-log');
+    if (!log) return;
+    log.textContent = text || 'No backup/restore command activity.';
+    log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
 }
 
 /* ---- Task / control commands ---- */
@@ -605,6 +617,272 @@ function loadRobotInfo() {
         });
 }
 
+/* ---- Backup / restore tab ---- */
+function loadBackupRestoreRobots() {
+    fetch('/api/backup_restore/robots')
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                throw new Error(data.message || 'Failed to load Mecademic robots.');
+            }
+            backupRestoreRobots = Array.isArray(data.robots) ? data.robots : [];
+            populateBackupRestoreSelectors();
+        })
+        .catch((err) => {
+            setBackupRestoreMessage(err.message || 'Failed to load Mecademic robots.', true);
+        });
+}
+
+function populateBackupRestoreSelectors() {
+    const backupSelect = document.getElementById('backup-robot-select');
+    const restoreSelect = document.getElementById('restore-robot-select');
+    if (!backupSelect || !restoreSelect) return;
+
+    const backupCurrent = backupSelect.value;
+    const restoreCurrent = restoreSelect.value;
+
+    backupSelect.innerHTML = '<option value="">Select a robot</option>';
+    restoreSelect.innerHTML = '<option value="">Select a robot</option>';
+
+    backupRestoreRobots.forEach((robot) => {
+        const status = robot.connected ? 'Connected' : 'Disconnected';
+        const label = `${robot.device_id} (${status})`;
+
+        const backupOpt = document.createElement('option');
+        backupOpt.value = robot.device_id;
+        backupOpt.textContent = label;
+        backupOpt.disabled = !robot.connected;
+        if (backupCurrent === robot.device_id) backupOpt.selected = true;
+        backupSelect.appendChild(backupOpt);
+
+        const restoreOpt = document.createElement('option');
+        restoreOpt.value = robot.device_id;
+        restoreOpt.textContent = label;
+        restoreOpt.disabled = !robot.connected;
+        if (restoreCurrent === robot.device_id) restoreOpt.selected = true;
+        restoreSelect.appendChild(restoreOpt);
+    });
+
+    onBackupModeChanged();
+}
+
+function onBackupModeChanged() {
+    const modeSelect = document.getElementById('backup-mode-select');
+    const backupRobotSelect = document.getElementById('backup-robot-select');
+    if (!modeSelect || !backupRobotSelect) return;
+    backupRobotSelect.disabled = modeSelect.value !== 'single';
+}
+
+function runBackupAction() {
+    const modeSelect = document.getElementById('backup-mode-select');
+    const backupRobotSelect = document.getElementById('backup-robot-select');
+    const resultContainer = document.getElementById('backup-result-container');
+    if (!modeSelect || !backupRobotSelect || !resultContainer) return;
+
+    const mode = modeSelect.value || 'all';
+    const robotId = backupRobotSelect.value;
+
+    if (mode === 'single' && !robotId) {
+        const msg = 'Select a connected robot for single backup mode.';
+        setBackupRestoreMessage(msg, true);
+        return;
+    }
+
+    resultContainer.innerHTML = '<p class="empty-state">Running backup...</p>';
+
+    fetch('/api/backup_restore/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, robot_id: robotId || null, stop_on_error: false }),
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                throw new Error(data.message || 'Backup failed.');
+            }
+            renderBackupResults(data);
+            const msg = data.message || 'Backup command finished.';
+            setBackupRestoreMessage(msg, !data.success);
+        })
+        .catch((err) => {
+            resultContainer.innerHTML = '<p class="empty-state empty-state-error">Backup failed.</p>';
+            setBackupRestoreMessage(err.message || 'Backup request failed.', true);
+        });
+}
+
+function renderBackupResults(data) {
+    const resultContainer = document.getElementById('backup-result-container');
+    if (!resultContainer) return;
+
+    const rows = Array.isArray(data.results) ? data.results : [];
+    if (rows.length === 0) {
+        resultContainer.innerHTML = '<p class="empty-state">No archives were generated.</p>';
+        return;
+    }
+
+    const cards = rows.map((row) => {
+        const outcomeClass = row.success ? 'backup-restore-ok' : 'backup-restore-error';
+        const counts = row.counts || {};
+        const errorBlock = Array.isArray(row.errors) && row.errors.length
+            ? `<ul class="backup-restore-errors">${row.errors.map((err) => `<li>${escapeHtml(err.kind || 'item')}: ${escapeHtml(err.name || 'unknown')} - ${escapeHtml(err.error || 'error')}</li>`).join('')}</ul>`
+            : '';
+        const download = row.download_url
+            ? `<a class="backup-download-link" href="${row.download_url}">Download archive</a>`
+            : '<span class="backup-download-disabled">Archive unavailable</span>';
+        return `
+            <div class="backup-restore-result-card ${outcomeClass}">
+                <div class="backup-restore-result-header">
+                    <strong>${escapeHtml(row.device_id || 'Unknown')}</strong>
+                    <span>${row.success ? 'Success' : 'Completed with errors'}</span>
+                </div>
+                <div class="backup-restore-result-body">
+                    <div>Variables: ${escapeHtml(String(counts.variables ?? 0))}</div>
+                    <div>Files: ${escapeHtml(String(counts.files ?? 0))}</div>
+                    <div>${download}</div>
+                    ${errorBlock}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    resultContainer.innerHTML = `
+        <div class="backup-restore-summary">
+            Success ${escapeHtml(String(data.success_count ?? 0))} / ${escapeHtml(String(data.target_count ?? rows.length))}
+        </div>
+        <div class="backup-restore-result-grid">${cards}</div>
+    `;
+}
+
+function openRestoreArchivePicker() {
+    const input = document.getElementById('restore-archive-input');
+    if (input) input.click();
+}
+
+function setSelectedRestoreArchive(file) {
+    const chip = document.getElementById('restore-file-chip');
+    const dropzone = document.getElementById('restore-dropzone');
+    if (!chip || !dropzone) return;
+
+    if (!file) {
+        restoreArchiveFile = null;
+        chip.textContent = 'No archive selected.';
+        dropzone.classList.remove('restore-dropzone-ready');
+        return;
+    }
+
+    if (!String(file.name || '').toLowerCase().endsWith('.zip')) {
+        restoreArchiveFile = null;
+        chip.textContent = 'Invalid file type. Please choose a .zip archive.';
+        dropzone.classList.remove('restore-dropzone-ready');
+        setBackupRestoreMessage('Invalid restore file. Only .zip is supported.', true);
+        return;
+    }
+
+    restoreArchiveFile = file;
+    chip.textContent = `${file.name} (${Math.round(file.size / 1024)} KB)`;
+    dropzone.classList.add('restore-dropzone-ready');
+}
+
+function initRestoreDropzone() {
+    const dropzone = document.getElementById('restore-dropzone');
+    const fileInput = document.getElementById('restore-archive-input');
+    if (!dropzone || !fileInput) return;
+
+    fileInput.addEventListener('change', () => {
+        const file = fileInput.files && fileInput.files.length > 0 ? fileInput.files[0] : null;
+        setSelectedRestoreArchive(file);
+    });
+
+    ['dragenter', 'dragover'].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropzone.classList.add('restore-dropzone-hover');
+        });
+    });
+
+    ['dragleave', 'drop'].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropzone.classList.remove('restore-dropzone-hover');
+        });
+    });
+
+    dropzone.addEventListener('drop', (event) => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length > 0
+            ? event.dataTransfer.files[0]
+            : null;
+        setSelectedRestoreArchive(file);
+    });
+}
+
+function runRestoreAction(dryRun) {
+    const robotSelect = document.getElementById('restore-robot-select');
+    const resultContainer = document.getElementById('restore-result-container');
+    if (!robotSelect || !resultContainer) return;
+
+    const robotId = robotSelect.value;
+    if (!robotId) {
+        setBackupRestoreMessage('Select a connected robot for restore.', true);
+        return;
+    }
+    if (!restoreArchiveFile) {
+        setBackupRestoreMessage('Select a .zip archive to restore.', true);
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('archive', restoreArchiveFile);
+    formData.append('robot_id', robotId);
+    formData.append('dry_run', dryRun ? 'true' : 'false');
+    formData.append('stop_on_error', 'false');
+
+    resultContainer.innerHTML = `<p class="empty-state">${dryRun ? 'Running restore dry-run...' : 'Running restore...'}</p>`;
+
+    fetch('/api/backup_restore/restore', {
+        method: 'POST',
+        body: formData,
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                throw new Error(data.message || 'Restore failed.');
+            }
+            renderRestoreResult(data);
+            setBackupRestoreMessage(data.message || 'Restore finished.', !data.success);
+        })
+        .catch((err) => {
+            resultContainer.innerHTML = '<p class="empty-state empty-state-error">Restore failed.</p>';
+            setBackupRestoreMessage(err.message || 'Restore request failed.', true);
+        });
+}
+
+function renderRestoreResult(data) {
+    const container = document.getElementById('restore-result-container');
+    if (!container) return;
+
+    const counts = data.counts || {};
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    const errorBlock = errors.length
+        ? `<ul class="backup-restore-errors">${errors.map((err) => `<li>${escapeHtml(err.kind || 'item')}: ${escapeHtml(err.name || 'unknown')} - ${escapeHtml(err.error || 'error')}</li>`).join('')}</ul>`
+        : '<p class="empty-state">No item errors reported.</p>';
+
+    container.innerHTML = `
+        <div class="backup-restore-result-card ${data.success ? 'backup-restore-ok' : 'backup-restore-error'}">
+            <div class="backup-restore-result-header">
+                <strong>${escapeHtml(data.device_id || 'Unknown')}</strong>
+                <span>${data.dry_run ? 'Dry-run' : (data.success ? 'Success' : 'Completed with errors')}</span>
+            </div>
+            <div class="backup-restore-result-body">
+                <div>Variables: ${escapeHtml(String(counts.variables ?? 0))}</div>
+                <div>Files: ${escapeHtml(String(counts.files ?? 0))}</div>
+                ${errorBlock}
+            </div>
+        </div>
+    `;
+}
+
 /* ---- Log viewer ---- */
 function setLogDropdownOpen(isOpen) {
     const picker = document.getElementById('log-file-picker');
@@ -778,6 +1056,13 @@ setInterval(() => {
 }, 3000);
 
 setInterval(() => {
+    const tab = document.getElementById('tab-backup-restore');
+    if (tab && tab.classList.contains('active')) {
+        loadBackupRestoreRobots();
+    }
+}, 5000);
+
+setInterval(() => {
     if (document.getElementById('tab-production').classList.contains('active')) {
         refreshProdContext(true);
     }
@@ -789,3 +1074,5 @@ setInterval(loadRobotInfo, 1000);
 updateRobotStatus();
 loadRobotInfo();
 refreshProdContext();
+initRestoreDropzone();
+loadBackupRestoreRobots();

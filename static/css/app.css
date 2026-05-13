@@ -192,7 +192,7 @@ body {
 @media (max-width: 1024px) {
     .tab-bar {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(4, 1fr);
         gap: 8px;
         margin-top: 0;
         padding-bottom: 12px;
@@ -1144,6 +1144,188 @@ button:active { transform: scale(0.98); }
     white-space: nowrap;
 }
 
+/* --- Backup / Restore --- */
+.backup-restore-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.backup-restore-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 12px;
+    background: rgba(255,255,255,0.02);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.backup-restore-card-wide {
+    grid-column: span 2;
+}
+
+.backup-restore-card-full {
+    grid-column: span 3;
+}
+
+.backup-restore-label {
+    font-size: 0.68em;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+}
+
+.backup-restore-select {
+    width: 100%;
+    padding: 10px 16px;
+    padding-right: 44px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border);
+    background-image: linear-gradient(180deg, rgba(39, 39, 39, 0.96) 0%, rgba(29, 29, 29, 0.98) 100%),
+                      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 16 16'%3E%3Cpath stroke='%239aa39f' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m3.5 6 4.5 4.5L12.5 6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat, no-repeat;
+    background-position: 0 0, right 14px center;
+    background-size: cover, auto;
+    color: var(--color-text);
+    font-family: inherit;
+    font-size: 0.85em;
+    font-weight: 600;
+    line-height: normal;
+    letter-spacing: normal;
+    text-align: left;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.backup-restore-select:focus-visible {
+    outline: 2px solid rgba(255,255,255,0.18);
+    outline-offset: 2px;
+    border-color: rgba(255,255,255,0.18);
+    box-shadow: 0 10px 22px rgba(0,0,0,0.24), inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+.backup-restore-select:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.restore-dropzone {
+    border: 2px dashed rgba(255,255,255,0.2);
+    border-radius: var(--radius);
+    padding: 20px 14px;
+    text-align: center;
+    color: var(--color-muted);
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.restore-dropzone:hover,
+.restore-dropzone-hover {
+    border-color: rgba(0,255,153,0.5);
+    background: rgba(0,255,153,0.08);
+    color: var(--color-accent-soft);
+}
+
+.restore-dropzone-ready {
+    border-color: rgba(0,255,153,0.7);
+    background: rgba(0,255,153,0.10);
+    color: var(--color-accent-soft);
+}
+
+.restore-file-chip {
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: rgba(255,255,255,0.03);
+    color: var(--color-text);
+    font-size: 0.84em;
+    overflow-wrap: anywhere;
+}
+
+.backup-restore-results {
+    margin-top: 12px;
+}
+
+.backup-restore-summary {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.03);
+    font-size: 0.84em;
+    color: var(--color-text);
+}
+
+.backup-restore-result-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+}
+
+.backup-restore-result-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    background: rgba(255,255,255,0.02);
+    padding: 12px;
+}
+
+.backup-restore-ok {
+    border-color: rgba(0,255,153,0.35);
+}
+
+.backup-restore-error {
+    border-color: rgba(255,90,107,0.35);
+}
+
+.backup-restore-result-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.backup-restore-result-header span {
+    font-size: 0.78em;
+    color: var(--color-muted);
+}
+
+.backup-restore-result-body {
+    display: grid;
+    gap: 8px;
+    font-size: 0.88em;
+}
+
+.backup-download-link {
+    color: var(--color-accent-soft);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.backup-download-link:hover {
+    color: var(--color-accent);
+    text-decoration: underline;
+}
+
+.backup-download-disabled {
+    color: var(--color-muted);
+    font-size: 0.85em;
+}
+
+.backup-restore-errors {
+    margin: 0;
+    padding-left: 18px;
+    color: #ff9ba5;
+    font-size: 0.78em;
+    display: grid;
+    gap: 4px;
+}
+
 @media (max-width: 640px) {
     body {
         padding: 18px 10px;
@@ -1186,6 +1368,14 @@ button:active { transform: scale(0.98); }
 
     .prod-control-row {
         grid-template-columns: 1fr;
+    }
+
+    .backup-restore-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .backup-restore-card-wide {
+        grid-column: span 1;
     }
 
     .prod-subtab-btn {

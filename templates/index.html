@@ -23,6 +23,7 @@
             <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
             </nav>
         </aside>
@@ -156,6 +157,71 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+        </div>
+
+        <!-- ===== BACKUP / RESTORE TAB ===== -->
+        <div id="tab-backup-restore" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-backup-restore" hidden>
+
+            <div class="section">
+                <div class="section-title">Backup</div>
+                <div class="backup-restore-grid">
+                    <div class="backup-restore-card">
+                        <div class="backup-restore-label">Mode</div>
+                        <select id="backup-mode-select" class="backup-restore-select" onchange="onBackupModeChanged()">
+                            <option value="all" selected>All Connected Robots (Default)</option>
+                            <option value="single">Selected Robot</option>
+                        </select>
+                    </div>
+                    <div class="backup-restore-card">
+                        <div class="backup-restore-label">Target Robot</div>
+                        <select id="backup-robot-select" class="backup-restore-select" disabled>
+                            <option value="">Select a robot</option>
+                        </select>
+                    </div>
+                    <div class="backup-restore-card">
+                        <div class="backup-restore-label">Action</div>
+                        <button type="button" class="btn-start" onclick="runBackupAction()">Run Backup</button>
+                    </div>
+                </div>
+                <div id="backup-result-container" class="backup-restore-results">
+                    <p class="empty-state">No backup action started yet.</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Restore Selected Robot</div>
+                <div class="backup-restore-grid">
+                    <div class="backup-restore-card backup-restore-card-full">
+                        <div class="backup-restore-label">Archive Upload</div>
+                        <div id="restore-dropzone" class="restore-dropzone" onclick="openRestoreArchivePicker()">
+                            Drag and drop a .zip archive here, or click to choose a file.
+                        </div>
+                        <input type="file" id="restore-archive-input" accept=".zip" hidden>
+                        <div id="restore-file-chip" class="restore-file-chip">No archive selected.</div>
+                    </div>
+                    <div class="backup-restore-card">
+                        <div class="backup-restore-label">Target Robot</div>
+                        <select id="restore-robot-select" class="backup-restore-select">
+                            <option value="">Select a robot</option>
+                        </select>
+                    </div>
+                    <div class="backup-restore-card backup-restore-card-wide">
+                        <div class="backup-restore-label">Action</div>
+                        <div class="btn-column">
+                            <button type="button" class="btn-task" onclick="runRestoreAction(true)">Dry Run</button>
+                            <button type="button" class="btn-clear" onclick="runRestoreAction(false)">Proceed Restore</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="restore-result-container" class="backup-restore-results">
+                    <p class="empty-state">No restore action started yet.</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <div id="backup-restore-action-log" class="message-log">No backup/restore command activity.</div>
             </div>
 
         </div>

@@ -13,7 +13,8 @@ args, _ = parser.parse_known_args()
 workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory, url_for
+from werkzeug.utils import secure_filename
 
 import logging
 from logging.handlers import RotatingFileHandler
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from core.Task import TaskType
 from core.ControllerState import ControllerState
+from core.BackupRestoreService import BackupRestoreService
 
 # --- Logging Setup ---
 os.makedirs("logs/app", exist_ok=True)
@@ -75,6 +77,17 @@ except Exception as e:
         def update_prod_context(self, payload): return ([], ['Production context unavailable'])
         def reset_prod_context(self, namespace, key=None, event=None): return None
     APPLICATION = MockApplicationController()
+
+BACKUP_DIR = os.path.join(workspace_path, "backups")
+BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+
+
+def _parse_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # --- Flask Routes (API Endpoints) ---
@@ -187,6 +200,110 @@ def clear_faults():
 def get_state_values():
     """Returns all valid ControllerState values for the UI."""
     return jsonify([s.value for s in ControllerState])
+
+
+@app.route('/api/backup_restore/robots', methods=['GET'])
+def get_backup_restore_robots():
+    """Return Mecademic robots for backup/restore selectors."""
+    try:
+        robots = BACKUP_RESTORE.list_mecademic_robots(APPLICATION)
+        connected_count = sum(1 for item in robots if item.get('connected'))
+        return jsonify({'robots': robots, 'connected_count': connected_count, 'count': len(robots)}), 200
+    except Exception as e:
+        logger.error(f"Failed to list Mecademic robots: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to list Mecademic robots: {e}'}), 500
+
+
+@app.route('/api/backup_restore/backup', methods=['POST'])
+def run_backup():
+    """Run backup in all or single mode."""
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get('mode', 'all')).lower()
+    robot_id = payload.get('robot_id')
+    stop_on_error = _parse_bool(payload.get('stop_on_error'), default=False)
+
+    if mode not in {'all', 'single'}:
+        return jsonify({'message': "Invalid mode. Use 'all' or 'single'.", 'success': False}), 400
+    if mode == 'single' and not robot_id:
+        return jsonify({'message': 'robot_id is required for single mode.', 'success': False}), 400
+
+    try:
+        if mode == 'all':
+            summary = BACKUP_RESTORE.backup_all(APPLICATION, stop_on_error=stop_on_error)
+        else:
+            summary = BACKUP_RESTORE.backup_one(APPLICATION, robot_id=robot_id)
+
+        for item in summary.get('results', []):
+            filename = item.get('archive_filename')
+            if filename:
+                item['download_url'] = url_for('download_backup_archive', filename=filename)
+
+        summary['success'] = summary.get('failure_count', 0) == 0
+        summary['message'] = 'Backup completed.' if summary['success'] else 'Backup completed with failures.'
+        return jsonify(summary), 200
+    except Exception as e:
+        logger.error(f"Backup operation failed: {e}", exc_info=True)
+        return jsonify({'message': f'Backup operation failed: {e}', 'success': False}), 500
+
+
+@app.route('/api/backup_restore/restore', methods=['POST'])
+def run_restore():
+    """Restore one archive to a selected Mecademic robot."""
+    robot_id = request.form.get('robot_id')
+    stop_on_error = _parse_bool(request.form.get('stop_on_error'), default=False)
+    dry_run = _parse_bool(request.form.get('dry_run'), default=False)
+    archive_file = request.files.get('archive')
+
+    if not robot_id:
+        return jsonify({'message': 'robot_id is required.', 'success': False}), 400
+    if archive_file is None or not archive_file.filename:
+        return jsonify({'message': 'archive file is required.', 'success': False}), 400
+
+    filename = secure_filename(archive_file.filename)
+    if not filename.lower().endswith('.zip'):
+        return jsonify({'message': 'Only .zip archives are supported.', 'success': False}), 400
+
+    upload_dir = Path(BACKUP_DIR) / 'uploads'
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = upload_dir / f"upload_{filename}"
+
+    try:
+        archive_file.save(temp_path)
+        result = BACKUP_RESTORE.restore_single_from_archive(
+            APPLICATION,
+            robot_id=robot_id,
+            archive_path=str(temp_path),
+            dry_run=dry_run,
+            stop_on_error=stop_on_error,
+        )
+        result['success'] = bool(result.get('success'))
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Restore operation failed: {e}", exc_info=True)
+        return jsonify({'message': f'Restore operation failed: {e}', 'success': False}), 500
+    finally:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to remove temporary upload {temp_path}: {cleanup_err}")
+
+
+@app.route('/api/backup_restore/download/<path:filename>', methods=['GET'])
+def download_backup_archive(filename):
+    """Download a generated backup archive from the managed backups directory."""
+    safe_name = secure_filename(filename)
+    if safe_name != filename:
+        return jsonify({'message': 'Invalid archive name.'}), 400
+
+    target_path = (Path(BACKUP_DIR) / safe_name).resolve()
+    root = Path(BACKUP_DIR).resolve()
+    if not str(target_path).startswith(str(root)):
+        return jsonify({'message': 'Invalid archive path.'}), 400
+    if not target_path.exists():
+        return jsonify({'message': 'Archive not found.'}), 404
+
+    return send_from_directory(str(root), safe_name, as_attachment=True)
 
 
 @app.route('/api/prod/context', methods=['GET'])
