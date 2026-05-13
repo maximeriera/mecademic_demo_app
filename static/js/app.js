@@ -3,6 +3,7 @@ const messageLog   = document.getElementById('message-log');
 let latestProdContext = null;
 let activeProdSubTab = 'metrics';
 let logDropdownInitialized = false;
+let backupRestoreDropdownsInitialized = false;
 let backupRestoreRobots = [];
 let restoreArchiveFile = null;
 
@@ -641,7 +642,7 @@ function populateBackupRestoreSelectors() {
     const backupCurrent = backupSelect.value;
     const restoreCurrent = restoreSelect.value;
 
-    backupSelect.innerHTML = '<option value="">Select a robot</option>';
+    backupSelect.innerHTML = '<option value="">All Connected Robots (Default)</option>';
     restoreSelect.innerHTML = '<option value="">Select a robot</option>';
 
     backupRestoreRobots.forEach((robot) => {
@@ -663,30 +664,134 @@ function populateBackupRestoreSelectors() {
         restoreSelect.appendChild(restoreOpt);
     });
 
-    onBackupModeChanged();
+    renderBackupRestoreSelectMenu('backup-robot-picker');
+    renderBackupRestoreSelectMenu('restore-robot-picker');
 }
 
-function onBackupModeChanged() {
-    const modeSelect = document.getElementById('backup-mode-select');
-    const backupRobotSelect = document.getElementById('backup-robot-select');
-    if (!modeSelect || !backupRobotSelect) return;
-    backupRobotSelect.disabled = modeSelect.value !== 'single';
+function setBackupRestoreSelectOpen(picker, isOpen) {
+    if (!picker) return;
+    const trigger = picker.querySelector('.log-select-trigger');
+    if (!trigger) return;
+    picker.classList.toggle('open', isOpen);
+    trigger.setAttribute('aria-expanded', String(isOpen));
+}
+
+function updateBackupRestoreSelectLabel(pickerId) {
+    const picker = document.getElementById(pickerId);
+    if (!picker) return;
+
+    const sel = picker.querySelector('select');
+    const label = picker.querySelector('.log-select-label');
+    if (!sel || !label) return;
+
+    const selected = sel.selectedOptions[0];
+    if (!selected) {
+        label.textContent = 'Select an option';
+        return;
+    }
+    label.textContent = selected.textContent || 'Select an option';
+}
+
+function selectBackupRestoreOption(pickerId, value, onChange) {
+    const picker = document.getElementById(pickerId);
+    if (!picker) return;
+
+    const sel = picker.querySelector('select');
+    const menu = picker.querySelector('.log-select-menu');
+    if (!sel || !menu) return;
+
+    sel.value = value;
+    menu.querySelectorAll('.log-select-option, .log-select-placeholder').forEach((button) => {
+        const selected = button.dataset.value === value;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+    });
+
+    updateBackupRestoreSelectLabel(pickerId);
+    setBackupRestoreSelectOpen(picker, false);
+    if (onChange) onChange();
+}
+
+function renderBackupRestoreSelectMenu(pickerId, onChange = null) {
+    const picker = document.getElementById(pickerId);
+    if (!picker) return;
+
+    const sel = picker.querySelector('select');
+    const menu = picker.querySelector('.log-select-menu');
+    if (!sel || !menu) return;
+
+    menu.innerHTML = '';
+
+    Array.from(sel.options).forEach((opt) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.dataset.value = opt.value;
+        btn.textContent = opt.textContent || '';
+        btn.setAttribute('role', 'option');
+        btn.setAttribute('aria-selected', String(opt.value === sel.value));
+
+        if (opt.value === '') {
+            btn.className = 'log-select-placeholder';
+        } else {
+            btn.className = 'log-select-option';
+        }
+        if (opt.value === sel.value) btn.classList.add('active');
+
+        if (opt.disabled) {
+            btn.disabled = true;
+        } else {
+            btn.addEventListener('click', () => selectBackupRestoreOption(pickerId, opt.value, onChange));
+        }
+
+        menu.appendChild(btn);
+    });
+
+    updateBackupRestoreSelectLabel(pickerId);
+}
+
+function ensureBackupRestoreDropdowns() {
+    if (backupRestoreDropdownsInitialized) return;
+
+    const ids = ['backup-robot-picker', 'restore-robot-picker'];
+    ids.forEach((pickerId) => {
+        const picker = document.getElementById(pickerId);
+        const trigger = picker?.querySelector('.log-select-trigger');
+        if (!picker || !trigger) return;
+
+        trigger.addEventListener('click', () => {
+            if (trigger.disabled) return;
+            const isOpen = picker.classList.contains('open');
+            ids.forEach((otherId) => setBackupRestoreSelectOpen(document.getElementById(otherId), false));
+            setBackupRestoreSelectOpen(picker, !isOpen);
+        });
+    });
+
+    document.addEventListener('click', (event) => {
+        const ids = ['backup-robot-picker', 'restore-robot-picker'];
+        ids.forEach((pickerId) => {
+            const picker = document.getElementById(pickerId);
+            if (!picker || picker.contains(event.target)) return;
+            setBackupRestoreSelectOpen(picker, false);
+        });
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        ['backup-robot-picker', 'restore-robot-picker'].forEach((pickerId) => {
+            setBackupRestoreSelectOpen(document.getElementById(pickerId), false);
+        });
+    });
+
+    backupRestoreDropdownsInitialized = true;
 }
 
 function runBackupAction() {
-    const modeSelect = document.getElementById('backup-mode-select');
     const backupRobotSelect = document.getElementById('backup-robot-select');
     const resultContainer = document.getElementById('backup-result-container');
-    if (!modeSelect || !backupRobotSelect || !resultContainer) return;
+    if (!backupRobotSelect || !resultContainer) return;
 
-    const mode = modeSelect.value || 'all';
     const robotId = backupRobotSelect.value;
-
-    if (mode === 'single' && !robotId) {
-        const msg = 'Select a connected robot for single backup mode.';
-        setBackupRestoreMessage(msg, true);
-        return;
-    }
+    const mode = robotId ? 'single' : 'all';
 
     resultContainer.innerHTML = '<p class="empty-state">Running backup...</p>';
 
@@ -894,7 +999,8 @@ function setLogDropdownOpen(isOpen) {
 
 function updateLogSelectionLabel() {
     const sel = document.getElementById('log-file-select');
-    const label = document.querySelector('.log-select-label');
+    const picker = document.getElementById('log-file-picker');
+    const label = picker ? picker.querySelector('.log-select-label') : null;
     if (!sel || !label) return;
 
     const selected = sel.selectedOptions[0];
@@ -1075,4 +1181,7 @@ updateRobotStatus();
 loadRobotInfo();
 refreshProdContext();
 initRestoreDropzone();
+ensureBackupRestoreDropdowns();
+renderBackupRestoreSelectMenu('backup-robot-picker');
+renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
