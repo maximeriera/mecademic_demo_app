@@ -87,13 +87,15 @@ class Device(ABC):
     def _setup_logger(self):
         """Creates a unique, rotating log file for this specific device."""
         # Ensure the log directory exists
-        os.makedirs("logs/devices", exist_ok=True)
+        _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "devices")
+        _log_dir = os.path.normpath(_log_dir)
+        os.makedirs(_log_dir, exist_ok=True)
         
         logger = logging.getLogger(f"Logger_{self.device_id}")
         logger.setLevel(logging.DEBUG) # Capture everything for local files
 
         if not logger.handlers:
-            file_path = f"logs/devices/{self.device_id}.log"
+            file_path = os.path.join(_log_dir, f"{self.device_id}.log")
             handler = RotatingFileHandler(file_path, maxBytes=5*1024*1024, backupCount=2)
             formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
             handler.setFormatter(formatter)

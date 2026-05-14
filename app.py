@@ -25,11 +25,12 @@ from core.ControllerState import ControllerState
 from core.BackupRestoreService import BackupRestoreService
 
 # --- Logging Setup ---
-os.makedirs("logs/app", exist_ok=True)
+_APP_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "app")
+os.makedirs(_APP_LOG_DIR, exist_ok=True)
 logger = logging.getLogger("app")
 logger.setLevel(logging.DEBUG)
 if not logger.handlers:
-    _handler = RotatingFileHandler("logs/app/app.log", maxBytes=5*1024*1024, backupCount=2)
+    _handler = RotatingFileHandler(os.path.join(_APP_LOG_DIR, "app.log"), maxBytes=5*1024*1024, backupCount=2)
     _handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
     logger.addHandler(_handler)
 
