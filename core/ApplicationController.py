@@ -94,13 +94,18 @@ class ApplicationController:
         logging.Logger
         """
         # Ensure the log directory exists
-        os.makedirs("logs/app", exist_ok=True)
+        _root_dir = os.environ.get(
+            "MECADEMIC_DEMO_ROOT",
+            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
+        )
+        _log_dir = os.path.join(_root_dir, "logs", "app")
+        os.makedirs(_log_dir, exist_ok=True)
         
         logger = logging.getLogger(f"Logger_ApplicationController")
         logger.setLevel(logging.DEBUG) # Capture everything for local files
 
         if not logger.handlers:
-            file_path = f"logs/app/ApplicationController.log"
+            file_path = os.path.join(_log_dir, "ApplicationController.log")
             handler = RotatingFileHandler(file_path, maxBytes=5*1024*1024, backupCount=2)
             formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
             handler.setFormatter(formatter)
