@@ -94,8 +94,11 @@ class ApplicationController:
         logging.Logger
         """
         # Ensure the log directory exists
-        _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "app")
-        _log_dir = os.path.normpath(_log_dir)
+        _root_dir = os.environ.get(
+            "MECADEMIC_DEMO_ROOT",
+            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
+        )
+        _log_dir = os.path.join(_root_dir, "logs", "app")
         os.makedirs(_log_dir, exist_ok=True)
         
         logger = logging.getLogger(f"Logger_ApplicationController")

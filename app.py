@@ -2,9 +2,12 @@
 import argparse
 import sys
 import os
+from pathlib import Path
 
 # --- Workspace Setup ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+PROJECT_ROOT = Path(BASE_DIR).resolve().parent
+os.environ.setdefault("MECADEMIC_DEMO_ROOT", str(PROJECT_ROOT))
 
 parser = argparse.ArgumentParser(description="Mecademic Demo App")
 parser.add_argument('--workspace', type=str, default=BASE_DIR, help="Path to the external workspace")
@@ -18,14 +21,13 @@ from werkzeug.utils import secure_filename
 
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 from core.Task import TaskType
 from core.ControllerState import ControllerState
 from core.BackupRestoreService import BackupRestoreService
 
 # --- Logging Setup ---
-_APP_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "app")
+_APP_LOG_DIR = os.path.join(os.environ.get("MECADEMIC_DEMO_ROOT", str(PROJECT_ROOT)), "logs", "app")
 os.makedirs(_APP_LOG_DIR, exist_ok=True)
 logger = logging.getLogger("app")
 logger.setLevel(logging.DEBUG)
@@ -364,7 +366,7 @@ def reset_prod_context():
 
 
 # --- Log directories (resolved relative to this file so they work regardless of cwd) ---
-_BASE_DIR = Path(__file__).parent
+_BASE_DIR = Path(os.environ.get("MECADEMIC_DEMO_ROOT", str(PROJECT_ROOT)))
 _LOG_DIRS = {
     'app':     _BASE_DIR / 'logs' / 'app',
     'devices': _BASE_DIR / 'logs' / 'devices',
