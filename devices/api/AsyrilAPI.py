@@ -463,7 +463,7 @@ class AsyrilEyePlusApi:
         RuntimeError
             If the device returns a non-200 response.
         """
-        if not self._calib_pose in [1, 4]:
+        if not self._calib_pose in [1, 2, 3,4]:
             raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
         command = "take_calibration_image " + str(self._calib_pose)
         self.__send_raw__(command)
@@ -528,7 +528,7 @@ class AsyrilEyePlusApi:
         RuntimeError
             If the device returns a non-200 response.
         """
-        if not self._calib_pose in [1, 4]:
+        if not self._calib_pose in [1, 2, 3, 4]:
             raise ValueError(f"Invalid calibration pose number: {self._calib_pose}. Must be 1, 2, 3, or 4.")
         command = "set_calibration_point " + str(self._calib_pose) + " " + str(x) + " " + str(y)
         self.__send_raw__(command)
