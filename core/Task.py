@@ -21,6 +21,7 @@ Stop vs. Abort
 """
 
 import threading
+from importlib import import_module
 
 import logging
 
@@ -30,12 +31,28 @@ from typing import Dict
 from .ControllerState import ControllerState
 
 from devices import Device
-
-from app_logic.prod import prod_cycle
-from app_logic.home import home
-from app_logic.shipment import shipment
-from app_logic.calib import calib
 from .ProductionContext import ProductionContext
+
+
+def _load_workspace_task_function(function_name: str, module_candidates: tuple[str, ...]):
+    """Load a task function from the active workspace before falling back to repo defaults."""
+    last_error = None
+    for module_name in module_candidates:
+        try:
+            module = import_module(module_name)
+            return getattr(module, function_name)
+        except Exception as error:
+            last_error = error
+
+    raise ImportError(
+        f"Unable to import task function '{function_name}' from any workspace module: {module_candidates}"
+    ) from last_error
+
+
+prod_cycle = _load_workspace_task_function("prod_cycle", ("prod", "app_logic.prod"))
+home = _load_workspace_task_function("home", ("home", "app_logic.home"))
+shipment = _load_workspace_task_function("shipment", ("shipment", "app_logic.shipment"))
+calib = _load_workspace_task_function("calib", ("calib", "app_logic.calib"))
 
 # --- Enums for State Management ---
 
