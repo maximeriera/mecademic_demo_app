@@ -32,12 +32,39 @@ class PlanarMotorMove:
         self.end_speed = ending_speed
 
 class PlanarMotorApi:
-    def __init__(self, ip:str, auto_connect: bool = False):
+    def __init__(self, ip: str, auto_connect: bool = False):
         self.ip = ip
         self.auto_connect = auto_connect
         self.sys = sys
         self.bot = bot
-        self.is_connected = False
+        self._connected = False
+        self._faulted = False
+        self._abort_requested = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    @is_connected.setter
+    def is_connected(self, value: bool) -> None:
+        self._connected = bool(value)
+
+    @property
+    def faulted(self) -> bool:
+        if not self._connected:
+            return self._faulted
+        try:
+            self._faulted = self.get_pmc_status() == pmc_types.PMCSTATUS.PMC_ERROR
+        except Exception:
+            self._faulted = True
+        return self._faulted
+
+    def _raise_if_aborted(self):
+        if self._abort_requested:
+            raise InterruptedError("Planar motor operation aborted")
+
+    def clear_abort(self):
+        self._abort_requested = False
     
     def connect(self) -> bool:
         """
@@ -54,12 +81,14 @@ class PlanarMotorApi:
             # Broadcast search on local network
             connection_state = self.sys.auto_search_and_connect_to_pmc()
             self.is_connected = connection_state
-            return connection_state
+            self._faulted = not bool(connection_state)
+            return bool(connection_state)
         else:
             # Direct IP connection
-            connection_state = sys.connect_to_specific_pmc(self.ip)
+            connection_state = self.sys.connect_to_specific_pmc(self.ip)
             self.is_connected = connection_state
-            return connection_state
+            self._faulted = not bool(connection_state)
+            return bool(connection_state)
     
     def initialize(self, timeout: float = 10.0):
         """
@@ -68,6 +97,7 @@ class PlanarMotorApi:
         Raises:
             TimeoutError: If the system does not reach FULLCTRL state within timeout.
         """
+        self._raise_if_aborted()
         # 1. Check if we have control authority (Mastership)
         if not self.sys.is_master():
             self.sys.gain_mastership()
@@ -77,48 +107,55 @@ class PlanarMotorApi:
         
         # 3. Wait loop: Poll status until system is fully operational
         maxTime = time.time() + timeout
-        while self.sys.get_pmc_status() is not pmc_types.PMCSTATUS.PMC_FULLCTRL:
+        while self.sys.get_pmc_status() != pmc_types.PMCSTATUS.PMC_FULLCTRL:
+            self._raise_if_aborted()
             time.sleep(0.5) # Poll every 500ms to avoid flooding CPU
             if time.time() > maxTime:
                 raise TimeoutError("PMC Activation timeout")
+        self._faulted = False
     
     def activate_bots(self, timeout: float = 10.0):
         """
         Activates the movers (xbots) specifically. 
         Useful if system is connected but motors are disabled (e.g., after E-Stop).
         """
+        self._raise_if_aborted()
         self.bot.activate_xbots()
         maxTime = time.time() + timeout
-        while self.sys.get_pmc_status() is not pmc_types.PMCSTATUS.PMC_FULLCTRL:
+        while self.sys.get_pmc_status() != pmc_types.PMCSTATUS.PMC_FULLCTRL:
+            self._raise_if_aborted()
             time.sleep(0.5)
             if time.time() > maxTime:
                 raise TimeoutError("PMC Activation timeout")
+        self._faulted = False
         
     def deactivate_bots(self, timeout: float = 10.0):
         """
         Safely powers down the movers (xbots) so they land/dock.
         """
+        self._raise_if_aborted()
         self.bot.deactivate_xbots()
         maxTime = time.time() + timeout
-        while self.sys.get_pmc_status() is not pmc_types.PMCSTATUS.PMC_INACTIVE:
+        while self.sys.get_pmc_status() != pmc_types.PMCSTATUS.PMC_INACTIVE:
+            self._raise_if_aborted()
             time.sleep(0.5)
             if time.time() > maxTime:
                 raise TimeoutError("PMC Deactivation timeout")
         
     def get_pmc_status(self) -> pmc_types.PMCSTATUS:
         """Returns the current global system status (e.g., INIT, FULLCTRL, ERROR)."""
-        return sys.get_pmc_status()
+        return self.sys.get_pmc_status()
     
     def get_num_xbots(self) -> int:
         """Returns the count of detected movers."""
-        return len(bot.get_all_xbot_info(pmc_types.ALLXBOTSFEEDBACKOPTION(0)))
+        return len(self.bot.get_all_xbot_info(pmc_types.ALLXBOTSFEEDBACKOPTION(0)))
 
     def get_xbots_state(self) -> dict:
         """
         Returns a dictionary mapping Bot ID -> State Enum.
         Example: {1: XBOTSTATE.IDLE, 2: XBOTSTATE.MOVING}
         """
-        status = bot.get_all_xbot_info(pmc_types.ALLXBOTSFEEDBACKOPTION(0))
+        status = self.bot.get_all_xbot_info(pmc_types.ALLXBOTSFEEDBACKOPTION(0))
         states = {}
         for stat in status:
             states[stat.xbot_id] = stat.xbot_state
@@ -197,10 +234,14 @@ class PlanarMotorApi:
         """
         # Poll status until it is no longer MOVING (Status is not IDLE usually means moving or error)
         # Note: Logic assumes any state other than IDLE implies movement or busy-ness.
-        while self.bot.get_xbot_status(xbot_id=bot_id).xbot_state is not pmc_types.XBOTSTATE.XBOT_IDLE:
+        max_time = time.time() + timeout
+        while self.bot.get_xbot_status(xbot_id=bot_id).xbot_state != pmc_types.XBOTSTATE.XBOT_IDLE:
+            self._raise_if_aborted()
             # Check for collision/obstacles immediately
             if self.bot.get_xbot_status(xbot_id=bot_id).xbot_state == pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED:
                 return pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED
+            if time.time() > max_time:
+                raise TimeoutError(f"Timeout waiting for bot {bot_id} to become idle")
             time.sleep(0.5)
         return pmc_types.XBOTSTATE.XBOT_IDLE
 
@@ -258,6 +299,31 @@ class PlanarMotorApi:
     def start_macro(self, macro_id: int, xbot_id) -> None:
         """Runs a pre-programmed sequence (macro) stored on the controller."""
         self.bot.run_motion_macro(1, macro_id, xbot_id)
+
+    def clear_fault(self) -> None:
+        """Clears the local fault flag and tries best-effort recovery on the controller."""
+        self._abort_requested = False
+        if not self._connected:
+            self._faulted = False
+            return
+
+        for cmd_name in ("reset_fault", "clear_fault", "reset_error"):
+            cmd = getattr(self.sys, cmd_name, None)
+            if callable(cmd):
+                try:
+                    cmd()
+                    break
+                except Exception as exc:
+                    logging.warning(f"Planar motor fault reset command '{cmd_name}' failed: {exc}")
+
+        try:
+            self._faulted = self.get_pmc_status() == pmc_types.PMCSTATUS.PMC_ERROR
+        except Exception:
+            self._faulted = True
+
+    def abort(self) -> None:
+        """Requests cancellation for long polling waits in this API wrapper."""
+        self._abort_requested = True
         
     def shutdown(self):
         """Closes connection to the PMC hardware."""
@@ -269,4 +335,5 @@ class PlanarMotorApi:
 
             self.sys.disconnect_from_pmc()
             self.is_connected = False
+        self._faulted = False
     
