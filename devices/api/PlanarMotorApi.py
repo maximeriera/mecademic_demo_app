@@ -169,11 +169,9 @@ class PlanarMotorApi:
         pos = {}
         for stat in status:
             pos[stat.xbot_id] = (stat.x_pos, stat.y_pos)
-        # Note: Function missing 'return pos' in original code, likely a bug. 
-        # Added implied return behavior in documentation context.
         return pos
     
-    def get_xbot_at_pos(self, xpos: float, ypos: float, tolerance: float = 5.0) -> int | None:
+    def get_xbot_at_pos(self, xpos: float, ypos: float, tolerance: float = 0.005) -> int | None:
         """
         Finds the Bot ID of a mover at a specific (X, Y) position within a tolerance.
         
@@ -192,12 +190,12 @@ class PlanarMotorApi:
                 return stat.xbot_id
         return None
     
-    def send_rotation(self, id: int) -> None:
+    def send_rotation(self, id: int, time:float, target_angle:float=52.36) -> None:
         """
         Executes a pre-defined spin maneuver on a specific bot.
         """
         # Args: count(1), id, start_angle(0), target_angle(52.36 rad?), velocity(25.0), acc(7.0)
-        self.bot.rotary_motion_timed_spin(1, id, 0, 52.36, 25.0, 7.0)
+        self.bot.rotary_motion_timed_spin(1, id, target_angle, 50.0, 50.0, time)
 
     def send_single_linear_command(self, xbot_id: int, xpos: float, ypos: float, vel: float = 1.0, acc: float = 10.0) -> None:
         """
@@ -206,7 +204,7 @@ class PlanarMotorApi:
         # POSITIONMODE(0) = Absolute Positioning
         # LINEARPATHTYPE(0) = Direct/Shortest Path
         self.bot.linear_motion_si(1, xbot_id, pmc_types.POSITIONMODE(0),
-                             pmc_types.LINEARPATHTYPE(0), xpos, ypos, 0.0, vel, acc)
+                             pmc_types.LINEARPATHTYPE(0), xpos, ypos, 0.0, vel, acc, 0.0)
 
     def send_multi_linear_commands(self, moves: list[PlanarMotorMove]) -> None:
         """
@@ -215,7 +213,7 @@ class PlanarMotorApi:
         """
         for move in moves:
             self.bot.linear_motion_si(1, move.bot_id, pmc_types.POSITIONMODE(0), pmc_types.LINEARPATHTYPE(0), move.xpos,
-                                 move.ypos, move.end_speed, move.vel, move.acc)
+                                 move.ypos, move.end_speed, move.vel, move.acc, 0.0)
 
     def send_auto_move_command(self, num_bot: int, xbot_ids: list[int], x_pos: list[float], y_pos: list[float]) -> None:
         """
@@ -234,14 +232,10 @@ class PlanarMotorApi:
         """
         # Poll status until it is no longer MOVING (Status is not IDLE usually means moving or error)
         # Note: Logic assumes any state other than IDLE implies movement or busy-ness.
-        max_time = time.time() + timeout
-        while self.bot.get_xbot_status(xbot_id=bot_id).xbot_state != pmc_types.XBOTSTATE.XBOT_IDLE:
-            self._raise_if_aborted()
+        while self.bot.get_xbot_status(xbot_id=bot_id).xbot_state is not pmc_types.XBOTSTATE.XBOT_IDLE:
             # Check for collision/obstacles immediately
             if self.bot.get_xbot_status(xbot_id=bot_id).xbot_state == pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED:
                 return pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED
-            if time.time() > max_time:
-                raise TimeoutError(f"Timeout waiting for bot {bot_id} to become idle")
             time.sleep(0.5)
         return pmc_types.XBOTSTATE.XBOT_IDLE
 
