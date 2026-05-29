@@ -46,6 +46,29 @@
 devices:
 
   # --- Robots ---
-  my_meca_robot:
+  meca_lmi:
     type: "mecademic"
-    ip_address: "192.168.0.100"
+    ip_address: "192.168.0.20"
+
+  meca_insert:
+    type: "mecademic"
+    ip_address: "192.168.0.21"
+  
+  scara:
+    type: "mecademic"
+    ip_address: "192.168.0.30"
+
+  lmi_sensor:
+    type: "lmi"
+    ip_address: "192.168.0.10"
+    control_port: 8190              # optional
+    data_port: 8190                 # optional
+    health_port: 8190               # optional
+    delimiter: ","                  # optional — must match GoPxL setting
+    terminator: "\r\n"              # optional — must match GoPxL 
+
+  asyril:
+    type: "asyril"
+    ip_address: "192.168.0.50"      # IP address of the Eye+ controller
+    recipe: 13843                   # Recipe identifier (integer)
+    port: 7171                      # TCP port (optional, default: 7171)

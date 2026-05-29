@@ -190,17 +190,17 @@ class LMISensorApi:
 
     def start(self) -> None:
         """Start the sensor (transition to Running state)."""
-        self._ctrl_command("Start")
+        self._ctrl_command("start")
         self.logger.info("Sensor started.")
 
     def stop(self) -> None:
         """Stop the sensor (transition to Ready state)."""
-        self._ctrl_command("Stop")
+        self._ctrl_command("stop")
         self.logger.info("Sensor stopped.")
 
     def trigger(self) -> None:
         """Send a software trigger to the sensor."""
-        self._ctrl_command("Trigger")
+        self._ctrl_command("trigger")
         self.logger.debug("Software trigger sent.")
 
     def load_job(self, job_name: str = None) -> str:
@@ -220,9 +220,9 @@ class LMISensorApi:
             the current job name when called with no argument.
         """
         if job_name is not None:
-            parts = self._ctrl_command("LoadJob", job_name)
+            parts = self._ctrl_command("loadjob", job_name)
         else:
-            parts = self._ctrl_command("LoadJob")
+            parts = self._ctrl_command("loadjob")
         return self._delimiter.join(parts)
 
     def get_stamp(self, *fields: str) -> dict:
@@ -247,7 +247,7 @@ class LMISensorApi:
         >>> api.get_stamp('frame')
         {'frame': 6}
         """
-        parts = self._ctrl_command("Stamp", *[f.lower() for f in fields])
+        parts = self._ctrl_command("stamp", *[f.lower() for f in fields])
         result: dict = {}
         it = iter(parts)
         if len(fields) == 1:
@@ -271,7 +271,7 @@ class LMISensorApi:
             from the Gocator 6.5 TOC.  Verify against your firmware if you
             receive an error.
         """
-        self._ctrl_command("ClearAlignment")
+        self._ctrl_command("clearalign")
         self.logger.info("Sensor alignment cleared.")
 
     def stationary_alignment(self) -> None:
@@ -281,9 +281,11 @@ class LMISensorApi:
             The exact ASCII command string (``StationaryAlignment``) is
             inferred from the Gocator 6.5 TOC.
         """
-        self._ctrl_command("StationaryAlignment")
+        self._ctrl_command("align")
         self.logger.info("Stationary alignment completed.")
 
+
+    '''
     def set_runtime_variable(self, name: str, value) -> None:
         """Set a sensor runtime variable.
 
@@ -316,6 +318,7 @@ class LMISensorApi:
         parts = self._ctrl_command("GetRuntimeVariable", name)
         return self._delimiter.join(parts)
 
+    '''
     # ------------------------------------------------------------------
     # Data channel — result retrieval
     # ------------------------------------------------------------------
@@ -339,7 +342,7 @@ class LMISensorApi:
         str
             The evaluated, comma-joined result string.
         """
-        parts = self._data_command("Result")
+        parts = self._data_command("result")
         return self._delimiter.join(parts)
 
     def get_result(self, *measurement_ids: int) -> str:
@@ -371,7 +374,7 @@ class LMISensorApi:
                 "get_result() requires at least one measurement_id. "
                 "Call get_custom_format_string() to query the format template."
             )
-        parts = self._data_command("Result", *measurement_ids)
+        parts = self._data_command("result", *measurement_ids)
         return self._delimiter.join(parts)
 
     def get_measurements(self, *measurement_ids: int) -> List[MeasurementResult]:
@@ -396,7 +399,7 @@ class LMISensorApi:
             raise ValueError(
                 "get_measurements() requires at least one measurement_id."
             )
-        parts = self._data_command("Result", *measurement_ids)
+        parts = self._data_command("result", *measurement_ids)
         return self._parse_measurements(parts)
 
     # ------------------------------------------------------------------
@@ -656,7 +659,7 @@ class LMISensorApi:
 
 def example_usage():
     """Demonstrates typical Gocator 6.5 ASCII protocol usage."""
-    IP = "127.0.0.1"  # Change to your sensor's IP address
+    IP = "192.168.0.10"  # Change to your sensor's IP address
 
     api = LMISensorApi(ip_address=IP, control_port=8190, data_port=8190, health_port=8190)  # default ports: 3190 / 3192 / 3194
 
@@ -668,8 +671,8 @@ def example_usage():
     print(f"  Health channel  : {api._health_connected}")
 
     # --- Load a job and start ---
-    reply = api.load_job()
-    print(f"\nLoadJob reply: {reply}")
+    # reply = api.load_job()
+    # print(f"\nLoadJob reply: {reply}")
     api.start()
 
     # --- Polling mode: software trigger + read ---
