@@ -7,6 +7,19 @@ from devices import LMISensor, MecaRobot, AsyrilEyePlus
 
 SCAN_RETRY_NUMBER = 3
 
+SCARA_VACUUM_THRESHOLD = 60
+
+def scara_part_in_hand(devices: Dict[str, Device], index:int=0):
+    scara:MecaRobot = devices["scara"]
+    parts_in_hand = False
+    scara.api.GetRtVacuumPressure()
+
+    if abs(scara.api.GetRtVacuumPressure()) > SCARA_VACUUM_THRESHOLD:
+        parts_in_hand = True
+
+    return parts_in_hand
+
+
 def asyril_pick(devices: Dict[str, Device], index:int=0):
     scara:MecaRobot = devices["scara"]
     asyril:AsyrilEyePlus = devices["asyril"]
@@ -34,6 +47,7 @@ def asyril_pick(devices: Dict[str, Device], index:int=0):
         return
     
     scara.api.StartProgram("12")
+    scara.api.WaitIdle()
     
     return
 
@@ -103,6 +117,8 @@ def scan_insert_retract(devices: Dict[str, Device], index:int=0):
     meca_insert.api.WaitIdle()
     meca_insert.api.StartProgram("31")
     scara.api.StartProgram("11")
+    scara.api.StartProgram("14")
+    scara.api.StartProgram("11")
     scara.api.WaitIdle()
     meca_insert.api.WaitIdle()
 
@@ -117,12 +133,12 @@ def prod_cycle(devices: Dict[str, Device], index:int):
     lmi_sensor:LMISensor = devices["lmi_sensor"]
     meca_lmi:MecaRobot = devices["meca_lmi"]
 
-    asyril_pick(devices=devices)
+    while not scara_part_in_hand(devices=devices):
+        asyril_pick(devices=devices)
+        asyril.api.prepare_part()
+
     scan_insert_retract(devices=devices)
 
-    scara.api.StartProgram("14")
-    scara.api.WaitIdle()
-    scara.api.StartProgram("11")
     scara.api.WaitIdle()
     meca_lmi.api.WaitIdle()
 

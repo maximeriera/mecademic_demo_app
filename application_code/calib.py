@@ -5,8 +5,8 @@ from devices import LMISensor, MecaRobot, AsyrilEyePlus
 
 def calib(devices: Dict[str, Device]):
     """Logic for CALIB task."""
-    CalibPoses_x = [42, 42, 0, 0]
-    CalibPoses_y =[-170, -200, -170, -200]
+    CalibPoses_x = [67, 67, 25, 25]
+    CalibPoses_y =[-120, -150, -120, -150]
     
     scara:MecaRobot = devices["scara"]
     asyril:AsyrilEyePlus = devices["asyril"]
