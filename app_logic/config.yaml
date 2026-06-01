@@ -64,6 +64,13 @@
 # production_context_file: "production_context.yaml"
 production_context_file: "production_context.yaml"
 
+manual_actions:
+  - key: "inspect_only"
+    label: "Inspect"
+    description: "Run the inspection-only subroutine without full pick/place flow."
+    confirm_title: "Confirm Inspection"
+    confirm_message: "Run inspection-only routine now? Ensure workspace is safe before starting."
+
 devices:
 
   # --- Robots ---

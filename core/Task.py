@@ -21,6 +21,8 @@ Stop vs. Abort
 """
 
 import threading
+import inspect
+import time
 from importlib import import_module
 
 import logging
@@ -29,6 +31,7 @@ from enum import Enum
 from typing import Dict
 
 from .ControllerState import ControllerState
+from .ManualActions import load_manual_actions_registry
 
 from devices import Device
 from .ProductionContext import ProductionContext
@@ -75,6 +78,7 @@ class TaskType(Enum):
     SHIPMENT = "Shipment"
     CALIBRATION = "Calibration"
     PROD = "Production"
+    MANUAL_ACTION = "ManualAction"
 
 class Task(threading.Thread):
     """A single-shot background thread that executes one :class:`TaskType`.
@@ -105,7 +109,15 @@ class Task(threading.Thread):
     4. :meth:`abort` — request an immediate hardware-level stop.
     """
 
-    def __init__(self, logger: logging.Logger, task_type: TaskType, state_change_callback, devices: Dict[str, Device], production_context: ProductionContext):
+    def __init__(
+        self,
+        logger: logging.Logger,
+        task_type: TaskType,
+        state_change_callback,
+        devices: Dict[str, Device],
+        production_context: ProductionContext,
+        manual_action_key: str | None = None,
+    ):
         super().__init__()
         
         self.logger = logger
@@ -116,6 +128,7 @@ class Task(threading.Thread):
         self.name = f"TaskThread-{task_type.name}"
         self.devices = devices
         self.production_context = production_context
+        self.manual_action_key = (manual_action_key or "").strip() or None
 
     def run(self):
         """Entry point called by ``threading.Thread.start()``.
@@ -127,7 +140,13 @@ class Task(threading.Thread):
         on :meth:`is_done` are unblocked.
         """
         self.state_change_callback(ControllerState.BUSY)
-        self.logger.info(f"[{self.name}] Starting task: {self.task_type.value}")
+        self.logger.info(
+            "[%s] Starting task=%s manual_action_key=%s devices=%s",
+            self.name,
+            self.task_type.value,
+            self.manual_action_key,
+            sorted(self.devices.keys()),
+        )
         
         faulted = False
         
@@ -141,6 +160,8 @@ class Task(threading.Thread):
                     self._run_shipment()
                 case TaskType.CALIBRATION:
                     self._run_calib()
+                case TaskType.MANUAL_ACTION:
+                    self._run_manual_action()
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
             if self.task_type == TaskType.PROD:
@@ -165,7 +186,9 @@ class Task(threading.Thread):
             transitions to ``FAULTED``.
         """
         try:
+            self.logger.info(f"[{self.name}] HOME routine started.")
             home(self.devices)
+            self.logger.info(f"[{self.name}] HOME routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
             raise e
@@ -181,7 +204,9 @@ class Task(threading.Thread):
             transitions to ``FAULTED``.
         """
         try:        
+            self.logger.info(f"[{self.name}] SHIPMENT routine started.")
             shipment(self.devices)
+            self.logger.info(f"[{self.name}] SHIPMENT routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] SHIPMENT task encountered an error: {e}")
             raise e 
@@ -197,7 +222,9 @@ class Task(threading.Thread):
             transitions to ``FAULTED``.
         """
         try:        
+            self.logger.info(f"[{self.name}] CALIB routine started.")
             calib(self.devices)
+            self.logger.info(f"[{self.name}] CALIB routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] CALIB task encountered an error: {e}")
             raise e 
@@ -225,10 +252,13 @@ class Task(threading.Thread):
         try:
             self._run_home()
             while not self.stopped():
+                cycle_number = int(self.production_context.get_variable("part_count", 0)) + 1
+                self.logger.info(f"[{self.name}] PROD cycle start #{cycle_number}")
                 self.production_context.mark_cycle_start()
                 try:
                     prod_cycle(self.devices, self.production_context)
                     self.production_context.mark_cycle_end()
+                    self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:
                     self.production_context.mark_cycle_error(str(e))
                     if self.stopped():
@@ -245,6 +275,38 @@ class Task(threading.Thread):
             self.production_context.mark_prod_running(False)
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
             raise e
+
+    def _run_manual_action(self):
+        """Execute one configured manual action function."""
+        if not self.manual_action_key:
+            raise ValueError("Missing manual action key for MANUAL_ACTION task.")
+
+        start_ts = time.perf_counter()
+        registry = load_manual_actions_registry(logger=self.logger)
+        action_fn = registry.get(self.manual_action_key)
+        if action_fn is None:
+            raise ValueError(f"Manual action '{self.manual_action_key}' is not registered.")
+
+        self.logger.info(
+            "[%s] Running manual action key='%s' callable='%s.%s'",
+            self.name,
+            self.manual_action_key,
+            action_fn.__module__,
+            getattr(action_fn, "__name__", "<anonymous>"),
+        )
+
+        params = inspect.signature(action_fn).parameters
+        if len(params) >= 2:
+            action_fn(self.devices, self.production_context)
+        else:
+            action_fn(self.devices)
+        elapsed_s = time.perf_counter() - start_ts
+        self.logger.info(
+            "[%s] Manual action '%s' completed in %.3f s.",
+            self.name,
+            self.manual_action_key,
+            elapsed_s,
+        )
             
     def stop(self):
         """Request a graceful stop at the end of the current cycle (PROD only).

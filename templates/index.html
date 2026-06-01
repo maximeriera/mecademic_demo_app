@@ -23,6 +23,7 @@
             <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-manual" id="tab-btn-manual" onclick="switchTab('manual', this)">Manual</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
             </nav>
@@ -159,6 +160,26 @@
                 </div>
             </div>
 
+        </div>
+
+        <!-- ===== MANUAL TAB ===== -->
+        <div id="tab-manual" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-manual" hidden>
+            <div class="section">
+                <div class="section-title">Manual Runtime Actions</div>
+                <p class="manual-subtitle">Run project-specific robot/device subroutines independently, such as inspect-only or line-scan routines.</p>
+                <div id="manual-state-hint" class="manual-state-hint">Manual actions require controller state READY.</div>
+                <div id="manual-actions-container">
+                    <p class="empty-state">Loading manual actions...</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Manual Safety Control</div>
+                <div class="prod-control-row">
+                    <button type="button" class="btn-abort" onclick="sendManualAbort()">ABORT</button>
+                </div>
+                <div id="manual-action-log" class="message-log">No recent manual action activity.</div>
+            </div>
         </div>
 
         <!-- ===== BACKUP / RESTORE TAB ===== -->

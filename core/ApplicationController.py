@@ -34,6 +34,7 @@ from devices import Device
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
 from .ProductionContext import ProductionContext
+from .ManualActions import load_manual_actions_registry, normalize_manual_actions_config
 
 class ApplicationController:
     """
@@ -73,9 +74,12 @@ class ApplicationController:
         
         self._monitor_thread = threading.Thread(target=self._monitor_devices_status, name="MonitorThread", daemon=True)
         self._monitor_stop_event = threading.Event()
+        self._last_not_ready_device_id: str | None = None
         
+        self.logger.info(f"Loading controller config from: {config_path}")
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
+        self._manual_actions = self._load_manual_actions_config()
         
         if production_context_path is None:
             production_context_path = self.config.get('production_context_file', 'production_context.yaml')
@@ -84,6 +88,31 @@ class ApplicationController:
         self._create_devices()
         self.logger.info("ApplicationController initialized with devices: " + ", ".join(self.devices.keys())) 
         self._monitor_thread.start()
+
+    def _load_manual_actions_config(self) -> list[dict[str, str]]:
+        """Load and validate manual action metadata from config and workspace registry."""
+        configured_actions = normalize_manual_actions_config(self.config.get("manual_actions"))
+        if not configured_actions:
+            self.logger.info("No manual actions configured in config.yaml.")
+            return []
+
+        registry = load_manual_actions_registry(logger=self.logger)
+        configured_keys = [item["key"] for item in configured_actions]
+        self.logger.info(
+            "Manual actions configured in YAML: %s | registry keys discovered: %s",
+            configured_keys,
+            sorted(registry.keys()),
+        )
+        missing = [item["key"] for item in configured_actions if item["key"] not in registry]
+        if missing:
+            missing_txt = ", ".join(missing)
+            raise ValueError(
+                "Manual actions configured in config.yaml are missing in manual action registry: "
+                f"{missing_txt}"
+            )
+
+        self.logger.info(f"Manual actions ready: {configured_keys}")
+        return configured_actions
 
     
     def _setup_logger(self):
@@ -274,7 +303,7 @@ class ApplicationController:
 
     # --- Task Management ---
 
-    def start_task(self, task_type: TaskType) -> bool:
+    def start_task(self, task_type: TaskType, manual_action_key: str | None = None) -> bool:
         """Spawn a new :class:`~core.Task` thread if the controller is ``READY``.
 
         Parameters
@@ -288,6 +317,12 @@ class ApplicationController:
             ``True`` if the task was successfully started, ``False`` if the
             controller is not in ``READY`` state or a task is already running.
         """
+        self.logger.info(
+            "Task start requested: type=%s manual_action_key=%s state=%s",
+            task_type.name,
+            manual_action_key,
+            self.get_state().value,
+        )
         if self.get_state() != ControllerState.READY:
             self.logger.info(f"Cannot start task. Robot is {self.get_state().value}.")
             return False
@@ -308,9 +343,30 @@ class ApplicationController:
             state_change_callback=self.set_state, 
             devices=self.devices,
             production_context=self.production_context,
+            manual_action_key=manual_action_key,
+        )
+        self.logger.info(
+            "Starting task thread: name=%s type=%s manual_action_key=%s",
+            self._current_task.name,
+            task_type.name,
+            manual_action_key,
         )
         self._current_task.start()
         return True
+
+    def get_manual_actions(self) -> list[dict[str, str]]:
+        """Return configured manual action metadata for UI rendering."""
+        return [dict(item) for item in self._manual_actions]
+
+    def start_manual_action(self, action_key: str) -> bool:
+        """Start one configured manual action as an exclusive task."""
+        action_key = str(action_key or "").strip()
+        configured_keys = {item["key"] for item in self._manual_actions}
+        self.logger.info(f"Manual action request received: key='{action_key}'")
+        if action_key not in configured_keys:
+            self.logger.warning(f"Unknown manual action requested: '{action_key}'")
+            return False
+        return self.start_task(TaskType.MANUAL_ACTION, manual_action_key=action_key)
 
     def stop_current_task(self):
         """Gracefully stop the running task (user-initiated).
@@ -323,6 +379,11 @@ class ApplicationController:
             self.logger.info("No active task to stop.")
             return
         
+        self.logger.info(
+            "Stop requested for task thread: name=%s type=%s",
+            self._current_task.name,
+            self._current_task.task_type.name,
+        )
         self._current_task.stop()
         # The Task thread will handle the transition back to READY or FAULTED
 
@@ -338,6 +399,11 @@ class ApplicationController:
         if not self._current_task or not self._current_task.is_alive():
             self.logger.info("No active task to abort.")
             return
+        self.logger.warning(
+            "Abort requested for active task thread: name=%s type=%s",
+            self._current_task.name,
+            self._current_task.task_type.name,
+        )
         self._abort_current_task()
 
     def _abort_current_task(self):
@@ -406,17 +472,23 @@ class ApplicationController:
                     break # Break the inner loop, controller is faulted
             
                 if not device.ready:
-                    self.logger.warning(f"Device {device.device_id} is not ready. Controller cannot be READY.")
+                    if self._last_not_ready_device_id != device.device_id:
+                        self.logger.warning(f"Device {device.device_id} is not ready. Controller cannot be READY.")
+                        self._last_not_ready_device_id = device.device_id
                     all_ready = False
                     break
             
             
             if all_healthy and all_ready and self.get_state() != ControllerState.BUSY and self.get_state() != ControllerState.INITIALIZING and self.get_state() != ControllerState.FAULTED:
                 # Only return to READY if monitoring thread detects no issues AND no task is running
+                if self._last_not_ready_device_id is not None:
+                    self.logger.info("All devices report ready again.")
+                self._last_not_ready_device_id = None
                 self.set_state(ControllerState.READY)
 
             if self._current_task and self._current_task.is_done() and self._current_task.is_alive():
                 # Handle cases where Task finished but thread is still cleaning up
+                self.logger.info(f"Joining completed task thread: {self._current_task.name}")
                 self._current_task.join()
                 self._current_task = None
             

@@ -192,7 +192,7 @@ body {
 @media (max-width: 1024px) {
     .tab-bar {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(5, 1fr);
         gap: 8px;
         margin-top: 0;
         padding-bottom: 12px;
@@ -803,6 +803,78 @@ button:active { transform: scale(0.98); }
     gap: 8px;
 }
 
+/* --- Manual runtime actions --- */
+.manual-subtitle {
+    margin: 0 0 12px;
+    color: var(--color-muted);
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.manual-state-hint {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    font-size: 0.82em;
+}
+
+.manual-state-ready {
+    color: var(--color-accent-soft);
+    border-color: rgba(0,255,153,0.3);
+    background: rgba(0,255,153,0.08);
+}
+
+.manual-state-blocked {
+    color: #ffb9c1;
+    border-color: rgba(255,90,107,0.28);
+    background: rgba(255,90,107,0.08);
+}
+
+.manual-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 12px;
+}
+
+.manual-action-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.manual-action-title {
+    font-size: 0.95em;
+    font-weight: 700;
+    color: var(--color-text);
+}
+
+.manual-action-key {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.78em;
+    color: var(--color-accent-soft);
+}
+
+.manual-action-description {
+    font-size: 0.84em;
+    color: var(--color-muted);
+    min-height: 2.4em;
+}
+
+.manual-action-card .manual-action-run-btn {
+    margin-top: auto;
+}
+
+.manual-action-run-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    filter: none;
+}
+
 .prod-subtab-bar {
     display: flex;
     flex-direction: row;
@@ -1367,6 +1439,10 @@ button:active { transform: scale(0.98); }
     }
 
     .prod-control-row {
+        grid-template-columns: 1fr;
+    }
+
+    .manual-actions-grid {
         grid-template-columns: 1fr;
     }
 
