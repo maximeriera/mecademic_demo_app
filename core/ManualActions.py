@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import Any, Callable, Dict, List
 
 
-MANUAL_ACTION_MODULE_CANDIDATES = ("app_logic.manual_actions", "manual_actions")
+MANUAL_ACTION_MODULE_CANDIDATES = ("manual_actions", "app_logic.manual_actions")
 
 
 def load_manual_actions_registry(
