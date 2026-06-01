@@ -6,6 +6,12 @@ let logDropdownInitialized = false;
 let backupRestoreDropdownsInitialized = false;
 let backupRestoreRobots = [];
 let restoreArchiveFile = null;
+let manualActions = [];
+let latestControllerStatus = 'OFF';
+
+function normalizeStatus(status) {
+    return String(status || '').trim().toUpperCase();
+}
 
 /* ---- Tab switching ---- */
 function switchTab(name, btn) {
@@ -30,6 +36,9 @@ function switchTab(name, btn) {
     }
     if (name === 'backup-restore') {
         loadBackupRestoreRobots();
+    }
+    if (name === 'manual') {
+        loadManualActions();
     }
 }
 
@@ -63,18 +72,22 @@ function updateRobotStatus() {
     fetch('/api/status')
         .then(r => r.json())
         .then(data => {
+            latestControllerStatus = data.status;
             stateDisplays().forEach((el) => {
                 const compact = el.classList.contains('status-box-compact');
                 el.textContent = data.status;
                 el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state ' + data.status.toUpperCase();
             });
+            updateManualActionAvailability(data.status);
         })
         .catch(() => {
+            latestControllerStatus = 'FAULTED';
             stateDisplays().forEach((el) => {
                 const compact = el.classList.contains('status-box-compact');
                 el.textContent = 'COMMUNICATION ERROR';
                 el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state FAULTED';
             });
+            updateManualActionAvailability('FAULTED');
         });
 }
 
@@ -84,6 +97,13 @@ function setProdActionMessage(text, isError = false) {
     const actionLog = document.getElementById('prod-action-log');
     if (!actionLog) return;
     actionLog.textContent = text || 'No recent production context action.';
+    actionLog.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function setManualActionMessage(text, isError = false) {
+    const actionLog = document.getElementById('manual-action-log');
+    if (!actionLog) return;
+    actionLog.textContent = text || 'No recent manual action activity.';
     actionLog.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
 }
 
@@ -126,10 +146,12 @@ function sendAbort() {
                 .then(r => r.json()).then(d => {
                     setMessage(d.message);
                     setProdActionMessage(d.message, !d.success);
+                    setManualActionMessage(d.message, !d.success);
                 })
                 .catch(() => {
                     setMessage('Error sending abort command.');
                     setProdActionMessage('Error sending abort command.', true);
+                    setManualActionMessage('Error sending abort command.', true);
                 });
         }
     );
@@ -182,6 +204,162 @@ function sendShutdown() {
             fetch('/api/shutdown', { method: 'POST' })
                 .then(r => r.json()).then(d => setMessage(d.message))
                 .catch(() => setMessage('Error sending shutdown command.'));
+        }
+    );
+}
+
+/* ---- Manual runtime actions ---- */
+function loadManualActions() {
+    fetch('/api/manual/actions')
+        .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                throw new Error(data.message || 'Failed to load manual actions.');
+            }
+            manualActions = Array.isArray(data.actions) ? data.actions : [];
+            renderManualActions();
+        })
+        .catch((err) => {
+            const container = document.getElementById('manual-actions-container');
+            if (container) {
+                container.innerHTML = `<p class="empty-state empty-state-error">${escapeHtml(err.message || 'Failed to load manual actions.')}</p>`;
+            }
+            setManualActionMessage(err.message || 'Failed to load manual actions.', true);
+        });
+}
+
+function renderManualActions() {
+    const container = document.getElementById('manual-actions-container');
+    if (!container) return;
+
+    if (!Array.isArray(manualActions) || manualActions.length === 0) {
+        container.innerHTML = '<p class="empty-state">No manual actions configured for this project.</p>';
+        return;
+    }
+
+    container.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'manual-actions-grid';
+
+    manualActions.forEach((action) => {
+        const card = document.createElement('div');
+        card.className = 'manual-action-card';
+
+        const title = document.createElement('div');
+        title.className = 'manual-action-title';
+        title.textContent = action.label || action.key || 'Unnamed action';
+        card.appendChild(title);
+
+        const key = document.createElement('div');
+        key.className = 'manual-action-key';
+        key.textContent = action.key || '';
+        card.appendChild(key);
+
+        if (action.description) {
+            const description = document.createElement('div');
+            description.className = 'manual-action-description';
+            description.textContent = action.description;
+            card.appendChild(description);
+        }
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-task manual-action-run-btn';
+        button.textContent = `RUN ${String(action.label || action.key || 'ACTION').toUpperCase()}`;
+        button.dataset.actionKey = action.key || '';
+        button.dataset.actionLabel = action.label || action.key || 'Action';
+        button.dataset.confirmTitle = action.confirm_title || `Confirm ${action.label || action.key || 'Action'}`;
+        button.dataset.confirmMessage = action.confirm_message || `Run manual action '${action.label || action.key || 'Action'}'? Ensure the cell is clear before proceeding.`;
+        button.addEventListener('click', () => runManualAction(button));
+        card.appendChild(button);
+
+        grid.appendChild(card);
+    });
+
+    container.appendChild(grid);
+    updateManualActionAvailability(latestControllerStatus);
+}
+
+function updateManualActionAvailability(status) {
+    const buttons = document.querySelectorAll('.manual-action-run-btn');
+    const normalizedStatus = normalizeStatus(status);
+    const canRun = normalizedStatus === 'READY';
+    const hint = document.getElementById('manual-state-hint');
+
+    if (hint) {
+        if (canRun) {
+            hint.textContent = 'Controller READY. Manual actions can run.';
+            hint.className = 'manual-state-hint manual-state-ready';
+        } else {
+            hint.textContent = `Controller ${status}. Manual actions are blocked until READY.`;
+            hint.className = 'manual-state-hint manual-state-blocked';
+        }
+    }
+
+    buttons.forEach((btn) => {
+        btn.disabled = !canRun;
+        if (!canRun) {
+            btn.title = `Manual actions can only run when system state is READY (current: ${status}).`;
+        } else {
+            btn.title = '';
+        }
+    });
+}
+
+function runManualAction(buttonEl) {
+    const actionKey = buttonEl?.dataset?.actionKey || '';
+    const actionLabel = buttonEl?.dataset?.actionLabel || actionKey;
+    const confirmTitle = buttonEl?.dataset?.confirmTitle || `Confirm ${actionLabel}`;
+    const confirmMessage = buttonEl?.dataset?.confirmMessage || `Run manual action '${actionLabel}'? Ensure the cell is clear before proceeding.`;
+
+    if (!actionKey) {
+        setManualActionMessage('Manual action key is missing.', true);
+        return;
+    }
+
+    if (normalizeStatus(latestControllerStatus) !== 'READY') {
+        const msg = `Manual action '${actionLabel}' not started. Controller is ${latestControllerStatus}; initialize first.`;
+        setMessage(msg);
+        setManualActionMessage(msg, true);
+        return;
+    }
+
+    showConfirmModal(confirmTitle, confirmMessage, () => {
+        fetch(`/api/manual/actions/${encodeURIComponent(actionKey)}/run`, { method: 'POST' })
+            .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                const msg = data.message || `Manual action '${actionLabel}' requested.`;
+                const isError = !ok || data.success === false;
+                setMessage(msg);
+                setProdActionMessage(msg, isError);
+                setManualActionMessage(msg, isError);
+            })
+            .catch(() => {
+                const msg = `Error starting manual action '${actionLabel}'.`;
+                setMessage(msg);
+                setProdActionMessage(msg, true);
+                setManualActionMessage(msg, true);
+            });
+    });
+}
+
+function sendManualAbort() {
+    showConfirmModal(
+        'Confirm Manual Abort',
+        'Abort the current running task immediately? This can interrupt robot motion and skip cleanup moves.',
+        () => {
+            fetch('/api/abort', { method: 'POST' })
+                .then(r => r.json())
+                .then((d) => {
+                    setMessage(d.message);
+                    setProdActionMessage(d.message, !d.success);
+                    setManualActionMessage(d.message, !d.success);
+                })
+                .catch(() => {
+                    setMessage('Error sending abort command.');
+                    setProdActionMessage('Error sending abort command.', true);
+                    setManualActionMessage('Error sending abort command.', true);
+                });
         }
     );
 }
@@ -1180,6 +1358,7 @@ setInterval(loadRobotInfo, 1000);
 updateRobotStatus();
 loadRobotInfo();
 refreshProdContext();
+loadManualActions();
 initRestoreDropzone();
 ensureBackupRestoreDropdowns();
 renderBackupRestoreSelectMenu('backup-robot-picker');

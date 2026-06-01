@@ -61,11 +61,15 @@ except Exception as e:
     class MockApplicationController:
         def get_state(self): return ControllerState.OFF
         def start_task(self, task): print("Mocked start task.")
+        def start_manual_action(self, action_key):
+            print(f"Mocked manual action: {action_key}")
+            return False
         def stop_current_task(self): print("Mocked stop task.")
         def abort_current_task(self): print("Mocked abort task.")
         def initialize(self): return True
         def shutdown(self): pass
         def get_devices_info(self): return {}
+        def get_manual_actions(self): return []
         def clear_faults(self): pass
         def get_prod_context_snapshot(self):
             return {
@@ -164,6 +168,41 @@ def abort_task():
     logger.info("POST /api/abort - Abort signal sent.")
     APPLICATION.abort_current_task()
     return jsonify({'message': 'Abort signal sent. Task interrupted immediately.', 'success': True}), 200
+
+
+@app.route('/api/manual/actions', methods=['GET'])
+def get_manual_actions():
+    """Return configured manual runtime actions for the Manual tab."""
+    try:
+        actions = APPLICATION.get_manual_actions()
+        return jsonify({'actions': actions, 'count': len(actions), 'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to load manual actions: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to load manual actions: {e}', 'actions': [], 'success': False}), 500
+
+
+@app.route('/api/manual/actions/<action_key>/run', methods=['POST'])
+def run_manual_action(action_key):
+    """Start one configured manual action as an exclusive task."""
+    action_key = str(action_key or '').strip()
+    if not action_key:
+        return jsonify({'message': 'Manual action key is required.', 'success': False}), 400
+
+    success = APPLICATION.start_manual_action(action_key)
+    if success:
+        logger.info(f"Manual action started: {action_key}")
+        return jsonify({'message': f"Manual action '{action_key}' started.", 'success': True}), 200
+
+    state = APPLICATION.get_state().value
+    available = []
+    try:
+        available = [item.get('key') for item in APPLICATION.get_manual_actions()]
+    except Exception:
+        available = []
+    if action_key not in available:
+        return jsonify({'message': f"Unknown manual action '{action_key}'.", 'success': False}), 404
+
+    return jsonify({'message': f'Could not start manual action. APPLICATION is {state}.', 'success': False}), 400
 
 @app.route('/api/info', methods=['GET'])
 def get_APPLICATION_info():
