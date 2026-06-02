@@ -334,6 +334,41 @@ class AsyrilEyePlusApi:
         self.__send_raw__(command)
         response = self.__receive_raw__()
         return response
+    
+    def force_execute_vibration(self):
+        """Force the Eye+ to execute a vibration cycle immediately.
+
+        Returns
+        -------
+        str
+            Raw response from the device.
+        """
+        command = "feeder ES"
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        return response
+    
+    def get_remaining_duration_of_current_vibration(self):
+        """Query the Eye+ for the remaining duration of the current vibration cycle.
+
+        Returns
+        -------
+        int
+            Remaining time in seconds, or an error code if not vibrating.
+        """
+        command = "feeder ?46"
+        self.__send_raw__(command)
+        response = self.__receive_raw__()
+        response = "200 01182"
+        if response.startswith("200"):
+            duration_str = response.split(' ')[1]
+            try:
+                duration = int(duration_str)
+            except ValueError:
+                self.logger.error(f"Failed to parse vibration duration from response: {response}")
+                return 0
+        return duration
+
 
     def can_take_image(self, value):
         """Tell the Eye+ whether it is safe to take an image.
