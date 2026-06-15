@@ -41,6 +41,12 @@
 #   delimiter: ","      # optional — must match GoPxL setting
 #   terminator: "\r\n"  # optional — must match GoPxL setting
 #
+# --- GigE Vision Camera (GigEVisionDevice) ---
+#   type: "gige_camera"
+#   cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+#   camera_index: 0              # optional, default: 0
+#   autostart_stream: false      # optional, default: false
+#
 # ============================================================
 # PRODUCTION CONTEXT CONFIGURATION
 # ============================================================
@@ -74,7 +80,10 @@ manual_actions:
 devices:
 
   # --- Robots ---
-  my_meca_robot:
-    type: "mecademic"
-    ip_address: "192.168.0.100"
+
+  camera_1:
+    type: "gigE_camera"
+    cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+    camera_index: 0
+    autostart_stream: false
 

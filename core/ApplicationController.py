@@ -62,7 +62,7 @@ class ApplicationController:
                 └─ FAULTED
     """
 
-    def __init__(self, config_path: str = 'config.yaml', production_context_path: str = None):
+    def __init__(self, config_path: str = 'config.yaml', production_context_path: str | None = None):
         
         self.logger = self._setup_logger()
         
@@ -83,7 +83,7 @@ class ApplicationController:
         
         if production_context_path is None:
             production_context_path = self.config.get('production_context_file', 'production_context.yaml')
-        self.production_context = ProductionContext(self.logger, config_path=production_context_path)
+        self.production_context = ProductionContext(self.logger, config_path=production_context_path) if production_context_path else ProductionContext(self.logger)
 
         self._create_devices()
         self.logger.info("ApplicationController initialized with devices: " + ", ".join(self.devices.keys())) 
@@ -210,6 +210,24 @@ class ApplicationController:
                     health_port=device_info.get('health_port', 3194),
                     delimiter=device_info.get('delimiter', ','),
                     terminator=device_info.get('terminator', '\r\n'),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
+            elif device_type == 'gige_camera':
+                from devices.GigEVisionDevice import GigEVisionDevice
+
+                cti_path = device_info.get('cti_path', '')
+                if not cti_path:
+                    raise ValueError(
+                        f"Missing required 'cti_path' for gige_camera device '{device_name}'."
+                    )
+
+                self.logger.info(f"Creating GigE Vision camera API for device: {device_name}")
+                device = GigEVisionDevice(
+                    cti_path=cti_path,
+                    camera_index=device_info.get('camera_index', 0),
+                    autostart_stream=device_info.get('autostart_stream', False),
                     name=device_name,
                 )
                 self.devices[device_name] = device
