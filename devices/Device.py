@@ -3,6 +3,7 @@ from logging.handlers import RotatingFileHandler
 import os
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 class Device(ABC):
     """
@@ -84,7 +85,7 @@ class Device(ABC):
         self.logger = self._setup_logger()
         self.logger.info(f"[{self.device_id}] device created.")
 
-    def _setup_logger(self):
+    def _setup_logger(self) -> logging.Logger:
         """Creates a unique, rotating log file for this specific device."""
         # Ensure the log directory exists
         _root_dir = os.environ.get(
@@ -115,67 +116,67 @@ class Device(ABC):
         
     @property
     @abstractmethod
-    def info(self):
+    def info(self) -> dict:
         """
         Access general information about the device.
         This should return a dictionary or structured data containing relevant information about the device.
         """
-        pass
+        ...
     
     @property
     @abstractmethod
-    def connected(self):
+    def connected(self) -> bool:
         """
         Check for connection status.
         This should return True if connected, False otherwise.
         """
-        pass
+        ...
     
     @property
     @abstractmethod
-    def ready(self):
+    def ready(self) -> bool:
         """
         Check if the device is ready for operation.
         This should return True if ready, False otherwise.
         """
-        pass
+        ...
     
     @property
     @abstractmethod
-    def faulted(self):
+    def faulted(self) -> bool:
         """
         Check if the device is in a faulted state.
         This should return True if faulted, False otherwise.
         """
-        pass
+        ...
     
     @property
     @abstractmethod
-    def api(self):
+    def api(self) -> Any:
         """
         Access the device's API or interface for control.
         This should return the API object or interface for the device.
         """
-        pass
+        ...
 
     @abstractmethod
-    def initialize(self):
-        pass
+    def initialize(self) -> None:
+        ...
     
     @abstractmethod
-    def shutdown(self):
-        pass
+    def shutdown(self) -> None:
+        ...
 
     @abstractmethod
-    def clear_fault(self):
+    def clear_fault(self) -> None:
         # TO DO
         # To be implemented by accessories that support fault clearing, if needed
-        pass
+        ...
 
     @abstractmethod
-    def abort(self):
+    def abort(self) -> None:
         """
         Immediately abort any ongoing operation on the device.
         Called when a fault is detected on any device to halt the whole cell.
         """
-        pass
+        ...

@@ -4,6 +4,10 @@ from .Device import Device
 
 __all__ = [
 	"AsyrilEyePlus",
+	"BrainboxesEDDigital",
+	"BrainboxesEDAnalogueInput",
+	"BrainboxesEDAnalogueOutput",
+	"GigEVisionDevice",
 	"MecaRobot",
 	"PlanarMotor",
 	"ArduinoBoard",
@@ -15,6 +19,18 @@ __all__ = [
 
 
 def __getattr__(name):
+	if name == "BrainboxesEDDigital":
+		from .BrainboxesED import BrainboxesEDDigital
+
+		return BrainboxesEDDigital
+	if name == "BrainboxesEDAnalogueInput":
+		from .BrainboxesED import BrainboxesEDAnalogueInput
+
+		return BrainboxesEDAnalogueInput
+	if name == "BrainboxesEDAnalogueOutput":
+		from .BrainboxesED import BrainboxesEDAnalogueOutput
+
+		return BrainboxesEDAnalogueOutput
 	if name == "AsyrilEyePlus":
 		from .Asyril import AsyrilEyePlus
 
@@ -23,6 +39,10 @@ def __getattr__(name):
 		from .MecaRobot import MecaRobot
 
 		return MecaRobot
+	if name == "GigEVisionDevice":
+		from .GigEVisionDevice import GigEVisionDevice
+
+		return GigEVisionDevice
 	if name == "PlanarMotor":
 		from .PlanarMotor import PlanarMotor
 
