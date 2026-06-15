@@ -32,6 +32,27 @@
 #   port: 502                       # Modbus TCP port (optional, default: 502)
 #   slave_id: 1                     # Modbus slave/unit ID (optional, default: 1)
 #
+# --- Brainboxes ED Digital I/O (BrainboxesEDDigital) ---
+#   type: "brainboxes_ed_digital"
+#   ip_address: "192.168.0.74"      # Device IP address
+#   address: 1                       # ED address (optional, default: 1)
+#   port: 9500                       # TCP port (optional, default: 9500)
+#   timeout: 5.0                     # seconds (optional)
+#
+# --- Brainboxes ED Analogue Input (BrainboxesEDAnalogueInput) ---
+#   type: "brainboxes_ed_analogue_input"
+#   ip_address: "192.168.0.75"
+#   address: 1
+#   port: 9500
+#   timeout: 5.0
+#
+# --- Brainboxes ED Analogue Output (BrainboxesEDAnalogueOutput) ---
+#   type: "brainboxes_ed_analogue_output"
+#   ip_address: "192.168.0.76"
+#   address: 1
+#   port: 9500
+#   timeout: 5.0
+#
 # --- LMI Gocator 3D Sensor (LMISensor) ---
 #   type: "lmi"
 #   ip_address: "127.0.0.1"
