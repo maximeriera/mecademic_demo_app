@@ -1,84 +1,20 @@
-# production_context.yaml
-#
-# Runtime production context definition.
-#
-# The file has 3 main sections:
-# 1) settings   -> global behavior for persistence and default reset policy
-# 2) params     -> tunable behavior inputs used by prod logic
-# 3) variables  -> runtime values carried between cycles
-#
-# Notes:
-# - Only existing params/variables can be value-modified from UI/API.
-# - New keys must be added manually in this file.
-# - Type coercion is enforced by backend.
-
 version: 1
-
 settings:
-  # Global persistence mode for context values.
-  # Allowed: memory | disk
-  # - memory: values live in RAM for current process lifetime.
-  # - disk: values are persisted back to this file on updates/events.
   storage_scope: memory
-
-  # If true, backend automatically persists context according to storage_scope.
-  # If false, runtime updates are kept in memory until process restart.
   auto_persist: true
-
-  # Default events that reset entries back to their `default`.
-  # Applied only when an entry does NOT define its own `reset_on`.
-  # Common events: initialize, prod_start, prod_stop, abort, fault
-  # Use `none` (or [none]) to disable resets globally.
   default_reset_events: none
-
 params:
-  # PARAM ENTRY FORMAT
-  # <param_name>:
-  #   type: int | float | bool | str
-  #   default: <typed default value>
-  #   value: <typed runtime value>
-  #   editable_when_idle: true | false
-  #   reset_on: [event, ...]   # optional; if omitted, uses default_reset_events
-  #   reset_on: none           # explicit no-reset override
-  #   persist_scope: memory | disk  # optional override of settings.storage_scope
-  #   description: <free text>
-
   cycle_wait_s:
-    # Allowed types: int | float | bool | str
     type: float
-
-    # Value used when reset is triggered.
     default: 1.0
-
-    # Current runtime value used by production logic.
     value: 1.0
-
-    # If false, value update is rejected from UI/API even when not BUSY.
     editable_when_idle: true
-
-    # Human-readable purpose.
     description: Delay applied in demo prod cycle.
-
 variables:
-  # VARIABLE ENTRY FORMAT
-  # <variable_name>:
-  #   type: int | float | bool | str
-  #   default: <typed default value>
-  #   value: <typed runtime value>
-  #   editable_when_idle: true | false
-  #   reset_on: [event, ...]   # optional; if omitted, uses default_reset_events
-  #   reset_on: none           # explicit no-reset override
-  #   persist_scope: memory | disk  # optional override of settings.storage_scope
-  #   description: <free text>
-
   part_count:
     type: int
     default: 0
     value: 0
     editable_when_idle: false
-
-    # Optional per-entry reset override.
-    # If present, this list is used instead of settings.default_reset_events.
-    # You can also set: reset_on: none
     reset_on: prod_start
     description: Parts processed since production start.

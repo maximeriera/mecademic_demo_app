@@ -3,6 +3,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
+from io import BytesIO
 
 # --- Workspace Setup ---
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -16,8 +17,9 @@ args, _ = parser.parse_known_args()
 workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
 
-from flask import Flask, render_template, jsonify, request, send_from_directory, url_for
+from flask import Flask, render_template, jsonify, request, send_from_directory, url_for, send_file
 from werkzeug.utils import secure_filename
+import yaml
 
 import logging
 from logging.handlers import RotatingFileHandler
@@ -39,20 +41,53 @@ if not logger.handlers:
 # --- Flask Setup ---
 app = Flask(__name__)
 
+app_logic_dir = os.path.join(workspace_path, "app_logic")
+if os.path.isdir(app_logic_dir):
+    CONFIG_PATH = os.path.join(app_logic_dir, "config.yaml")
+    PROD_CTX_PATH = os.path.join(app_logic_dir, "production_context.yaml")
+else:
+    CONFIG_PATH = os.path.join(workspace_path, "config.yaml")
+    PROD_CTX_PATH = os.path.join(workspace_path, "production_context.yaml")
+
+
+def _load_yaml_config(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, 'r', encoding='utf-8') as file:
+        data = yaml.safe_load(file)
+    return data if isinstance(data, dict) else {}
+
+
+def _save_yaml_config(path: str, config_data: dict) -> None:
+    with open(path, 'w', encoding='utf-8') as file:
+        yaml.safe_dump(config_data, file, sort_keys=False, allow_unicode=False)
+
 # --- APPLICATION Controller Instance (Singleton) ---
 # Initialize the controller once outside the routes
 # NOTE: Replace dummy config with your actual Meca 500 connection details
+
+
+def _build_application_controller():
+    from core.ApplicationController import ApplicationController
+    return ApplicationController(config_path=CONFIG_PATH, production_context_path=PROD_CTX_PATH)
+
+
+def _reload_application_controller() -> None:
+    """Recreate the global controller from current YAML config on disk."""
+    global APPLICATION
+    current = APPLICATION
+    replacement = _build_application_controller()
+    APPLICATION = replacement
+    try:
+        if current is not None:
+            current.shutdown()
+    except Exception as shutdown_err:
+        logger.warning(f"Previous ApplicationController shutdown failed during reload: {shutdown_err}")
+
+
 try:
     # We must start the controller in the main thread before starting Flask's server
-    from core.ApplicationController import ApplicationController
-    app_logic_dir = os.path.join(workspace_path, "app_logic")
-    if os.path.isdir(app_logic_dir):
-        config_path = os.path.join(app_logic_dir, "config.yaml")
-        prod_ctx_path = os.path.join(app_logic_dir, "production_context.yaml")
-    else:
-        config_path = os.path.join(workspace_path, "config.yaml")
-        prod_ctx_path = os.path.join(workspace_path, "production_context.yaml")
-    APPLICATION = ApplicationController(config_path=config_path, production_context_path=prod_ctx_path)
+    APPLICATION = _build_application_controller()
     logger.info("ApplicationController initialized successfully.")
 except Exception as e:
     # If connection fails, set a permanent FAULT state
@@ -69,8 +104,11 @@ except Exception as e:
         def initialize(self): return True
         def shutdown(self): pass
         def get_devices_info(self): return {}
+        def get_config_snapshot(self): return {'devices': {}, 'manual_actions': [], 'production_context_file': 'production_context.yaml'}
         def get_manual_actions(self): return []
         def clear_faults(self): pass
+        def control_device(self, device_id, action):
+            raise RuntimeError('Controller is unavailable.')
         def get_prod_context_snapshot(self):
             return {
                 'state': ControllerState.OFF.value,
@@ -95,6 +133,174 @@ def _parse_bool(value, default=False):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEVICE_TYPE_CATALOG = {
+    'mecademic': {
+        'label': 'Mecademic Robot',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+        ],
+    },
+    'asyril': {
+        'label': 'Asyril Eye+ Feeder',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+            {'name': 'recipe', 'label': 'Recipe', 'type': 'int', 'required': True},
+            {'name': 'port', 'label': 'Port', 'type': 'int', 'required': False, 'default': 7171},
+        ],
+    },
+    'arduino': {
+        'label': 'Arduino Board',
+        'fields': [
+            {'name': 'port', 'label': 'Serial Port', 'type': 'string', 'required': True},
+        ],
+    },
+    'planarmotor': {
+        'label': 'Planar Motor',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+        ],
+    },
+    'iologik': {
+        'label': 'ioLogik E1212',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+            {'name': 'port', 'label': 'Port', 'type': 'int', 'required': False, 'default': 502},
+            {'name': 'slave_id', 'label': 'Slave ID', 'type': 'int', 'required': False, 'default': 1},
+        ],
+    },
+    'brainboxes_ed_digital': {
+        'label': 'Brainboxes ED Digital',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+            {'name': 'address', 'label': 'Address', 'type': 'int', 'required': False, 'default': 1},
+            {'name': 'port', 'label': 'Port', 'type': 'int', 'required': False, 'default': 9500},
+            {'name': 'timeout', 'label': 'Timeout (s)', 'type': 'float', 'required': False, 'default': 5.0},
+        ],
+    },
+    'brainboxes_ed_analogue_input': {
+        'label': 'Brainboxes ED Analogue Input',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+            {'name': 'address', 'label': 'Address', 'type': 'int', 'required': False, 'default': 1},
+            {'name': 'port', 'label': 'Port', 'type': 'int', 'required': False, 'default': 9500},
+            {'name': 'timeout', 'label': 'Timeout (s)', 'type': 'float', 'required': False, 'default': 5.0},
+        ],
+    },
+    'brainboxes_ed_analogue_output': {
+        'label': 'Brainboxes ED Analogue Output',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+            {'name': 'address', 'label': 'Address', 'type': 'int', 'required': False, 'default': 1},
+            {'name': 'port', 'label': 'Port', 'type': 'int', 'required': False, 'default': 9500},
+            {'name': 'timeout', 'label': 'Timeout (s)', 'type': 'float', 'required': False, 'default': 5.0},
+        ],
+    },
+    'lmi': {
+        'label': 'LMI Sensor',
+        'fields': [
+            {'name': 'ip_address', 'label': 'IP Address', 'type': 'string', 'required': True},
+            {'name': 'control_port', 'label': 'Control Port', 'type': 'int', 'required': False, 'default': 3190},
+            {'name': 'data_port', 'label': 'Data Port', 'type': 'int', 'required': False, 'default': 3192},
+            {'name': 'health_port', 'label': 'Health Port', 'type': 'int', 'required': False, 'default': 3194},
+            {'name': 'delimiter', 'label': 'Delimiter', 'type': 'string', 'required': False, 'default': ','},
+            {'name': 'terminator', 'label': 'Terminator', 'type': 'string', 'required': False, 'default': '\\r\\n'},
+        ],
+    },
+    'gige_camera': {
+        'label': 'GigE Vision Camera',
+        'fields': [
+            {'name': 'cti_path', 'label': 'CTI Path', 'type': 'string', 'required': True},
+            {'name': 'camera_index', 'label': 'Camera Index', 'type': 'int', 'required': False, 'default': 0},
+            {'name': 'autostart_stream', 'label': 'Auto Start Stream', 'type': 'bool', 'required': False, 'default': False},
+        ],
+    },
+    'zaber': {
+        'label': 'Zaber Axis',
+        'fields': [
+            {'name': 'port', 'label': 'Serial Port', 'type': 'string', 'required': True},
+            {'name': 'axis_number', 'label': 'Axis Number', 'type': 'int', 'required': False, 'default': 1},
+        ],
+    },
+}
+
+
+def _coerce_value(value, type_name):
+    if type_name == 'int':
+        return int(value)
+    if type_name == 'float':
+        return float(value)
+    if type_name == 'bool':
+        return _parse_bool(value, default=False)
+    return str(value)
+
+
+def _normalize_devices_payload(devices_payload: dict) -> dict:
+    if not isinstance(devices_payload, dict):
+        raise ValueError("'devices' must be an object keyed by device name.")
+
+    normalized = {}
+    for raw_device_id, raw_cfg in devices_payload.items():
+        device_id = str(raw_device_id or '').strip()
+        if not device_id:
+            raise ValueError('Device id cannot be empty.')
+        if not isinstance(raw_cfg, dict):
+            raise ValueError(f"Device '{device_id}' configuration must be an object.")
+
+        device_type = str(raw_cfg.get('type', '')).strip().lower()
+        if not device_type:
+            raise ValueError(f"Device '{device_id}' is missing required field 'type'.")
+
+        if device_type not in DEVICE_TYPE_CATALOG:
+            raise ValueError(f"Device '{device_id}' has unsupported type '{device_type}'.")
+
+        schema = DEVICE_TYPE_CATALOG[device_type]
+        cfg = {'type': device_type}
+        for field in schema.get('fields', []):
+            field_name = field['name']
+            required = bool(field.get('required'))
+            if field_name in raw_cfg and raw_cfg[field_name] not in (None, ''):
+                try:
+                    cfg[field_name] = _coerce_value(raw_cfg[field_name], field.get('type', 'string'))
+                except Exception as conv_err:
+                    raise ValueError(
+                        f"Invalid value for '{device_id}.{field_name}': {conv_err}"
+                    ) from conv_err
+            elif required:
+                raise ValueError(f"Device '{device_id}' is missing required field '{field_name}'.")
+            elif 'default' in field:
+                cfg[field_name] = field['default']
+
+        normalized[device_id] = cfg
+
+    return normalized
+
+
+def _normalize_manual_actions_payload(actions_payload) -> list[dict]:
+    if not isinstance(actions_payload, list):
+        raise ValueError("'manual_actions' must be a list.")
+
+    normalized = []
+    seen_keys = set()
+    for index, item in enumerate(actions_payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"manual_actions[{index}] must be an object.")
+
+        key = str(item.get('key', '')).strip()
+        if not key:
+            raise ValueError(f"manual_actions[{index}] is missing required field 'key'.")
+        if key in seen_keys:
+            raise ValueError(f"Duplicate manual action key '{key}'.")
+        seen_keys.add(key)
+
+        entry = {'key': key}
+        for optional in ('label', 'description', 'confirm_title', 'confirm_message'):
+            if optional in item and item[optional] is not None:
+                entry[optional] = str(item[optional])
+        normalized.append(entry)
+
+    return normalized
 
 
 # --- Flask Routes (API Endpoints) ---
@@ -203,6 +409,282 @@ def run_manual_action(action_key):
         return jsonify({'message': f"Unknown manual action '{action_key}'.", 'success': False}), 404
 
     return jsonify({'message': f'Could not start manual action. APPLICATION is {state}.', 'success': False}), 400
+
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Return editable config and device type schema for the Devices tab."""
+    try:
+        config_data = _load_yaml_config(CONFIG_PATH)
+        if 'devices' not in config_data or not isinstance(config_data.get('devices'), dict):
+            config_data['devices'] = {}
+        if 'manual_actions' not in config_data or not isinstance(config_data.get('manual_actions'), list):
+            config_data['manual_actions'] = []
+        if 'production_context_file' not in config_data:
+            config_data['production_context_file'] = 'production_context.yaml'
+
+        return jsonify({
+            'config': config_data,
+            'device_type_catalog': DEVICE_TYPE_CATALOG,
+            'config_path': CONFIG_PATH,
+            'success': True,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to load config: {e}', 'success': False}), 500
+
+
+@app.route('/api/config/devices', methods=['POST'])
+def save_devices_config():
+    """Persist updated devices config and recreate the controller from disk."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        normalized_devices = _normalize_devices_payload(payload.get('devices', {}))
+        config_data = _load_yaml_config(CONFIG_PATH)
+        config_data['devices'] = normalized_devices
+        _save_yaml_config(CONFIG_PATH, config_data)
+        _reload_application_controller()
+        return jsonify({
+            'message': 'Devices configuration saved and controller reloaded.',
+            'count': len(normalized_devices),
+            'success': True,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to save devices config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to save devices config: {e}', 'success': False}), 400
+
+
+@app.route('/api/config/manual_actions', methods=['POST'])
+def save_manual_actions_config():
+    """Persist updated manual actions metadata and recreate the controller from disk."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        normalized_actions = _normalize_manual_actions_payload(payload.get('manual_actions', []))
+        config_data = _load_yaml_config(CONFIG_PATH)
+        config_data['manual_actions'] = normalized_actions
+        _save_yaml_config(CONFIG_PATH, config_data)
+        _reload_application_controller()
+        return jsonify({
+            'message': 'Manual actions configuration saved and controller reloaded.',
+            'count': len(normalized_actions),
+            'success': True,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to save manual actions config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to save manual actions config: {e}', 'success': False}), 400
+
+
+@app.route('/api/config/context', methods=['GET'])
+def get_context_config():
+    """Return parsed production context configuration file for editing."""
+    try:
+        context_data = _load_yaml_config(PROD_CTX_PATH)
+        if not context_data:
+            context_data = {'version': 1, 'settings': {}, 'params': {}, 'variables': {}}
+        raw_yaml = yaml.safe_dump(context_data, sort_keys=False, allow_unicode=False)
+        return jsonify({'context': context_data, 'raw_yaml': raw_yaml, 'path': PROD_CTX_PATH, 'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to load production context config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to load production context config: {e}', 'success': False}), 500
+
+
+@app.route('/api/config/context', methods=['POST'])
+def save_context_config():
+    """Persist updated production context configuration and recreate controller."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        context_data = payload.get('context')
+        raw_yaml = payload.get('raw_yaml')
+
+        if isinstance(raw_yaml, str) and raw_yaml.strip():
+            parsed = yaml.safe_load(raw_yaml)
+            if not isinstance(parsed, dict):
+                raise ValueError('Context YAML must decode to an object.')
+            context_data = parsed
+
+        if not isinstance(context_data, dict):
+            raise ValueError("'context' must be an object or provide 'raw_yaml'.")
+        if 'settings' not in context_data:
+            context_data['settings'] = {}
+        if 'params' not in context_data:
+            context_data['params'] = {}
+        if 'variables' not in context_data:
+            context_data['variables'] = {}
+
+        _save_yaml_config(PROD_CTX_PATH, context_data)
+        _reload_application_controller()
+        return jsonify({'message': 'Production context config saved and controller reloaded.', 'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to save production context config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to save production context config: {e}', 'success': False}), 400
+
+
+@app.route('/api/config/context/import', methods=['POST'])
+def import_context_config():
+    """Import production context YAML file and recreate controller."""
+    uploaded = request.files.get('context')
+    if uploaded is None or not uploaded.filename:
+        return jsonify({'message': 'Context file is required.', 'success': False}), 400
+
+    name = secure_filename(uploaded.filename)
+    if not name.lower().endswith(('.yaml', '.yml')):
+        return jsonify({'message': 'Only .yaml/.yml files are supported.', 'success': False}), 400
+
+    try:
+        raw_text = uploaded.read().decode('utf-8')
+        imported = yaml.safe_load(raw_text) or {}
+        if not isinstance(imported, dict):
+            raise ValueError('Imported context must be a YAML object.')
+
+        _save_yaml_config(PROD_CTX_PATH, imported)
+        _reload_application_controller()
+        return jsonify({'message': 'Production context imported and controller reloaded.', 'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to import production context config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to import production context config: {e}', 'success': False}), 400
+
+
+@app.route('/api/config/context/export', methods=['GET'])
+def export_context_config():
+    """Download current production context YAML file."""
+    try:
+        context_data = _load_yaml_config(PROD_CTX_PATH)
+        payload = yaml.safe_dump(context_data, sort_keys=False, allow_unicode=False)
+        return send_file(
+            BytesIO(payload.encode('utf-8')),
+            mimetype='application/x-yaml',
+            as_attachment=True,
+            download_name='production_context_export.yaml',
+        )
+    except Exception as e:
+        logger.error(f"Failed to export production context config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to export production context config: {e}', 'success': False}), 500
+
+
+@app.route('/api/config/manual_actions/import', methods=['POST'])
+def import_manual_actions_config():
+    """Import manual actions list from YAML file and recreate controller."""
+    uploaded = request.files.get('manual_actions')
+    if uploaded is None or not uploaded.filename:
+        return jsonify({'message': 'Manual actions file is required.', 'success': False}), 400
+
+    name = secure_filename(uploaded.filename)
+    if not name.lower().endswith(('.yaml', '.yml')):
+        return jsonify({'message': 'Only .yaml/.yml files are supported.', 'success': False}), 400
+
+    try:
+        raw_text = uploaded.read().decode('utf-8')
+        imported = yaml.safe_load(raw_text) or []
+        if isinstance(imported, dict) and 'manual_actions' in imported:
+            imported = imported['manual_actions']
+        normalized_actions = _normalize_manual_actions_payload(imported)
+
+        config_data = _load_yaml_config(CONFIG_PATH)
+        config_data['manual_actions'] = normalized_actions
+        _save_yaml_config(CONFIG_PATH, config_data)
+        _reload_application_controller()
+        return jsonify({'message': 'Manual actions imported and controller reloaded.', 'count': len(normalized_actions), 'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to import manual actions config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to import manual actions config: {e}', 'success': False}), 400
+
+
+@app.route('/api/config/manual_actions/export', methods=['GET'])
+def export_manual_actions_config():
+    """Download manual actions list as YAML file."""
+    try:
+        config_data = _load_yaml_config(CONFIG_PATH)
+        actions = config_data.get('manual_actions', []) if isinstance(config_data, dict) else []
+        payload = yaml.safe_dump({'manual_actions': actions}, sort_keys=False, allow_unicode=False)
+        return send_file(
+            BytesIO(payload.encode('utf-8')),
+            mimetype='application/x-yaml',
+            as_attachment=True,
+            download_name='manual_actions_export.yaml',
+        )
+    except Exception as e:
+        logger.error(f"Failed to export manual actions config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to export manual actions config: {e}', 'success': False}), 500
+
+
+@app.route('/api/config/import', methods=['POST'])
+def import_config():
+    """Import a full YAML config file, validate devices section, and reload controller."""
+    uploaded = request.files.get('config')
+    if uploaded is None or not uploaded.filename:
+        return jsonify({'message': 'Config file is required.', 'success': False}), 400
+
+    name = secure_filename(uploaded.filename)
+    if not name.lower().endswith(('.yaml', '.yml')):
+        return jsonify({'message': 'Only .yaml/.yml files are supported.', 'success': False}), 400
+
+    try:
+        raw_text = uploaded.read().decode('utf-8')
+        imported = yaml.safe_load(raw_text) or {}
+        if not isinstance(imported, dict):
+            raise ValueError('Imported content must be a YAML object.')
+
+        imported_devices = imported.get('devices', {})
+        imported['devices'] = _normalize_devices_payload(imported_devices)
+        if 'manual_actions' in imported and not isinstance(imported['manual_actions'], list):
+            raise ValueError("'manual_actions' must be a list when provided.")
+
+        _save_yaml_config(CONFIG_PATH, imported)
+        _reload_application_controller()
+        return jsonify({
+            'message': 'Configuration imported and controller reloaded.',
+            'count': len(imported['devices']),
+            'success': True,
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to import config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to import config: {e}', 'success': False}), 400
+
+
+@app.route('/api/config/export', methods=['GET'])
+def export_config():
+    """Download current YAML config."""
+    try:
+        config_data = _load_yaml_config(CONFIG_PATH)
+        payload = yaml.safe_dump(config_data, sort_keys=False, allow_unicode=False)
+        return send_file(
+            BytesIO(payload.encode('utf-8')),
+            mimetype='application/x-yaml',
+            as_attachment=True,
+            download_name='config_export.yaml',
+        )
+    except Exception as e:
+        logger.error(f"Failed to export config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to export config: {e}', 'success': False}), 500
+
+
+@app.route('/api/config/global/import', methods=['POST'])
+def import_global_config_alias():
+    """Alias endpoint for importing full global config."""
+    return import_config()
+
+
+@app.route('/api/config/global/export', methods=['GET'])
+def export_global_config_alias():
+    """Alias endpoint for exporting full global config."""
+    return export_config()
+
+
+@app.route('/api/devices/<device_id>/control', methods=['POST'])
+def control_device(device_id):
+    """Run direct control/diagnostic action on one configured device."""
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get('action', 'probe')).strip().lower()
+    try:
+        result = APPLICATION.control_device(device_id, action)
+        return jsonify({'message': f"Action '{action}' executed for {device_id}.", 'result': result, 'success': True}), 200
+    except KeyError as e:
+        return jsonify({'message': str(e), 'success': False}), 404
+    except ValueError as e:
+        return jsonify({'message': str(e), 'success': False}), 400
+    except Exception as e:
+        logger.error(f"Device action failed for {device_id}/{action}: {e}", exc_info=True)
+        return jsonify({'message': f'Device action failed: {e}', 'success': False}), 500
 
 @app.route('/api/info', methods=['GET'])
 def get_APPLICATION_info():

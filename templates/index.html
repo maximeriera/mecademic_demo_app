@@ -24,6 +24,7 @@
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-manual" id="tab-btn-manual" onclick="switchTab('manual', this)">Manual</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-config" id="tab-btn-config" onclick="switchTab('config', this)">Config</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
             </nav>
@@ -98,26 +99,9 @@
                 <div class="prod-subtab-shell">
                     <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
                         <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
-                            <span class="prod-subtab-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                    <path d="M4 19V5"></path>
-                                    <path d="M4 19h16"></path>
-                                    <path d="M8 15v-4"></path>
-                                    <path d="M12 15V8"></path>
-                                    <path d="M16 15v-6"></path>
-                                </svg>
-                            </span>
                             <span class="prod-subtab-label">Metrics</span>
                         </button>
                         <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
-                            <span class="prod-subtab-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                    <path d="M4 7h16"></path>
-                                    <path d="M7 7v10"></path>
-                                    <path d="M4 17h16"></path>
-                                    <path d="M14 7v10"></path>
-                                </svg>
-                            </span>
                             <span class="prod-subtab-label">Variables / Params</span>
                         </button>
                     </div>
@@ -179,6 +163,130 @@
                     <button type="button" class="btn-abort" onclick="sendManualAbort()">ABORT</button>
                 </div>
                 <div id="manual-action-log" class="message-log">No recent manual action activity.</div>
+            </div>
+        </div>
+
+        <!-- ===== CONFIG TAB ===== -->
+        <div id="tab-config" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-config" hidden>
+            <div class="section">
+                <div class="section-title">Configuration Workspace</div>
+                <div class="devices-toolbar">
+                    <button type="button" class="btn-task" onclick="exportGlobalConfig()">Export Global Config</button>
+                    <button type="button" class="btn-clear" onclick="openGlobalConfigImportPicker()">Import Global Config</button>
+                    <input type="file" id="global-config-import-input" accept=".yaml,.yml" hidden>
+                </div>
+                <div class="prod-subtab-shell">
+                    <div class="prod-subtab-bar" role="tablist" aria-label="Configuration subpanels">
+                        <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="config-subtab-devices" id="config-subtab-btn-devices" onclick="switchConfigSubTab('devices', this)">
+                            <span class="prod-subtab-label">Devices</span>
+                        </button>
+                        <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="config-subtab-context" id="config-subtab-btn-context" onclick="switchConfigSubTab('context', this)">
+                            <span class="prod-subtab-label">Context Config</span>
+                        </button>
+                        <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="config-subtab-manual" id="config-subtab-btn-manual" onclick="switchConfigSubTab('manual', this)">
+                            <span class="prod-subtab-label">Manual Actions</span>
+                        </button>
+                    </div>
+
+                    <div class="prod-subtab-content">
+                        <div id="config-subtab-devices" class="prod-subtab-panel active" role="tabpanel" aria-labelledby="config-subtab-btn-devices">
+                            <div class="section">
+                                <div class="section-title">Device Configuration</div>
+                                <p class="manual-subtitle">Build your cell configuration from the UI, then save/reload the controller. You can also import or export YAML config files.</p>
+                                <div class="devices-toolbar">
+                                    <button type="button" class="btn-task" onclick="loadDeviceConfig(true)">Refresh</button>
+                                    <button type="button" class="btn-start" onclick="saveDeviceConfig()">Save & Reload</button>
+                                    <button type="button" class="btn-task" onclick="exportDeviceConfig()">Export YAML</button>
+                                    <button type="button" class="btn-clear" onclick="openConfigImportPicker()">Import YAML</button>
+                                    <input type="file" id="device-config-import-input" accept=".yaml,.yml" hidden>
+                                </div>
+                                <div class="devices-add-row">
+                                    <input id="new-device-id" type="text" placeholder="new_device_id">
+                                    <div class="log-select device-type-picker" id="new-device-type-picker">
+                                        <button
+                                            type="button"
+                                            id="new-device-type-trigger"
+                                            class="log-select-trigger"
+                                            aria-haspopup="listbox"
+                                            aria-expanded="false"
+                                            aria-controls="new-device-type-menu"
+                                        >
+                                            <span class="log-select-label">Select device type</span>
+                                        </button>
+                                        <div id="new-device-type-menu" class="log-select-menu" role="listbox" aria-label="Device type selector"></div>
+                                        <select id="new-device-type" class="log-native-select" tabindex="-1" aria-hidden="true"></select>
+                                    </div>
+                                    <button type="button" class="btn-task" onclick="addDeviceFromForm()">Add Device</button>
+                                </div>
+                                <div id="devices-config-log" class="message-log">No device configuration action yet.</div>
+                            </div>
+
+                            <div class="section">
+                                <div class="section-title">Configured Devices</div>
+                                <div id="devices-config-container">
+                                    <p class="empty-state">Loading configuration...</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="config-subtab-context" class="prod-subtab-panel" role="tabpanel" aria-labelledby="config-subtab-btn-context" hidden>
+                            <div class="section">
+                                <div class="section-title">Production Context Config</div>
+                                <p class="manual-subtitle">Configure the production context schema (settings, params, variables) with typed fields, then save to <strong>production_context.yaml</strong>.</p>
+                                <div class="devices-toolbar">
+                                    <button type="button" class="btn-task" onclick="loadContextConfig(true)">Refresh</button>
+                                    <button type="button" class="btn-start" onclick="saveContextConfig()">Save & Reload</button>
+                                    <button type="button" class="btn-task" onclick="exportContextConfig()">Export YAML</button>
+                                    <button type="button" class="btn-clear" onclick="openContextConfigImportPicker()">Import YAML</button>
+                                    <input type="file" id="context-config-import-input" accept=".yaml,.yml" hidden>
+                                </div>
+
+                                <div class="context-config-shell">
+                                    <div class="section-title">Settings</div>
+                                    <div id="context-settings-container"></div>
+
+                                    <div class="section-title">Params</div>
+                                    <div class="context-add-row">
+                                        <input id="new-context-param-key" type="text" placeholder="new_param_key">
+                                        <button type="button" class="btn-task" onclick="addContextEntry('params')">Add Param</button>
+                                    </div>
+                                    <div id="context-params-container"></div>
+
+                                    <div class="section-title">Variables</div>
+                                    <div class="context-add-row">
+                                        <input id="new-context-variable-key" type="text" placeholder="new_variable_key">
+                                        <button type="button" class="btn-task" onclick="addContextEntry('variables')">Add Variable</button>
+                                    </div>
+                                    <div id="context-variables-container"></div>
+                                </div>
+                                <div id="context-config-log" class="message-log">No production context config action yet.</div>
+                            </div>
+                        </div>
+
+                        <div id="config-subtab-manual" class="prod-subtab-panel" role="tabpanel" aria-labelledby="config-subtab-btn-manual" hidden>
+                            <div class="section">
+                                <div class="section-title">Manual Actions Config</div>
+                                <p class="manual-subtitle">Define manual actions metadata used by the Manual tab and runtime action registry mapping.</p>
+                                <div class="devices-toolbar">
+                                    <button type="button" class="btn-task" onclick="loadDeviceConfig(true)">Refresh</button>
+                                    <button type="button" class="btn-start" onclick="saveManualActionsConfig()">Save & Reload</button>
+                                    <button type="button" class="btn-task" onclick="exportManualActionsConfig()">Export YAML</button>
+                                    <button type="button" class="btn-clear" onclick="openManualActionsImportPicker()">Import YAML</button>
+                                    <input type="file" id="manual-actions-import-input" accept=".yaml,.yml" hidden>
+                                </div>
+                                <div class="manual-config-add-row">
+                                    <input id="new-manual-action-key" type="text" placeholder="action_key">
+                                    <input id="new-manual-action-label" type="text" placeholder="Action label">
+                                    <button type="button" class="btn-task" onclick="addManualActionConfig()">Add Action</button>
+                                </div>
+                                <div id="manual-actions-config-container">
+                                    <p class="empty-state">No manual actions configured.</p>
+                                </div>
+                                <div id="manual-config-log" class="message-log">No manual action config action yet.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 

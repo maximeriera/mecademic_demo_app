@@ -1219,7 +1219,7 @@ class EDDigitalDeviceSync:
     def _async_call(self, coro_fn):
         """Helper: open connection, call async function, close connection."""
         async def _wrapped():
-            device = EDDigitalDevice(self.ip_address, self.port, self.timeout_sec)
+            device = EDDigitalDevice(self.ip_address, port = self.port, timeout = self.timeout_sec)
             async with device:
                 return await coro_fn(device)
         return self._run(_wrapped())
@@ -1400,3 +1400,16 @@ class EDAnalogueOutputSync:
         return self._async_call(lambda dev: dev.set_output_value(channel, value))
 
 
+def example_usage():
+    """Example usage of the EDDevice classes."""
+    import time
+    print("=== Digital I/O Device ===")
+    # Example: read digital inputs and set outputs
+    dev = EDDigitalDeviceSync("192.168.0.30")
+    
+    print(dev.read_device_name())
+    print(dev.read_firmware_version())
+    
+if __name__ == "__main__":
+    example_usage()
+    

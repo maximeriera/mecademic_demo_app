@@ -23,6 +23,7 @@ import os
 import threading
 import time
 import yaml
+import copy
 
 from typing import Dict, Any
 
@@ -356,6 +357,58 @@ class ApplicationController:
             all_info[device.device_id] = info
 
         return all_info
+
+    def get_config_snapshot(self) -> Dict[str, Any]:
+        """Return a deep copy of the loaded configuration for API consumers."""
+        return copy.deepcopy(self.config)
+
+    def control_device(self, device_id: str, action: str) -> Dict[str, Any]:
+        """Run a direct control action on one device for diagnostics/commissioning.
+
+        Parameters
+        ----------
+        device_id : str
+            Identifier of the target device.
+        action : str
+            One of ``probe``, ``initialize``, ``shutdown``, ``clear_fault``.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Status snapshot after action execution.
+        """
+        action = str(action or "").strip().lower()
+        if self.get_state() == ControllerState.BUSY:
+            raise RuntimeError("Device controls are unavailable while controller is BUSY.")
+
+        if device_id not in self.devices:
+            raise KeyError(f"Unknown device '{device_id}'.")
+
+        if action not in {"probe", "initialize", "shutdown", "clear_fault"}:
+            raise ValueError("Unsupported action. Use probe, initialize, shutdown, or clear_fault.")
+
+        device = self.devices[device_id]
+        self.logger.info("Device control requested: device_id=%s action=%s", device_id, action)
+
+        if action == "initialize":
+            device.initialize()
+        elif action == "shutdown":
+            device.shutdown()
+        elif action == "clear_fault":
+            device.clear_fault()
+        elif action == "probe":
+            # Probe is non-destructive when already connected; otherwise it attempts init.
+            if not device.connected:
+                device.initialize()
+
+        return {
+            "device_id": device_id,
+            "action": action,
+            "connected": bool(device.connected),
+            "ready": bool(device.ready),
+            "faulted": bool(device.faulted),
+            "info": device.info,
+        }
 
     # --- Task Management ---
 

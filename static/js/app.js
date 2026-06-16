@@ -2,12 +2,18 @@ const stateDisplays = () => Array.from(document.querySelectorAll('.js-robot-stat
 const messageLog   = document.getElementById('message-log');
 let latestProdContext = null;
 let activeProdSubTab = 'metrics';
+let activeConfigSubTab = 'devices';
 let logDropdownInitialized = false;
 let backupRestoreDropdownsInitialized = false;
 let backupRestoreRobots = [];
 let restoreArchiveFile = null;
 let manualActions = [];
 let latestControllerStatus = 'OFF';
+let deviceConfig = { devices: {}, manual_actions: [], production_context_file: 'production_context.yaml' };
+let deviceTypeCatalog = {};
+let deviceTypeDropdownsInitialized = false;
+let manualActionsConfig = [];
+let contextConfigDraft = null;
 
 function normalizeStatus(status) {
     return String(status || '').trim().toUpperCase();
@@ -39,6 +45,42 @@ function switchTab(name, btn) {
     }
     if (name === 'manual') {
         loadManualActions();
+    }
+    if (name === 'config') {
+        loadDeviceConfig();
+        switchConfigSubTab(activeConfigSubTab);
+    }
+}
+
+function switchConfigSubTab(name, btn) {
+    activeConfigSubTab = name;
+
+    document.querySelectorAll('#tab-config .prod-subtab-panel').forEach(panel => {
+        panel.classList.remove('active');
+        panel.hidden = true;
+    });
+    document.querySelectorAll('#tab-config .prod-subtab-btn').forEach(button => {
+        button.classList.remove('active');
+        button.setAttribute('aria-selected', 'false');
+    });
+
+    const activePanel = document.getElementById('config-subtab-' + name);
+    if (activePanel) {
+        activePanel.classList.add('active');
+        activePanel.hidden = false;
+    }
+
+    const activeButton = btn || document.getElementById('config-subtab-btn-' + name);
+    if (activeButton) {
+        activeButton.classList.add('active');
+        activeButton.setAttribute('aria-selected', 'true');
+    }
+
+    if (name === 'context') {
+        loadContextConfig();
+    }
+    if (name === 'manual') {
+        renderManualActionsConfig();
     }
 }
 
@@ -111,6 +153,27 @@ function setBackupRestoreMessage(text, isError = false) {
     const log = document.getElementById('backup-restore-action-log');
     if (!log) return;
     log.textContent = text || 'No backup/restore command activity.';
+    log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function setDevicesConfigMessage(text, isError = false) {
+    const log = document.getElementById('devices-config-log');
+    if (!log) return;
+    log.textContent = text || 'No device configuration action yet.';
+    log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function setContextConfigMessage(text, isError = false) {
+    const log = document.getElementById('context-config-log');
+    if (!log) return;
+    log.textContent = text || 'No production context config action yet.';
+    log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function setManualConfigMessage(text, isError = false) {
+    const log = document.getElementById('manual-config-log');
+    if (!log) return;
+    log.textContent = text || 'No manual action config action yet.';
     log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
 }
 
@@ -796,6 +859,996 @@ function loadRobotInfo() {
         });
 }
 
+/* ---- Device configuration tab ---- */
+function normalizeDeviceType(typeValue) {
+    return String(typeValue || '').trim().toLowerCase();
+}
+
+function deviceResultElementId(deviceId) {
+    return `device-test-result-${encodeURIComponent(deviceId)}`;
+}
+
+function getSortedDeviceTypes() {
+    return Object.keys(deviceTypeCatalog).sort((a, b) => a.localeCompare(b));
+}
+
+function renderNewDeviceTypeOptions() {
+    const select = document.getElementById('new-device-type');
+    if (!select) return;
+
+    const previous = select.value;
+    const options = getSortedDeviceTypes();
+    select.innerHTML = '';
+    options.forEach((typeKey) => {
+        const opt = document.createElement('option');
+        opt.value = typeKey;
+        opt.textContent = deviceTypeCatalog[typeKey].label || typeKey;
+        if (previous && previous === typeKey) opt.selected = true;
+        select.appendChild(opt);
+    });
+    if (!select.value && options.length > 0) {
+        select.value = options[0];
+    }
+    const picker = document.getElementById('new-device-type-picker');
+    if (picker) {
+        renderDeviceTypePickerMenu(picker);
+    }
+}
+
+function renderDeviceTypeSelect(selectedType) {
+    const normalized = normalizeDeviceType(selectedType);
+    const options = getSortedDeviceTypes().map((typeKey) => {
+        const label = deviceTypeCatalog[typeKey].label || typeKey;
+        return `<option value="${escapeHtml(typeKey)}" ${normalized === typeKey ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+    return `
+        <div class="log-select device-type-picker">
+            <button type="button" class="log-select-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="log-select-label">Select device type</span>
+            </button>
+            <div class="log-select-menu" role="listbox" aria-label="Device type selector"></div>
+            <select class="device-type-select log-native-select" tabindex="-1" aria-hidden="true">${options}</select>
+        </div>
+    `;
+}
+
+function setDeviceTypePickerOpen(picker, isOpen) {
+    if (!picker) return;
+    const trigger = picker.querySelector('.log-select-trigger');
+    if (!trigger) return;
+    picker.classList.toggle('open', isOpen);
+    trigger.setAttribute('aria-expanded', String(isOpen));
+}
+
+function updateDeviceTypePickerLabel(picker) {
+    if (!picker) return;
+    const sel = picker.querySelector('select');
+    const label = picker.querySelector('.log-select-label');
+    if (!sel || !label) return;
+
+    const selected = sel.selectedOptions[0];
+    label.textContent = selected ? (selected.textContent || 'Select device type') : 'Select device type';
+}
+
+function renderDeviceTypePickerMenu(picker, onChange = null) {
+    if (!picker) return;
+    const sel = picker.querySelector('select');
+    const menu = picker.querySelector('.log-select-menu');
+    if (!sel || !menu) return;
+
+    menu.innerHTML = '';
+    Array.from(sel.options).forEach((opt) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'log-select-option';
+        btn.dataset.value = opt.value;
+        btn.textContent = opt.textContent || '';
+        btn.setAttribute('role', 'option');
+        const active = opt.value === sel.value;
+        btn.setAttribute('aria-selected', String(active));
+        if (active) btn.classList.add('active');
+
+        btn.addEventListener('click', () => {
+            sel.value = opt.value;
+            renderDeviceTypePickerMenu(picker, onChange);
+            setDeviceTypePickerOpen(picker, false);
+            if (onChange) onChange(opt.value);
+        });
+        menu.appendChild(btn);
+    });
+
+    updateDeviceTypePickerLabel(picker);
+}
+
+function initDeviceTypePicker(picker, onChange = null) {
+    if (!picker || picker.dataset.initialized === 'true') {
+        if (picker && onChange) picker.dataset.onchange = 'true';
+        return;
+    }
+    const trigger = picker.querySelector('.log-select-trigger');
+    if (!trigger) return;
+
+    trigger.addEventListener('click', () => {
+        const isOpen = picker.classList.contains('open');
+        document.querySelectorAll('.device-type-picker.open').forEach((node) => {
+            if (node !== picker) setDeviceTypePickerOpen(node, false);
+        });
+        setDeviceTypePickerOpen(picker, !isOpen);
+    });
+
+    renderDeviceTypePickerMenu(picker, onChange);
+    picker.dataset.initialized = 'true';
+}
+
+function ensureDeviceTypeDropdowns() {
+    if (deviceTypeDropdownsInitialized) return;
+
+    document.addEventListener('click', (event) => {
+        document.querySelectorAll('.device-type-picker').forEach((picker) => {
+            if (picker.contains(event.target)) return;
+            setDeviceTypePickerOpen(picker, false);
+        });
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        document.querySelectorAll('.device-type-picker').forEach((picker) => {
+            setDeviceTypePickerOpen(picker, false);
+        });
+    });
+
+    deviceTypeDropdownsInitialized = true;
+}
+
+function renderDeviceFields(deviceId, cfg) {
+    const typeKey = normalizeDeviceType(cfg.type);
+    const schema = deviceTypeCatalog[typeKey];
+    if (!schema) {
+        return '<p class="empty-state empty-state-error">Unsupported device type.</p>';
+    }
+
+    const rows = (schema.fields || []).map((field) => {
+        const fieldName = field.name;
+        const value = Object.prototype.hasOwnProperty.call(cfg, fieldName)
+            ? cfg[fieldName]
+            : field.default;
+
+        let inputHtml = '';
+        if (field.type === 'bool') {
+            inputHtml = `<input type="checkbox" class="device-field-input" data-field="${escapeHtml(fieldName)}" ${value ? 'checked' : ''}>`;
+        } else {
+            const inputType = (field.type === 'int' || field.type === 'float') ? 'number' : 'text';
+            const step = field.type === 'float' ? 'step="any"' : '';
+            inputHtml = `<input type="${inputType}" ${step} class="device-field-input" data-field="${escapeHtml(fieldName)}" value="${escapeHtml(value ?? '')}">`;
+        }
+
+        return `
+            <div class="device-field-row">
+                <label>${escapeHtml(field.label || fieldName)}${field.required ? ' *' : ''}</label>
+                ${inputHtml}
+            </div>
+        `;
+    }).join('');
+
+    return rows || '<p class="empty-state">No extra fields for this device type.</p>';
+}
+
+function renderDeviceConfigCards() {
+    const container = document.getElementById('devices-config-container');
+    if (!container) return;
+
+    const devices = deviceConfig.devices || {};
+    const deviceIds = Object.keys(devices);
+    if (deviceIds.length === 0) {
+        container.innerHTML = '<p class="empty-state">No devices configured. Add one above.</p>';
+        return;
+    }
+
+    container.innerHTML = deviceIds.map((deviceId) => {
+        const cfg = devices[deviceId] || {};
+        const encodedId = encodeURIComponent(deviceId);
+        return `
+            <div class="device-config-card" data-device-id="${escapeHtml(deviceId)}">
+                <div class="device-config-header">
+                    <div class="device-config-id">${escapeHtml(deviceId)}</div>
+                    <button type="button" class="btn-shutdown" onclick="removeDeviceByEncoded('${encodedId}')">Remove</button>
+                </div>
+                <div class="device-config-body">
+                    <div class="device-field-row">
+                        <label>Type</label>
+                        ${renderDeviceTypeSelect(cfg.type)}
+                    </div>
+                    <div class="device-fields-container">
+                        ${renderDeviceFields(deviceId, cfg)}
+                    </div>
+                    <div class="devices-test-row">
+                        <button type="button" class="btn-task" onclick="runDeviceControlByEncoded('${encodedId}','probe')">Probe</button>
+                        <button type="button" class="btn-init" onclick="runDeviceControlByEncoded('${encodedId}','initialize')">Initialize</button>
+                        <button type="button" class="btn-shutdown" onclick="runDeviceControlByEncoded('${encodedId}','shutdown')">Shutdown</button>
+                        <button type="button" class="btn-clear" onclick="runDeviceControlByEncoded('${encodedId}','clear_fault')">Clear Fault</button>
+                    </div>
+                    <div class="device-test-result" id="${escapeHtml(deviceResultElementId(deviceId))}">No direct action executed yet.</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.device-config-card').forEach((card) => {
+        const deviceId = card.dataset.deviceId;
+        const typeSelect = card.querySelector('.device-type-select');
+        const picker = card.querySelector('.device-type-picker');
+        if (!typeSelect) return;
+
+        initDeviceTypePicker(picker, () => {
+            const cfg = deviceConfig.devices[deviceId];
+            if (!cfg) return;
+            cfg.type = normalizeDeviceType(typeSelect.value);
+            const fieldsWrap = card.querySelector('.device-fields-container');
+            if (fieldsWrap) {
+                fieldsWrap.innerHTML = renderDeviceFields(deviceId, cfg);
+            }
+        });
+    });
+}
+
+function loadDeviceConfig(notify = false) {
+    fetch('/api/config')
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Failed to load config.');
+            }
+            deviceConfig = data.config || { devices: {} };
+            manualActionsConfig = Array.isArray(deviceConfig.manual_actions) ? [...deviceConfig.manual_actions] : [];
+            deviceTypeCatalog = data.device_type_catalog || {};
+            renderNewDeviceTypeOptions();
+            renderDeviceConfigCards();
+            renderManualActionsConfig();
+            initDeviceTypePicker(document.getElementById('new-device-type-picker'));
+            if (notify) {
+                setDevicesConfigMessage('Configuration refreshed.', false);
+            }
+        })
+        .catch((err) => {
+            const container = document.getElementById('devices-config-container');
+            if (container) {
+                container.innerHTML = `<p class="empty-state empty-state-error">${escapeHtml(err.message || 'Failed to load configuration.')}</p>`;
+            }
+            setDevicesConfigMessage(err.message || 'Failed to load configuration.', true);
+        });
+}
+
+function readDeviceCardsToConfig() {
+    const nextDevices = {};
+    document.querySelectorAll('#devices-config-container .device-config-card').forEach((card) => {
+        const deviceId = String(card.dataset.deviceId || '').trim();
+        if (!deviceId) return;
+
+        const typeSelect = card.querySelector('.device-type-select');
+        const type = normalizeDeviceType(typeSelect?.value || '');
+        const cfg = { type };
+
+        card.querySelectorAll('.device-field-input').forEach((input) => {
+            const field = input.dataset.field;
+            if (!field) return;
+            if (input.type === 'checkbox') {
+                cfg[field] = !!input.checked;
+            } else {
+                cfg[field] = input.value;
+            }
+        });
+
+        nextDevices[deviceId] = cfg;
+    });
+
+    return nextDevices;
+}
+
+function saveDeviceConfig() {
+    const payload = { devices: readDeviceCardsToConfig() };
+    fetch('/api/config/devices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Failed to save config.');
+            }
+            setMessage(data.message || 'Configuration saved.');
+            setDevicesConfigMessage(data.message || 'Configuration saved.', false);
+            loadDeviceConfig();
+            loadRobotInfo();
+        })
+        .catch((err) => {
+            const msg = err.message || 'Failed to save config.';
+            setMessage(msg);
+            setDevicesConfigMessage(msg, true);
+        });
+}
+
+function addDeviceFromForm() {
+    const idInput = document.getElementById('new-device-id');
+    const typeSelect = document.getElementById('new-device-type');
+    if (!idInput || !typeSelect) return;
+
+    const deviceId = String(idInput.value || '').trim();
+    const deviceType = normalizeDeviceType(typeSelect.value);
+    if (!deviceId) {
+        setDevicesConfigMessage('Enter a device id before adding.', true);
+        return;
+    }
+    if (Object.prototype.hasOwnProperty.call(deviceConfig.devices || {}, deviceId)) {
+        setDevicesConfigMessage(`Device '${deviceId}' already exists.`, true);
+        return;
+    }
+    if (!deviceTypeCatalog[deviceType]) {
+        setDevicesConfigMessage('Select a supported device type.', true);
+        return;
+    }
+
+    const newCfg = { type: deviceType };
+    (deviceTypeCatalog[deviceType].fields || []).forEach((field) => {
+        if (!field.required && !Object.prototype.hasOwnProperty.call(field, 'default')) {
+            return;
+        }
+        if (Object.prototype.hasOwnProperty.call(field, 'default')) {
+            newCfg[field.name] = field.default;
+            return;
+        }
+        if (field.type === 'bool') newCfg[field.name] = false;
+        else newCfg[field.name] = '';
+    });
+
+    if (!deviceConfig.devices) deviceConfig.devices = {};
+    deviceConfig.devices[deviceId] = newCfg;
+    idInput.value = '';
+    renderDeviceConfigCards();
+    setDevicesConfigMessage(`Device '${deviceId}' added (not saved yet).`, false);
+}
+
+function removeDevice(deviceId) {
+    if (!deviceConfig.devices || !Object.prototype.hasOwnProperty.call(deviceConfig.devices, deviceId)) {
+        return;
+    }
+    delete deviceConfig.devices[deviceId];
+    renderDeviceConfigCards();
+    setDevicesConfigMessage(`Device '${deviceId}' removed (not saved yet).`, false);
+}
+
+function removeDeviceByEncoded(encodedDeviceId) {
+    removeDevice(decodeURIComponent(encodedDeviceId));
+}
+
+function runDeviceControlByEncoded(encodedDeviceId, action) {
+    runDeviceControl(decodeURIComponent(encodedDeviceId), action);
+}
+
+function runDeviceControl(deviceId, action) {
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            const target = document.getElementById(deviceResultElementId(deviceId));
+            const msg = data.message || `Action '${action}' completed.`;
+            if (!ok || data.success === false) {
+                if (target) {
+                    target.textContent = msg;
+                    target.className = 'device-test-result device-test-result-error';
+                }
+                setDevicesConfigMessage(msg, true);
+                return;
+            }
+
+            const result = data.result || {};
+            const statusText = `connected=${result.connected} ready=${result.ready} faulted=${result.faulted}`;
+            if (target) {
+                target.textContent = `${msg} (${statusText})`;
+                target.className = 'device-test-result device-test-result-ok';
+            }
+            setDevicesConfigMessage(`${msg} (${statusText})`, false);
+            loadRobotInfo();
+        })
+        .catch(() => {
+            const target = document.getElementById(deviceResultElementId(deviceId));
+            const msg = `Action '${action}' failed for ${deviceId}.`;
+            if (target) {
+                target.textContent = msg;
+                target.className = 'device-test-result device-test-result-error';
+            }
+            setDevicesConfigMessage(msg, true);
+        });
+}
+
+function openConfigImportPicker() {
+    const input = document.getElementById('device-config-import-input');
+    if (input) input.click();
+}
+
+function importDeviceConfig(file) {
+    if (!file) {
+        setDevicesConfigMessage('Choose a .yaml/.yml file to import.', true);
+        return;
+    }
+    const formData = new FormData();
+    formData.append('config', file);
+
+    fetch('/api/config/import', { method: 'POST', body: formData })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Import failed.');
+            }
+            setDevicesConfigMessage(data.message || 'Configuration imported.', false);
+            setMessage(data.message || 'Configuration imported.');
+            loadDeviceConfig();
+            loadRobotInfo();
+        })
+        .catch((err) => {
+            setDevicesConfigMessage(err.message || 'Import failed.', true);
+        });
+}
+
+function exportDeviceConfig() {
+    window.location.href = '/api/config/export';
+}
+
+function exportGlobalConfig() {
+    window.location.href = '/api/config/global/export';
+}
+
+function openGlobalConfigImportPicker() {
+    const input = document.getElementById('global-config-import-input');
+    if (input) input.click();
+}
+
+function importGlobalConfig(file) {
+    if (!file) {
+        setDevicesConfigMessage('Choose a .yaml/.yml file to import global config.', true);
+        return;
+    }
+    const formData = new FormData();
+    formData.append('config', file);
+
+    fetch('/api/config/global/import', { method: 'POST', body: formData })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Global config import failed.');
+            }
+            const msg = data.message || 'Global config imported.';
+            setMessage(msg);
+            setDevicesConfigMessage(msg, false);
+            setManualConfigMessage(msg, false);
+            setContextConfigMessage(msg, false);
+            loadDeviceConfig();
+            loadManualActions();
+            loadContextConfig();
+            loadRobotInfo();
+            refreshProdContext();
+        })
+        .catch((err) => {
+            const msg = err.message || 'Global config import failed.';
+            setDevicesConfigMessage(msg, true);
+        });
+}
+
+/* ---- Context config editor ---- */
+function toContextEntryList(entriesObj) {
+    if (!entriesObj || typeof entriesObj !== 'object') return [];
+    return Object.entries(entriesObj).map(([key, entry]) => ({
+        key,
+        type: entry?.type || 'str',
+        default: entry?.default,
+        value: entry?.value,
+        editable_when_idle: !!entry?.editable_when_idle,
+        reset_on: entry?.reset_on,
+        persist_scope: entry?.persist_scope || '',
+        description: entry?.description || '',
+    }));
+}
+
+function normalizeContextDraft(context) {
+    const settings = (context && typeof context.settings === 'object') ? context.settings : {};
+    return {
+        version: Number.isFinite(Number(context?.version)) ? Number(context.version) : 1,
+        settings: {
+            storage_scope: String(settings.storage_scope || 'memory'),
+            auto_persist: settings.auto_persist !== false,
+            default_reset_events: settings.default_reset_events ?? 'none',
+        },
+        params: toContextEntryList(context?.params),
+        variables: toContextEntryList(context?.variables),
+    };
+}
+
+function formatResetOnForInput(value) {
+    if (Array.isArray(value)) return value.join(', ');
+    if (value === undefined || value === null) return '';
+    return String(value);
+}
+
+function renderTypedValueInput(namespace, index, fieldName, typeName, value) {
+    const safeValue = value ?? '';
+    if (typeName === 'bool') {
+        return `<input type="checkbox" ${safeValue ? 'checked' : ''} onchange="updateContextEntryBool('${namespace}', ${index}, '${fieldName}', this.checked)">`;
+    }
+    const inputType = (typeName === 'int' || typeName === 'float') ? 'number' : 'text';
+    const step = typeName === 'float' ? ' step="any"' : '';
+    return `<input type="${inputType}"${step} value="${escapeHtml(String(safeValue))}" oninput="updateContextEntryValue('${namespace}', ${index}, '${fieldName}', this.value)">`;
+}
+
+function renderContextSettingsEditor() {
+    const container = document.getElementById('context-settings-container');
+    if (!container || !contextConfigDraft) return;
+
+    const settings = contextConfigDraft.settings;
+    container.innerHTML = `
+        <div class="device-config-card">
+            <div class="device-config-body">
+                <div class="device-field-row">
+                    <label>Storage Scope</label>
+                    <select onchange="updateContextSetting('storage_scope', this.value)">
+                        <option value="memory" ${settings.storage_scope === 'memory' ? 'selected' : ''}>memory</option>
+                        <option value="disk" ${settings.storage_scope === 'disk' ? 'selected' : ''}>disk</option>
+                    </select>
+                </div>
+                <div class="device-field-row">
+                    <label>Auto Persist</label>
+                    <input type="checkbox" ${settings.auto_persist ? 'checked' : ''} onchange="updateContextSettingBool('auto_persist', this.checked)">
+                </div>
+                <div class="device-field-row">
+                    <label>Default Reset Events</label>
+                    <input type="text" value="${escapeHtml(formatResetOnForInput(settings.default_reset_events))}" placeholder="none or initialize,prod_start" oninput="updateContextSetting('default_reset_events', this.value)">
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderContextEntryCards(namespace) {
+    const container = document.getElementById(`context-${namespace}-container`);
+    if (!container || !contextConfigDraft) return;
+
+    const entries = Array.isArray(contextConfigDraft[namespace]) ? contextConfigDraft[namespace] : [];
+    if (entries.length === 0) {
+        container.innerHTML = '<p class="empty-state">No entries configured.</p>';
+        return;
+    }
+
+    container.innerHTML = entries.map((entry, index) => {
+        const typeName = String(entry.type || 'str');
+        return `
+            <div class="device-config-card">
+                <div class="device-config-header">
+                    <div class="device-config-id">${escapeHtml(entry.key || `entry_${index + 1}`)}</div>
+                    <button type="button" class="btn-shutdown" onclick="removeContextEntry('${namespace}', ${index})">Remove</button>
+                </div>
+                <div class="device-config-body">
+                    <div class="device-field-row">
+                        <label>Key</label>
+                        <input type="text" value="${escapeHtml(entry.key || '')}" oninput="updateContextEntryValue('${namespace}', ${index}, 'key', this.value)">
+                    </div>
+                    <div class="device-field-row">
+                        <label>Type</label>
+                        <select onchange="updateContextEntryType('${namespace}', ${index}, this.value)">
+                            <option value="int" ${typeName === 'int' ? 'selected' : ''}>int</option>
+                            <option value="float" ${typeName === 'float' ? 'selected' : ''}>float</option>
+                            <option value="bool" ${typeName === 'bool' ? 'selected' : ''}>bool</option>
+                            <option value="str" ${typeName === 'str' ? 'selected' : ''}>str</option>
+                        </select>
+                    </div>
+                    <div class="device-field-row">
+                        <label>Default</label>
+                        ${renderTypedValueInput(namespace, index, 'default', typeName, entry.default)}
+                    </div>
+                    <div class="device-field-row">
+                        <label>Value</label>
+                        ${renderTypedValueInput(namespace, index, 'value', typeName, entry.value)}
+                    </div>
+                    <div class="device-field-row">
+                        <label>Editable When Idle</label>
+                        <input type="checkbox" ${entry.editable_when_idle ? 'checked' : ''} onchange="updateContextEntryBool('${namespace}', ${index}, 'editable_when_idle', this.checked)">
+                    </div>
+                    <div class="device-field-row">
+                        <label>Reset On</label>
+                        <input type="text" value="${escapeHtml(formatResetOnForInput(entry.reset_on))}" placeholder="none or initialize,prod_start" oninput="updateContextEntryValue('${namespace}', ${index}, 'reset_on', this.value)">
+                    </div>
+                    <div class="device-field-row">
+                        <label>Persist Scope</label>
+                        <select onchange="updateContextEntryValue('${namespace}', ${index}, 'persist_scope', this.value)">
+                            <option value="" ${!entry.persist_scope ? 'selected' : ''}>inherit settings</option>
+                            <option value="memory" ${entry.persist_scope === 'memory' ? 'selected' : ''}>memory</option>
+                            <option value="disk" ${entry.persist_scope === 'disk' ? 'selected' : ''}>disk</option>
+                        </select>
+                    </div>
+                    <div class="device-field-row">
+                        <label>Description</label>
+                        <textarea class="context-entry-textarea" oninput="updateContextEntryValue('${namespace}', ${index}, 'description', this.value)">${escapeHtml(entry.description || '')}</textarea>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderContextConfigEditor() {
+    renderContextSettingsEditor();
+    renderContextEntryCards('params');
+    renderContextEntryCards('variables');
+}
+
+function updateContextSetting(field, value) {
+    if (!contextConfigDraft) return;
+    contextConfigDraft.settings[field] = value;
+}
+
+function updateContextSettingBool(field, value) {
+    if (!contextConfigDraft) return;
+    contextConfigDraft.settings[field] = !!value;
+}
+
+function updateContextEntryValue(namespace, index, field, value) {
+    const entries = contextConfigDraft?.[namespace];
+    if (!Array.isArray(entries) || !entries[index]) return;
+    entries[index][field] = value;
+}
+
+function updateContextEntryBool(namespace, index, field, value) {
+    const entries = contextConfigDraft?.[namespace];
+    if (!Array.isArray(entries) || !entries[index]) return;
+    entries[index][field] = !!value;
+}
+
+function updateContextEntryType(namespace, index, value) {
+    const entries = contextConfigDraft?.[namespace];
+    if (!Array.isArray(entries) || !entries[index]) return;
+    entries[index].type = value;
+    renderContextEntryCards(namespace);
+}
+
+function addContextEntry(namespace) {
+    if (!contextConfigDraft || !Array.isArray(contextConfigDraft[namespace])) return;
+    const keyInputId = namespace === 'params' ? 'new-context-param-key' : 'new-context-variable-key';
+    const keyInput = document.getElementById(keyInputId);
+    const key = String(keyInput?.value || '').trim();
+    if (!key) {
+        setContextConfigMessage(`Enter a ${namespace === 'params' ? 'param' : 'variable'} key before adding.`, true);
+        return;
+    }
+    if (contextConfigDraft[namespace].some((entry) => String(entry.key || '').trim() === key)) {
+        setContextConfigMessage(`Key '${key}' already exists in ${namespace}.`, true);
+        return;
+    }
+
+    contextConfigDraft[namespace].push({
+        key,
+        type: 'str',
+        default: '',
+        value: '',
+        editable_when_idle: true,
+        reset_on: '',
+        persist_scope: '',
+        description: '',
+    });
+    if (keyInput) keyInput.value = '';
+    renderContextEntryCards(namespace);
+    setContextConfigMessage(`Added ${namespace.slice(0, -1)} '${key}' (not saved yet).`, false);
+}
+
+function removeContextEntry(namespace, index) {
+    const entries = contextConfigDraft?.[namespace];
+    if (!Array.isArray(entries) || !entries[index]) return;
+    const key = entries[index].key || `${namespace.slice(0, -1)}_${index + 1}`;
+    entries.splice(index, 1);
+    renderContextEntryCards(namespace);
+    setContextConfigMessage(`Removed ${namespace.slice(0, -1)} '${key}' (not saved yet).`, false);
+}
+
+function parseResetEvents(raw) {
+    const text = String(raw ?? '').trim();
+    if (!text) return undefined;
+    if (text.toLowerCase() === 'none') return 'none';
+    const parts = text.split(',').map((item) => item.trim()).filter(Boolean);
+    return parts.length ? parts : 'none';
+}
+
+function coerceContextTypedValue(raw, typeName, fieldLabel) {
+    if (typeName === 'bool') {
+        if (typeof raw === 'boolean') return raw;
+        const txt = String(raw ?? '').trim().toLowerCase();
+        return ['1', 'true', 'yes', 'on'].includes(txt);
+    }
+    if (typeName === 'int') {
+        const parsed = parseInt(String(raw ?? '').trim(), 10);
+        if (Number.isNaN(parsed)) throw new Error(`${fieldLabel} must be an integer.`);
+        return parsed;
+    }
+    if (typeName === 'float') {
+        const parsed = parseFloat(String(raw ?? '').trim());
+        if (Number.isNaN(parsed)) throw new Error(`${fieldLabel} must be a number.`);
+        return parsed;
+    }
+    return String(raw ?? '');
+}
+
+function buildContextPayloadFromDraft() {
+    if (!contextConfigDraft) {
+        throw new Error('Context config is not loaded.');
+    }
+
+    const convertEntries = (entries, namespaceName) => {
+        const out = {};
+        (entries || []).forEach((entry, idx) => {
+            const key = String(entry.key || '').trim();
+            if (!key) {
+                throw new Error(`${namespaceName} entry #${idx + 1} is missing a key.`);
+            }
+            if (Object.prototype.hasOwnProperty.call(out, key)) {
+                throw new Error(`${namespaceName} key '${key}' is duplicated.`);
+            }
+
+            const typeName = String(entry.type || 'str');
+            const normalized = {
+                type: typeName,
+                default: coerceContextTypedValue(entry.default, typeName, `${namespaceName}.${key}.default`),
+                value: coerceContextTypedValue(entry.value, typeName, `${namespaceName}.${key}.value`),
+                editable_when_idle: !!entry.editable_when_idle,
+            };
+
+            const parsedReset = parseResetEvents(entry.reset_on);
+            if (parsedReset !== undefined) normalized.reset_on = parsedReset;
+
+            const persistScope = String(entry.persist_scope || '').trim();
+            if (persistScope) normalized.persist_scope = persistScope;
+
+            const description = String(entry.description || '').trim();
+            if (description) normalized.description = description;
+
+            out[key] = normalized;
+        });
+        return out;
+    };
+
+    const defaultResetEvents = parseResetEvents(contextConfigDraft.settings.default_reset_events);
+    const settings = {
+        storage_scope: String(contextConfigDraft.settings.storage_scope || 'memory'),
+        auto_persist: !!contextConfigDraft.settings.auto_persist,
+    };
+    if (defaultResetEvents !== undefined) {
+        settings.default_reset_events = defaultResetEvents;
+    }
+
+    return {
+        version: Number.isFinite(Number(contextConfigDraft.version)) ? Number(contextConfigDraft.version) : 1,
+        settings,
+        params: convertEntries(contextConfigDraft.params, 'params'),
+        variables: convertEntries(contextConfigDraft.variables, 'variables'),
+    };
+}
+
+function loadContextConfig(notify = false) {
+    fetch('/api/config/context')
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Failed to load production context config.');
+            }
+            contextConfigDraft = normalizeContextDraft(data.context || {});
+            renderContextConfigEditor();
+            if (notify) {
+                setContextConfigMessage('Production context config refreshed.', false);
+            }
+        })
+        .catch((err) => {
+            setContextConfigMessage(err.message || 'Failed to load production context config.', true);
+        });
+}
+
+function saveContextConfig() {
+    let contextPayload;
+    try {
+        contextPayload = buildContextPayloadFromDraft();
+    } catch (validationErr) {
+        setContextConfigMessage(validationErr.message || 'Invalid context config values.', true);
+        return;
+    }
+
+    fetch('/api/config/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: contextPayload }),
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Failed to save production context config.');
+            }
+            const msg = data.message || 'Production context config saved.';
+            setMessage(msg);
+            setContextConfigMessage(msg, false);
+            refreshProdContext();
+        })
+        .catch((err) => {
+            setContextConfigMessage(err.message || 'Failed to save production context config.', true);
+        });
+}
+
+function exportContextConfig() {
+    window.location.href = '/api/config/context/export';
+}
+
+function openContextConfigImportPicker() {
+    const input = document.getElementById('context-config-import-input');
+    if (input) input.click();
+}
+
+function importContextConfig(file) {
+    if (!file) {
+        setContextConfigMessage('Choose a .yaml/.yml file to import context config.', true);
+        return;
+    }
+    const formData = new FormData();
+    formData.append('context', file);
+
+    fetch('/api/config/context/import', { method: 'POST', body: formData })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Context config import failed.');
+            }
+            const msg = data.message || 'Production context imported.';
+            setMessage(msg);
+            setContextConfigMessage(msg, false);
+            loadContextConfig();
+            refreshProdContext();
+        })
+        .catch((err) => {
+            setContextConfigMessage(err.message || 'Context config import failed.', true);
+        });
+}
+
+/* ---- Manual actions config editor ---- */
+function renderManualActionsConfig() {
+    const container = document.getElementById('manual-actions-config-container');
+    if (!container) return;
+
+    if (!Array.isArray(manualActionsConfig) || manualActionsConfig.length === 0) {
+        container.innerHTML = '<p class="empty-state">No manual actions configured.</p>';
+        return;
+    }
+
+    container.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'manual-actions-grid';
+
+    manualActionsConfig.forEach((item, index) => {
+        const card = document.createElement('div');
+        card.className = 'manual-action-card';
+
+        const key = document.createElement('div');
+        key.className = 'manual-action-key';
+        key.textContent = item.key || '';
+        card.appendChild(key);
+
+        const label = document.createElement('input');
+        label.type = 'text';
+        label.className = 'manual-config-input';
+        label.value = item.label || '';
+        label.placeholder = 'Label';
+        label.addEventListener('input', () => {
+            manualActionsConfig[index].label = label.value;
+        });
+        card.appendChild(label);
+
+        const description = document.createElement('textarea');
+        description.className = 'manual-config-textarea';
+        description.value = item.description || '';
+        description.placeholder = 'Description';
+        description.addEventListener('input', () => {
+            manualActionsConfig[index].description = description.value;
+        });
+        card.appendChild(description);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn-shutdown';
+        removeBtn.textContent = 'Remove';
+        removeBtn.addEventListener('click', () => {
+            manualActionsConfig.splice(index, 1);
+            renderManualActionsConfig();
+        });
+        card.appendChild(removeBtn);
+
+        grid.appendChild(card);
+    });
+
+    container.appendChild(grid);
+}
+
+function addManualActionConfig() {
+    const keyInput = document.getElementById('new-manual-action-key');
+    const labelInput = document.getElementById('new-manual-action-label');
+    if (!keyInput || !labelInput) return;
+
+    const key = String(keyInput.value || '').trim();
+    const label = String(labelInput.value || '').trim();
+    if (!key) {
+        setManualConfigMessage('Action key is required.', true);
+        return;
+    }
+    if (manualActionsConfig.some((item) => item.key === key)) {
+        setManualConfigMessage(`Action key '${key}' already exists.`, true);
+        return;
+    }
+
+    manualActionsConfig.push({ key, label, description: '' });
+    keyInput.value = '';
+    labelInput.value = '';
+    renderManualActionsConfig();
+    setManualConfigMessage(`Manual action '${key}' added (not saved yet).`, false);
+}
+
+function saveManualActionsConfig() {
+    fetch('/api/config/manual_actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual_actions: manualActionsConfig }),
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Failed to save manual actions config.');
+            }
+            const msg = data.message || 'Manual actions config saved.';
+            setMessage(msg);
+            setManualConfigMessage(msg, false);
+            loadManualActions();
+            loadDeviceConfig();
+        })
+        .catch((err) => {
+            setManualConfigMessage(err.message || 'Failed to save manual actions config.', true);
+        });
+}
+
+function exportManualActionsConfig() {
+    window.location.href = '/api/config/manual_actions/export';
+}
+
+function openManualActionsImportPicker() {
+    const input = document.getElementById('manual-actions-import-input');
+    if (input) input.click();
+}
+
+function importManualActionsConfig(file) {
+    if (!file) {
+        setManualConfigMessage('Choose a .yaml/.yml file to import manual actions.', true);
+        return;
+    }
+    const formData = new FormData();
+    formData.append('manual_actions', file);
+
+    fetch('/api/config/manual_actions/import', { method: 'POST', body: formData })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Manual actions import failed.');
+            }
+            const msg = data.message || 'Manual actions imported.';
+            setMessage(msg);
+            setManualConfigMessage(msg, false);
+            loadDeviceConfig();
+            loadManualActions();
+        })
+        .catch((err) => {
+            setManualConfigMessage(err.message || 'Manual actions import failed.', true);
+        });
+}
+
 /* ---- Backup / restore tab ---- */
 function loadBackupRestoreRobots() {
     fetch('/api/backup_restore/robots')
@@ -1359,8 +2412,54 @@ updateRobotStatus();
 loadRobotInfo();
 refreshProdContext();
 loadManualActions();
+loadDeviceConfig();
 initRestoreDropzone();
 ensureBackupRestoreDropdowns();
+ensureDeviceTypeDropdowns();
 renderBackupRestoreSelectMenu('backup-robot-picker');
 renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
+
+const configImportInput = document.getElementById('device-config-import-input');
+if (configImportInput) {
+    configImportInput.addEventListener('change', () => {
+        const file = configImportInput.files && configImportInput.files.length > 0
+            ? configImportInput.files[0]
+            : null;
+        importDeviceConfig(file);
+        configImportInput.value = '';
+    });
+}
+
+const globalConfigImportInput = document.getElementById('global-config-import-input');
+if (globalConfigImportInput) {
+    globalConfigImportInput.addEventListener('change', () => {
+        const file = globalConfigImportInput.files && globalConfigImportInput.files.length > 0
+            ? globalConfigImportInput.files[0]
+            : null;
+        importGlobalConfig(file);
+        globalConfigImportInput.value = '';
+    });
+}
+
+const contextConfigImportInput = document.getElementById('context-config-import-input');
+if (contextConfigImportInput) {
+    contextConfigImportInput.addEventListener('change', () => {
+        const file = contextConfigImportInput.files && contextConfigImportInput.files.length > 0
+            ? contextConfigImportInput.files[0]
+            : null;
+        importContextConfig(file);
+        contextConfigImportInput.value = '';
+    });
+}
+
+const manualActionsImportInput = document.getElementById('manual-actions-import-input');
+if (manualActionsImportInput) {
+    manualActionsImportInput.addEventListener('change', () => {
+        const file = manualActionsImportInput.files && manualActionsImportInput.files.length > 0
+            ? manualActionsImportInput.files[0]
+            : null;
+        importManualActionsConfig(file);
+        manualActionsImportInput.value = '';
+    });
+}

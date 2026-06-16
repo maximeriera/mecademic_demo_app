@@ -192,7 +192,7 @@ body {
 @media (max-width: 1024px) {
     .tab-bar {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(6, 1fr);
         gap: 8px;
         margin-top: 0;
         padding-bottom: 12px;
@@ -226,15 +226,16 @@ body {
     background: rgba(255,255,255,0.06);
     transform: translateY(-1px);
 }
-        content: "";
-        margin-top: 0;
-        right: -24px;
-        top: 50%;
-        transform: translateY(-50%);
-        height: clamp(360px, 52vh, 560px);
-        border-bottom: 10px solid transparent;
-        border-left: 10px solid var(--color-accent);
-    }
+.tab-btn.active {
+    background: rgba(0,255,153,0.12);
+    color: var(--color-accent);
+    border-color: rgba(0,255,153,0.25);
+    box-shadow: var(--shadow-accent);
+}
+
+.tab-btn:focus-visible {
+    outline: 2px solid rgba(0,255,153,0.55);
+    outline-offset: 2px;
 }
 
 /* Enhanced Device Cards */
@@ -609,8 +610,8 @@ button:active { transform: scale(0.98); }
 }
 
 .log-select.open .log-select-trigger {
-    border-color: rgba(255,255,255,0.18);
-    box-shadow: 0 10px 22px rgba(0,0,0,0.24), inset 0 0 0 1px rgba(255,255,255,0.04);
+    border-color: rgba(0,255,153,0.28);
+    box-shadow: 0 10px 22px rgba(0,0,0,0.24), 0 0 0 1px rgba(0,255,153,0.18), inset 0 0 0 1px rgba(255,255,255,0.04);
 }
 
 .log-select.open .log-select-trigger::after {
@@ -619,7 +620,7 @@ button:active { transform: scale(0.98); }
 
 .log-select-trigger:focus-visible,
 .log-select-option:focus-visible {
-    outline: 2px solid rgba(255,255,255,0.18);
+    outline: 2px solid rgba(0,255,153,0.42);
     outline-offset: 2px;
 }
 
@@ -638,10 +639,10 @@ button:active { transform: scale(0.98); }
     z-index: 20;
     display: none;
     padding: 8px;
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid rgba(0,255,153,0.2);
     border-radius: 18px;
-    background: linear-gradient(180deg, rgba(32, 32, 32, 0.985) 0%, rgba(19, 19, 19, 0.985) 100%);
-    box-shadow: 0 24px 48px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.03);
+    background: linear-gradient(180deg, rgba(30, 34, 33, 0.985) 0%, rgba(16, 18, 18, 0.985) 100%);
+    box-shadow: 0 24px 48px rgba(0,0,0,0.42), 0 0 0 1px rgba(0,255,153,0.08), inset 0 1px 0 rgba(255,255,255,0.03);
     max-height: 280px;
     overflow-y: auto;
 }
@@ -678,6 +679,13 @@ button:active { transform: scale(0.98); }
 
 .log-select-group {
     margin-top: 6px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 6px;
+}
+
+.log-select-group:first-of-type {
+    border-top: 0;
+    padding-top: 0;
 }
 
 .log-select-group-label {
@@ -696,12 +704,13 @@ button:active { transform: scale(0.98); }
 
 .log-select-placeholder:hover,
 .log-select-option:hover {
-    background: rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.07);
 }
 
 .log-select-option.active {
-    background: rgba(255,255,255,0.08);
-    color: #f7f7f7;
+    background: rgba(0,255,153,0.14);
+    color: #dfffee;
+    border: 1px solid rgba(0,255,153,0.3);
 }
 
 .log-native-select {
@@ -873,6 +882,288 @@ button:active { transform: scale(0.98); }
     cursor: not-allowed;
     opacity: 0.6;
     filter: none;
+}
+
+/* --- Device config tab --- */
+.devices-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.devices-add-row {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr auto;
+    gap: 8px;
+}
+
+.devices-add-row input,
+.devices-add-row select,
+.device-config-card input,
+.device-config-card select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: rgba(255,255,255,0.04);
+    color: var(--color-text);
+}
+
+.devices-add-row select,
+.device-config-card select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    padding-right: 40px;
+    background-image:
+        linear-gradient(180deg, rgba(43, 48, 47, 0.98) 0%, rgba(24, 27, 27, 0.98) 100%),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 16 16'%3E%3Cpath stroke='%239de9c8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m3.5 6 4.5 4.5L12.5 6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat, no-repeat;
+    background-position: center, right 12px center;
+    background-size: auto, 14px;
+}
+
+.devices-add-row select:focus-visible,
+.device-config-card select:focus-visible {
+    outline: 2px solid rgba(0,255,153,0.42);
+    outline-offset: 2px;
+    border-color: rgba(0,255,153,0.34);
+}
+
+.devices-add-row select option,
+.device-config-card select option {
+    background: #1a1d1c;
+    color: #eef8f3;
+}
+
+#devices-config-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px;
+}
+
+.device-config-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+    overflow: hidden;
+}
+
+.device-config-header {
+    padding: 10px 12px;
+    background: rgba(255,255,255,0.04);
+    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.device-config-id {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    color: var(--color-accent-soft);
+    font-size: 0.84em;
+}
+
+.device-config-body {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.device-field-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+}
+
+.device-field-row label {
+    color: var(--color-muted);
+    font-size: 0.8em;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.devices-test-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+}
+
+.device-test-result {
+    min-height: 34px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: rgba(255,255,255,0.02);
+    color: var(--color-muted);
+    font-size: 0.82em;
+    padding: 8px 10px;
+}
+
+.device-test-result-ok {
+    color: var(--color-accent-soft);
+    border-color: rgba(0,255,153,0.24);
+    background: rgba(0,255,153,0.06);
+}
+
+.device-test-result-error {
+    color: #ffb9c1;
+    border-color: rgba(255,90,107,0.25);
+    background: rgba(255,90,107,0.08);
+}
+
+.config-yaml-editor {
+    width: 100%;
+    min-height: 360px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    background: #141715;
+    color: #e9f7ef;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.82em;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.manual-config-add-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.manual-config-input,
+.manual-config-textarea,
+.manual-config-add-row input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: rgba(255,255,255,0.04);
+    color: var(--color-text);
+}
+
+.manual-config-textarea {
+    min-height: 84px;
+    resize: vertical;
+}
+
+#manual-actions-config-container .manual-actions-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+#manual-actions-config-container .manual-action-card {
+    padding: 10px;
+    gap: 6px;
+}
+
+#manual-actions-config-container .manual-action-title {
+    font-size: 0.88em;
+}
+
+.context-config-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#context-settings-container,
+#context-params-container,
+#context-variables-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+}
+
+.context-config-shell .device-config-header {
+    padding: 8px 10px;
+}
+
+.context-config-shell .device-config-body {
+    padding: 10px;
+    gap: 8px;
+}
+
+.context-config-shell .device-field-row {
+    gap: 4px;
+}
+
+.context-config-shell .device-field-row label {
+    font-size: 0.72em;
+}
+
+.context-config-shell .manual-config-textarea,
+.context-entry-textarea {
+    min-height: 62px;
+    resize: vertical;
+}
+
+/* Keep context/manual dropdowns visually aligned with other tab controls */
+.context-config-shell select,
+#manual-actions-config-container select,
+.manual-config-add-row select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    padding-right: 38px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background-image:
+        linear-gradient(180deg, rgba(43, 48, 47, 0.98) 0%, rgba(24, 27, 27, 0.98) 100%),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 16 16'%3E%3Cpath stroke='%239de9c8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m3.5 6 4.5 4.5L12.5 6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat, no-repeat;
+    background-position: center, right 12px center;
+    background-size: auto, 14px;
+    color: var(--color-text);
+}
+
+.context-config-shell select:focus-visible,
+#manual-actions-config-container select:focus-visible,
+.manual-config-add-row select:focus-visible {
+    outline: 2px solid rgba(0,255,153,0.42);
+    outline-offset: 2px;
+    border-color: rgba(0,255,153,0.34);
+}
+
+.context-config-shell select option,
+#manual-actions-config-container select option,
+.manual-config-add-row select option {
+    background: #1a1d1c;
+    color: #eef8f3;
+}
+
+.context-add-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.context-add-row input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: rgba(255,255,255,0.04);
+    color: var(--color-text);
+}
+
+@media (max-width: 860px) {
+    .devices-add-row {
+        grid-template-columns: 1fr;
+    }
+
+    .manual-config-add-row {
+        grid-template-columns: 1fr;
+    }
+
+    .context-add-row {
+        grid-template-columns: 1fr;
+    }
 }
 
 .prod-subtab-bar {
