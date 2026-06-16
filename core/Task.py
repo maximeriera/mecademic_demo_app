@@ -23,6 +23,9 @@ Stop vs. Abort
 import threading
 import inspect
 import time
+import os
+import importlib
+import sys
 from importlib import import_module
 
 import logging
@@ -37,12 +40,31 @@ from devices import Device
 from .ProductionContext import ProductionContext
 
 
-def _load_workspace_task_function(function_name: str, module_candidates: tuple[str, ...]):
+TASK_FUNCTION_MODULE_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "prod_cycle": ("prod", "app_logic.prod"),
+    "home": ("home", "app_logic.home"),
+    "shipment": ("shipment", "app_logic.shipment"),
+    "calib": ("calib", "app_logic.calib"),
+}
+
+
+def _is_dev_reload_enabled() -> bool:
+    return str(os.environ.get("MECADEMIC_DEV_RELOAD", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_workspace_task_function(
+    function_name: str,
+    module_candidates: tuple[str, ...],
+    force_reload: bool = False,
+):
     """Load a task function from the active workspace before falling back to repo defaults."""
     last_error = None
     for module_name in module_candidates:
         try:
-            module = import_module(module_name)
+            if force_reload and module_name in sys.modules:
+                module = importlib.reload(sys.modules[module_name])
+            else:
+                module = import_module(module_name)
             return getattr(module, function_name)
         except Exception as error:
             last_error = error
@@ -50,12 +72,6 @@ def _load_workspace_task_function(function_name: str, module_candidates: tuple[s
     raise ImportError(
         f"Unable to import task function '{function_name}' from any workspace module: {module_candidates}"
     ) from last_error
-
-
-prod_cycle = _load_workspace_task_function("prod_cycle", ("prod", "app_logic.prod"))
-home = _load_workspace_task_function("home", ("home", "app_logic.home"))
-shipment = _load_workspace_task_function("shipment", ("shipment", "app_logic.shipment"))
-calib = _load_workspace_task_function("calib", ("calib", "app_logic.calib"))
 
 # --- Enums for State Management ---
 
@@ -130,6 +146,20 @@ class Task(threading.Thread):
         self.production_context = production_context
         self.manual_action_key = (manual_action_key or "").strip() or None
 
+    def _resolve_task_function(self, function_name: str):
+        module_candidates = TASK_FUNCTION_MODULE_CANDIDATES[function_name]
+        force_reload = _is_dev_reload_enabled()
+        fn = _load_workspace_task_function(function_name, module_candidates, force_reload=force_reload)
+        self.logger.info(
+            "[%s] Resolved task function '%s' from '%s.%s' (dev_reload=%s)",
+            self.name,
+            function_name,
+            fn.__module__,
+            getattr(fn, "__name__", "<anonymous>"),
+            force_reload,
+        )
+        return fn
+
     def run(self):
         """Entry point called by ``threading.Thread.start()``.
 
@@ -187,7 +217,8 @@ class Task(threading.Thread):
         """
         try:
             self.logger.info(f"[{self.name}] HOME routine started.")
-            home(self.devices)
+            home_fn = self._resolve_task_function("home")
+            home_fn(self.devices)
             self.logger.info(f"[{self.name}] HOME routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
@@ -205,7 +236,8 @@ class Task(threading.Thread):
         """
         try:        
             self.logger.info(f"[{self.name}] SHIPMENT routine started.")
-            shipment(self.devices)
+            shipment_fn = self._resolve_task_function("shipment")
+            shipment_fn(self.devices)
             self.logger.info(f"[{self.name}] SHIPMENT routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] SHIPMENT task encountered an error: {e}")
@@ -223,7 +255,8 @@ class Task(threading.Thread):
         """
         try:        
             self.logger.info(f"[{self.name}] CALIB routine started.")
-            calib(self.devices)
+            calib_fn = self._resolve_task_function("calib")
+            calib_fn(self.devices)
             self.logger.info(f"[{self.name}] CALIB routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] CALIB task encountered an error: {e}")
@@ -250,13 +283,14 @@ class Task(threading.Thread):
             genuine device fault and is re-raised to trigger ``FAULTED`` state.
         """
         try:
+            prod_cycle_fn = self._resolve_task_function("prod_cycle")
             self._run_home()
             while not self.stopped():
                 cycle_number = int(self.production_context.get_variable("part_count", 0)) + 1
                 self.logger.info(f"[{self.name}] PROD cycle start #{cycle_number}")
                 self.production_context.mark_cycle_start()
                 try:
-                    prod_cycle(self.devices, self.production_context)
+                    prod_cycle_fn(self.devices, self.production_context)
                     self.production_context.mark_cycle_end()
                     self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:

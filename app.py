@@ -2,6 +2,7 @@
 import argparse
 import sys
 import os
+import importlib
 from pathlib import Path
 from io import BytesIO
 
@@ -12,10 +13,13 @@ os.environ.setdefault("MECADEMIC_DEMO_ROOT", str(PROJECT_ROOT))
 
 parser = argparse.ArgumentParser(description="Mecademic Demo App")
 parser.add_argument('--workspace', type=str, default=BASE_DIR, help="Path to the external workspace")
+parser.add_argument('--dev-reload', action='store_true', help="Enable workspace code reload hooks for development")
 args, _ = parser.parse_known_args()
 
 workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
+DEV_RELOAD_ENABLED = bool(args.dev_reload or str(os.environ.get("MECADEMIC_DEV_RELOAD", "")).strip().lower() in {"1", "true", "yes", "on"})
+os.environ["MECADEMIC_DEV_RELOAD"] = "1" if DEV_RELOAD_ENABLED else "0"
 
 from flask import Flask, render_template, jsonify, request, send_from_directory, url_for, send_file
 from werkzeug.utils import secure_filename
@@ -40,6 +44,9 @@ if not logger.handlers:
 
 # --- Flask Setup ---
 app = Flask(__name__)
+
+logger.info("Workspace path resolved to: %s", workspace_path)
+logger.info("Dev reload mode: %s", "ENABLED" if DEV_RELOAD_ENABLED else "disabled")
 
 app_logic_dir = os.path.join(workspace_path, "app_logic")
 if os.path.isdir(app_logic_dir):
@@ -125,6 +132,52 @@ except Exception as e:
 
 BACKUP_DIR = os.path.join(workspace_path, "backups")
 BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+
+
+def _is_task_running() -> bool:
+    current_task = getattr(APPLICATION, "_current_task", None)
+    return bool(current_task and current_task.is_alive())
+
+
+def _can_reload_custom_code() -> tuple[bool, str]:
+    state = APPLICATION.get_state().value
+    if state != ControllerState.READY.value:
+        return False, f"Custom code reload is only allowed in READY state. Current state is {state}."
+    if _is_task_running():
+        return False, "Custom code reload blocked because a task thread is still active."
+    return True, "ok"
+
+
+def _reload_workspace_custom_code() -> tuple[list[str], list[str]]:
+    module_groups = {
+        "prod": ("prod", "app_logic.prod"),
+        "home": ("home", "app_logic.home"),
+        "shipment": ("shipment", "app_logic.shipment"),
+        "calib": ("calib", "app_logic.calib"),
+        "manual_actions": ("manual_actions", "app_logic.manual_actions"),
+    }
+    loaded: list[str] = []
+    errors: list[str] = []
+
+    for group_name, candidates in module_groups.items():
+        last_error = None
+        resolved = False
+        for module_name in candidates:
+            try:
+                if module_name in sys.modules:
+                    importlib.reload(sys.modules[module_name])
+                else:
+                    importlib.import_module(module_name)
+                loaded.append(module_name)
+                resolved = True
+                break
+            except Exception as err:
+                last_error = err
+
+        if not resolved:
+            errors.append(f"{group_name}: {last_error}")
+
+    return loaded, errors
 
 
 def _parse_bool(value, default=False):
@@ -317,6 +370,20 @@ def get_status():
     logger.debug(f"GET /api/status -> {current_state}")
     return jsonify({'status': current_state})
 
+
+@app.route('/api/dev/reload-status', methods=['GET'])
+def get_dev_reload_status():
+    """Return dev reload mode and whether reload is currently allowed."""
+    can_reload, reason = _can_reload_custom_code()
+    return jsonify({
+        'enabled': DEV_RELOAD_ENABLED,
+        'state': APPLICATION.get_state().value,
+        'task_running': _is_task_running(),
+        'can_reload': bool(DEV_RELOAD_ENABLED and can_reload),
+        'reason': reason if not can_reload else 'ready',
+        'success': True,
+    }), 200
+
 @app.route('/api/task/<task_name>', methods=['POST'])
 def handle_task(task_name):
     """API endpoint to start a specific task."""
@@ -409,6 +476,37 @@ def run_manual_action(action_key):
         return jsonify({'message': f"Unknown manual action '{action_key}'.", 'success': False}), 404
 
     return jsonify({'message': f'Could not start manual action. APPLICATION is {state}.', 'success': False}), 400
+
+
+@app.route('/api/dev/reload-custom-code', methods=['POST'])
+def reload_custom_code():
+    """Reload workspace task/manual action modules in-place (dev mode helper)."""
+    if not DEV_RELOAD_ENABLED:
+        return jsonify({
+            'message': 'Dev reload mode is disabled. Restart with --dev-reload or set MECADEMIC_DEV_RELOAD=1.',
+            'success': False,
+        }), 400
+
+    can_reload, reason = _can_reload_custom_code()
+    if not can_reload:
+        return jsonify({'message': reason, 'success': False}), 409
+
+    loaded, errors = _reload_workspace_custom_code()
+    if errors:
+        logger.warning("Custom code reload finished with errors: %s", errors)
+        return jsonify({
+            'message': 'Custom code reload completed with errors.',
+            'loaded': loaded,
+            'errors': errors,
+            'success': False,
+        }), 400
+
+    logger.info("Custom code reload successful. modules=%s", loaded)
+    return jsonify({
+        'message': 'Custom code reloaded successfully.',
+        'loaded': loaded,
+        'success': True,
+    }), 200
 
 
 @app.route('/api/config', methods=['GET'])

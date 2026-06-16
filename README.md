@@ -90,12 +90,35 @@ pip install -r requirements.txt
 
 # 4. Start the server
 python app.py
+
+# Optional: enable workspace code reload hooks for development
+python app.py --dev-reload
 ```
 
 Open **http://localhost:5000** in a browser.
 
 On Windows you can also double-click **`autostart.bat`** to launch the app.
 > Path need to be adjusted in the batch file to match your Python installation.
+
+### Development Reload Mode
+
+Use `--dev-reload` (or environment variable `MECADEMIC_DEV_RELOAD=1`) to enable custom-code reload hooks for workspace task modules.
+
+With dev reload mode enabled, trigger runtime refresh with:
+
+```http
+POST /api/dev/reload-custom-code
+```
+
+Check availability/status with:
+
+```http
+GET /api/dev/reload-status
+```
+
+The Control tab also exposes a **Reload Custom Code** button and a live status indicator.
+
+The reload endpoint is intentionally blocked unless the controller is in `READY` state.
 
 ### Typical workflow
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import sys
+import importlib
 from importlib import import_module
 from typing import Any, Callable, Dict, List
 
@@ -10,6 +13,7 @@ MANUAL_ACTION_MODULE_CANDIDATES = ("manual_actions", "app_logic.manual_actions")
 def load_manual_actions_registry(
     module_candidates: tuple[str, ...] = MANUAL_ACTION_MODULE_CANDIDATES,
     logger=None,
+    force_reload: bool | None = None,
 ) -> Dict[str, Callable[..., Any]]:
     """Load manual action callables from workspace modules.
 
@@ -17,12 +21,18 @@ def load_manual_actions_registry(
     - ``get_manual_actions() -> dict[str, callable]``
     - ``MANUAL_ACTIONS`` dict constant
     """
+    if force_reload is None:
+        force_reload = str(os.environ.get("MECADEMIC_DEV_RELOAD", "")).strip().lower() in {"1", "true", "yes", "on"}
+
     last_error = None
     for index, module_name in enumerate(module_candidates):
         try:
             if logger:
                 logger.debug(f"ManualActions: trying module '{module_name}'")
-            module = import_module(module_name)
+            if force_reload and module_name in sys.modules:
+                module = importlib.reload(sys.modules[module_name])
+            else:
+                module = import_module(module_name)
             if hasattr(module, "get_manual_actions"):
                 registry = module.get_manual_actions()
             else:

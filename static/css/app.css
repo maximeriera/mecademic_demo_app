@@ -892,6 +892,40 @@ button:active { transform: scale(0.98); }
     margin-bottom: 12px;
 }
 
+.dev-tools-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dev-reload-status {
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.82em;
+    line-height: 1.45;
+    color: var(--color-muted);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.dev-reload-status-ready {
+    color: var(--color-accent-soft);
+    border-color: rgba(0, 255, 153, 0.3);
+    background: rgba(0, 255, 153, 0.09);
+}
+
+.dev-reload-status-blocked {
+    color: var(--color-yellow);
+    border-color: rgba(255, 212, 71, 0.3);
+    background: rgba(255, 212, 71, 0.08);
+}
+
+.dev-reload-status-off {
+    color: #d0d0d0;
+    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.03);
+}
+
 .devices-add-row {
     display: grid;
     grid-template-columns: 1.2fr 1fr auto;

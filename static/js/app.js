@@ -14,6 +14,12 @@ let deviceTypeCatalog = {};
 let deviceTypeDropdownsInitialized = false;
 let manualActionsConfig = [];
 let contextConfigDraft = null;
+let devReloadStatus = {
+    enabled: false,
+    can_reload: false,
+    state: 'OFF',
+    reason: 'Unknown',
+};
 
 function normalizeStatus(status) {
     return String(status || '').trim().toUpperCase();
@@ -175,6 +181,84 @@ function setManualConfigMessage(text, isError = false) {
     if (!log) return;
     log.textContent = text || 'No manual action config action yet.';
     log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function updateDevReloadStatusUi() {
+    const statusEl = document.getElementById('dev-reload-status');
+    const buttonEl = document.getElementById('btn-reload-custom-code');
+    if (!statusEl || !buttonEl) return;
+
+    if (!devReloadStatus.enabled) {
+        statusEl.textContent = 'Dev reload mode disabled. Start app with --dev-reload or set MECADEMIC_DEV_RELOAD=1.';
+        statusEl.className = 'dev-reload-status dev-reload-status-off';
+        buttonEl.disabled = true;
+        return;
+    }
+
+    if (devReloadStatus.can_reload) {
+        statusEl.textContent = `Dev reload ready. Controller state: ${devReloadStatus.state}.`;
+        statusEl.className = 'dev-reload-status dev-reload-status-ready';
+        buttonEl.disabled = false;
+        return;
+    }
+
+    statusEl.textContent = `Reload blocked: ${devReloadStatus.reason}`;
+    statusEl.className = 'dev-reload-status dev-reload-status-blocked';
+    buttonEl.disabled = true;
+}
+
+function refreshDevReloadStatus() {
+    fetch('/api/dev/reload-status')
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.success === false) {
+                throw new Error(data.message || 'Failed to load dev reload status.');
+            }
+            devReloadStatus = {
+                enabled: !!data.enabled,
+                can_reload: !!data.can_reload,
+                state: data.state || 'OFF',
+                reason: data.reason || 'unknown',
+            };
+            updateDevReloadStatusUi();
+        })
+        .catch(() => {
+            devReloadStatus = {
+                enabled: false,
+                can_reload: false,
+                state: 'FAULTED',
+                reason: 'Dev reload status endpoint unavailable',
+            };
+            updateDevReloadStatusUi();
+        });
+}
+
+function reloadCustomCode() {
+    const buttonEl = document.getElementById('btn-reload-custom-code');
+    if (buttonEl) {
+        buttonEl.disabled = true;
+    }
+
+    fetch('/api/dev/reload-custom-code', { method: 'POST' })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            const isError = !ok || data.success === false;
+            const msg = data.message || (isError ? 'Custom code reload failed.' : 'Custom code reloaded.');
+            setMessage(msg);
+            setProdActionMessage(msg, isError);
+            setManualActionMessage(msg, isError);
+            refreshDevReloadStatus();
+            if (!isError) {
+                loadManualActions();
+            }
+        })
+        .catch(() => {
+            const msg = 'Error calling custom code reload endpoint.';
+            setMessage(msg);
+            setProdActionMessage(msg, true);
+            setManualActionMessage(msg, true);
+            refreshDevReloadStatus();
+        });
 }
 
 /* ---- Task / control commands ---- */
@@ -2405,6 +2489,8 @@ setInterval(() => {
     }
 }, 1000);
 
+setInterval(refreshDevReloadStatus, 1500);
+
 /* ---- Startup ---- */
 setInterval(updateRobotStatus, 100);
 setInterval(loadRobotInfo, 1000);
@@ -2419,6 +2505,7 @@ ensureDeviceTypeDropdowns();
 renderBackupRestoreSelectMenu('backup-robot-picker');
 renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
+refreshDevReloadStatus();
 
 const configImportInput = document.getElementById('device-config-import-input');
 if (configImportInput) {
