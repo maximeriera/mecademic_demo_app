@@ -35,8 +35,8 @@ import asyncio
 import threading
 from typing import Any
 
-from Device import Device
-from api.ed_device import EDAnalogueInput, EDAnalogueOutput, EDDigitalDevice, WatchdogConfig
+from .Device import Device
+from .api.ed_device import EDAnalogueInput, EDAnalogueOutput, EDDigitalDevice, WatchdogConfig
 
 
 # ---------------------------------------------------------------------------
