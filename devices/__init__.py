@@ -5,8 +5,6 @@ from .Device import Device
 __all__ = [
 	"AsyrilEyePlus",
 	"BrainboxesEDDigital",
-	"BrainboxesEDAnalogueInput",
-	"BrainboxesEDAnalogueOutput",
 	"GigEVisionDevice",
 	"MecaRobot",
 	"PlanarMotor",
@@ -23,14 +21,6 @@ def __getattr__(name):
 		from .BrainboxesED import BrainboxesEDDigital
 
 		return BrainboxesEDDigital
-	if name == "BrainboxesEDAnalogueInput":
-		from .BrainboxesED import BrainboxesEDAnalogueInput
-
-		return BrainboxesEDAnalogueInput
-	if name == "BrainboxesEDAnalogueOutput":
-		from .BrainboxesED import BrainboxesEDAnalogueOutput
-
-		return BrainboxesEDAnalogueOutput
 	if name == "AsyrilEyePlus":
 		from .Asyril import AsyrilEyePlus
 

@@ -148,8 +148,7 @@ class ApplicationController:
 
         Supported ``type`` values (case-insensitive):
         ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``,
-        ``brainboxes_ed_digital``, ``brainboxes_ed_analogue_input``,
-        ``brainboxes_ed_analogue_output``, ``zaber``.
+        ``brainboxes_ed_digital``, ``zaber``.
         Unknown types are skipped with a warning.
         """
         devices_config = self.config.get('devices', {})
@@ -206,30 +205,6 @@ class ApplicationController:
                 from devices.BrainboxesED import BrainboxesEDDigital
                 self.logger.info(f"Creating Brainboxes ED Digital API for device: {device_name}")
                 device = BrainboxesEDDigital(
-                    ip_address=device_info.get('ip_address', ''),
-                    address=device_info.get('address', 0x01),
-                    port=device_info.get('port', 9500),
-                    timeout=device_info.get('timeout', 5.0),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('brainboxes_ed_analogue_input', 'brainboxes_ai', 'ed_analogue_input'):
-                from devices.BrainboxesED import BrainboxesEDAnalogueInput
-                self.logger.info(f"Creating Brainboxes ED Analogue Input API for device: {device_name}")
-                device = BrainboxesEDAnalogueInput(
-                    ip_address=device_info.get('ip_address', ''),
-                    address=device_info.get('address', 0x01),
-                    port=device_info.get('port', 9500),
-                    timeout=device_info.get('timeout', 5.0),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('brainboxes_ed_analogue_output', 'brainboxes_ao', 'ed_analogue_output'):
-                from devices.BrainboxesED import BrainboxesEDAnalogueOutput
-                self.logger.info(f"Creating Brainboxes ED Analogue Output API for device: {device_name}")
-                device = BrainboxesEDAnalogueOutput(
                     ip_address=device_info.get('ip_address', ''),
                     address=device_info.get('address', 0x01),
                     port=device_info.get('port', 9500),
