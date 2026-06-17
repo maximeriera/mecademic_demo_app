@@ -1,7 +1,8 @@
 """
 Brainboxes ED-range device classes implementing the full ASCII protocol.
 
-Requires Python 3.12+.  All I/O methods are async (asyncio).
+Requires Python 3.12+.  Public I/O methods are synchronous; async transport
+is used internally.
 
 Hierarchy:
     EDDevice              — Common commands (all ED devices)
@@ -12,15 +13,11 @@ Hierarchy:
 
 Usage::
 
-    import asyncio
-    from ed_device import EDDigitalDevice
+    from ed_device import EDDigitalDeviceSync
 
-    async def main() -> None:
-        async with EDDigitalDevice("192.168.0.74") as dev:
-            print(await dev.read_device_name())
-            await dev.set_digital_output(0xFF)
-
-    asyncio.run(main())
+    dev = EDDigitalDeviceSync("192.168.0.74")
+    print(dev.read_device_name())
+    dev.set_digital_output(0xFF)
 
 References:
     https://docs.brainboxes.com/reference/protocols/ed-ascii-protocol
@@ -1191,212 +1188,237 @@ class EDAnalogueOutput(EDDevice):
 # ---------------------------------------------------------------------------
 
 
-class EDDigitalDeviceSync:
+class _SyncDeviceBase:
+    def __init__(self, ip_address: str, address: int = 0x01, port: int = 9500, timeout_sec: float = 5.0) -> None:
+        self.ip_address = ip_address
+        self.address = address
+        self.port = port
+        self.timeout_sec = timeout_sec
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _call(self, device_cls, method_name: str, *args, **kwargs):
+        async def _wrapped():
+            async with device_cls(
+                self.ip_address,
+                address=self.address,
+                port=self.port,
+                timeout=self.timeout_sec,
+            ) as device:
+                return await getattr(device, method_name)(*args, **kwargs)
+
+        return self._run(_wrapped())
+
+
+class EDDigitalDeviceSync(_SyncDeviceBase):
     """
     Synchronous wrapper around EDDigitalDevice for blocking applications.
 
-    All methods are synchronous (non-async) and use ``asyncio.run()`` internally.
-    Each method opens a connection, executes the command, and closes the connection.
-
-    Usage::
-
-        from ed_device import EDDigitalDeviceSync
-
-        dev = EDDigitalDeviceSync("192.168.0.74")
-        print(dev.read_device_name())
-        dev.set_digital_output(0xFF)
+    Each call opens a connection, executes one command, and closes the
+    connection.
     """
 
-    def __init__(self, ip_address: str, port: int = 10001, timeout_sec: int = 5) -> None:
-        self.ip_address = ip_address
-        self.port = port
-        self.timeout_sec = timeout_sec
-
-    def _run(self, coro):
-        """Helper: run an async coroutine synchronously."""
-        return asyncio.run(coro)
-
-    def _async_call(self, coro_fn):
-        """Helper: open connection, call async function, close connection."""
-        async def _wrapped():
-            device = EDDigitalDevice(self.ip_address, self.port, self.timeout_sec)
-            async with device:
-                return await coro_fn(device)
-        return self._run(_wrapped())
-
     def read_device_name(self) -> str:
-        """Read device name (blocking)."""
-        return self._async_call(lambda dev: dev.read_device_name())
+        return self._call(EDDigitalDevice, "read_device_name")
+
+    def read_device_config(self) -> str:
+        return self._call(EDDigitalDevice, "read_device_config")
+
+    def set_device_config(self, new_address: int, type_code: str, baud_code: str, data_format: str) -> str:
+        return self._call(EDDigitalDevice, "set_device_config", new_address, type_code, baud_code, data_format)
 
     def read_firmware_version(self) -> str:
-        """Read firmware version (blocking)."""
-        return self._async_call(lambda dev: dev.read_firmware_version())
+        return self._call(EDDigitalDevice, "read_firmware_version")
 
-    def read_module_type(self) -> str:
-        """Read module type (blocking)."""
-        return self._async_call(lambda dev: dev.read_module_type())
+    def read_reset_status(self) -> str:
+        return self._call(EDDigitalDevice, "read_reset_status")
 
-    def read_serial_number(self) -> str:
-        """Read serial number (blocking)."""
-        return self._async_call(lambda dev: dev.read_serial_number())
+    def reset_device(self) -> None:
+        return self._call(EDDigitalDevice, "reset_device")
+
+    def restore_factory_defaults(self) -> None:
+        return self._call(EDDigitalDevice, "restore_factory_defaults")
+
+    def synchronized_sampling(self) -> None:
+        return self._call(EDDigitalDevice, "synchronized_sampling")
+
+    def read_synchronized_data(self) -> str:
+        return self._call(EDDigitalDevice, "read_synchronized_data")
+
+    def host_ok(self) -> None:
+        return self._call(EDDigitalDevice, "host_ok")
+
+    def read_watchdog_status(self) -> str:
+        return self._call(EDDigitalDevice, "read_watchdog_status")
+
+    def reset_watchdog_status(self) -> str:
+        return self._call(EDDigitalDevice, "reset_watchdog_status")
 
     def read_watchdog_timeout(self) -> WatchdogConfig:
-        """Read watchdog configuration (blocking)."""
-        return self._async_call(lambda dev: dev.read_watchdog_timeout())
+        return self._call(EDDigitalDevice, "read_watchdog_timeout")
 
-    def set_watchdog_timeout(self, enable: bool, timeout_tenths_sec: int) -> None:
-        """Set watchdog configuration (blocking)."""
-        return self._async_call(lambda dev: dev.set_watchdog_timeout(enable, timeout_tenths_sec))
+    def set_watchdog_timeout(self, enable: bool, timeout_tenths_sec: int) -> str:
+        return self._call(EDDigitalDevice, "set_watchdog_timeout", enable, timeout_tenths_sec)
 
-    def watchdog_host_ok(self) -> None:
-        """Send watchdog 'host OK' signal (blocking)."""
-        return self._async_call(lambda dev: dev.watchdog_host_ok())
+    def read_io_status(self) -> str:
+        return self._call(EDDigitalDevice, "read_io_status")
 
-    def read_input_status(self) -> str:
-        """Read input status (blocking)."""
-        return self._async_call(lambda dev: dev.read_input_status())
+    def read_io_status_extended(self) -> str:
+        return self._call(EDDigitalDevice, "read_io_status_extended")
 
-    def read_output_status(self) -> str:
-        """Read output status (blocking)."""
-        return self._async_call(lambda dev: dev.read_output_status())
+    def set_digital_output(self, value: int) -> str:
+        return self._call(EDDigitalDevice, "set_digital_output", value)
 
-    def set_digital_output(self, value: int) -> None:
-        """Set digital outputs (blocking)."""
-        return self._async_call(lambda dev: dev.set_digital_output(value))
+    def set_digital_output_lower8(self, value: int) -> str:
+        return self._call(EDDigitalDevice, "set_digital_output_lower8", value)
 
-    def set_output_bit(self, bit: int, value: bool) -> None:
-        """Set a single output bit (blocking)."""
-        return self._async_call(lambda dev: dev.set_output_bit(bit, value))
+    def set_digital_output_upper8(self, value: int) -> str:
+        return self._call(EDDigitalDevice, "set_digital_output_upper8", value)
 
-    def read_counter(self, channel: int) -> int:
-        """Read input counter (blocking)."""
-        return self._async_call(lambda dev: dev.read_counter(channel))
+    def set_single_output(self, channel: int, on: bool) -> str:
+        return self._call(EDDigitalDevice, "set_single_output", channel, on)
 
-    def reset_counter(self, channel: int) -> None:
-        """Reset input counter (blocking)."""
-        return self._async_call(lambda dev: dev.reset_counter(channel))
+    def set_single_output_upper(self, channel: int, on: bool) -> str:
+        return self._call(EDDigitalDevice, "set_single_output_upper", channel, on)
 
-    def read_debounce_time(self) -> int:
-        """Read debounce time in ms (blocking)."""
-        return self._async_call(lambda dev: dev.read_debounce_time())
+    def read_input_counter(self, channel: int) -> int:
+        return self._call(EDDigitalDevice, "read_input_counter", channel)
 
-    def set_debounce_time(self, milliseconds: int) -> None:
-        """Set debounce time in ms (blocking)."""
-        return self._async_call(lambda dev: dev.set_debounce_time(milliseconds))
+    def clear_input_counter(self, channel: int) -> str:
+        return self._call(EDDigitalDevice, "clear_input_counter", channel)
+
+    def clear_all_latched_inputs(self) -> str:
+        return self._call(EDDigitalDevice, "clear_all_latched_inputs")
+
+    def read_latched_inputs(self) -> str:
+        return self._call(EDDigitalDevice, "read_latched_inputs")
+
+    def read_power_on_value(self) -> str:
+        return self._call(EDDigitalDevice, "read_power_on_value")
+
+    def set_power_on_value(self) -> str:
+        return self._call(EDDigitalDevice, "set_power_on_value")
+
+    def read_safe_value(self) -> str:
+        return self._call(EDDigitalDevice, "read_safe_value")
+
+    def set_safe_value(self) -> str:
+        return self._call(EDDigitalDevice, "set_safe_value")
+
+    def get_debounce_time(self, channel: int) -> int:
+        return self._call(EDDigitalDevice, "get_debounce_time", channel)
+
+    def set_debounce_time(self, channel: int, time_ms: int) -> str:
+        return self._call(EDDigitalDevice, "set_debounce_time", channel, time_ms)
+
+    def read_outputs_as_int(self) -> int:
+        return self._call(EDDigitalDevice, "read_outputs_as_int")
+
+    def read_inputs_as_int(self) -> int:
+        return self._call(EDDigitalDevice, "read_inputs_as_int")
 
 
-class EDAnalogueInputSync:
-    """
-    Synchronous wrapper around EDAnalogueInput for blocking applications.
-
-    All methods are synchronous (non-async) and use ``asyncio.run()`` internally.
-    Each method opens a connection, executes the command, and closes the connection.
-
-    Usage::
-
-        from ed_device import EDAnalogueInputSync
-
-        dev = EDAnalogueInputSync("192.168.0.74")
-        channels = dev.read_channel_values()
-        print(channels)
-    """
-
-    def __init__(self, ip_address: str, port: int = 10001, timeout_sec: int = 5) -> None:
-        self.ip_address = ip_address
-        self.port = port
-        self.timeout_sec = timeout_sec
-
-    def _run(self, coro):
-        """Helper: run an async coroutine synchronously."""
-        return asyncio.run(coro)
-
-    def _async_call(self, coro_fn):
-        """Helper: open connection, call async function, close connection."""
-        async def _wrapped():
-            device = EDAnalogueInput(self.ip_address, self.port, self.timeout_sec)
-            async with device:
-                return await coro_fn(device)
-        return self._run(_wrapped())
+class EDAnalogueInputSync(_SyncDeviceBase):
+    """Synchronous wrapper around EDAnalogueInput for blocking applications."""
 
     def read_device_name(self) -> str:
-        """Read device name (blocking)."""
-        return self._async_call(lambda dev: dev.read_device_name())
+        return self._call(EDAnalogueInput, "read_device_name")
 
     def read_firmware_version(self) -> str:
-        """Read firmware version (blocking)."""
-        return self._async_call(lambda dev: dev.read_firmware_version())
+        return self._call(EDAnalogueInput, "read_firmware_version")
 
-    def read_channel_values(self) -> list[float]:
-        """Read all channel values (blocking)."""
-        return self._async_call(lambda dev: dev.read_channel_values())
+    def read_all_channels(self) -> list[float]:
+        return self._call(EDAnalogueInput, "read_all_channels")
 
-    def read_channel_value(self, channel: int) -> float:
-        """Read single channel value (blocking)."""
-        return self._async_call(lambda dev: dev.read_channel_value(channel))
+    def read_channel(self, channel: int) -> str:
+        return self._call(EDAnalogueInput, "read_channel", channel)
+
+    def read_all_channels_hex(self) -> str:
+        return self._call(EDAnalogueInput, "read_all_channels_hex")
+
+    def read_synchronized_inputs(self) -> tuple[bool, str]:
+        return self._call(EDAnalogueInput, "read_synchronized_inputs")
+
+    def read_channel_enable_status(self) -> int:
+        return self._call(EDAnalogueInput, "read_channel_enable_status")
+
+    def set_channel_enable(self, bitmask: int) -> str:
+        return self._call(EDAnalogueInput, "set_channel_enable", bitmask)
+
+    def set_channel_range(self, channel: int, range_code: str) -> str:
+        return self._call(EDAnalogueInput, "set_channel_range", channel, range_code)
 
     def read_channel_range(self, channel: int) -> str:
-        """Read channel range (blocking)."""
-        return self._async_call(lambda dev: dev.read_channel_range(channel))
+        return self._call(EDAnalogueInput, "read_channel_range", channel)
 
-    def set_channel_range(self, channel: int, range_code: str) -> None:
-        """Set channel range (blocking)."""
-        return self._async_call(lambda dev: dev.set_channel_range(channel, range_code))
+    def read_channel_diagnostics(self) -> str:
+        return self._call(EDAnalogueInput, "read_channel_diagnostics")
 
-    def read_data_rate(self) -> int:
-        """Read data rate (blocking)."""
-        return self._async_call(lambda dev: dev.read_data_rate())
+    def enable_calibration(self, enable: bool = True) -> str:
+        return self._call(EDAnalogueInput, "enable_calibration", enable)
 
-    def set_data_rate(self, rate_hz: int) -> None:
-        """Set data rate (blocking)."""
-        return self._async_call(lambda dev: dev.set_data_rate(rate_hz))
+    def zero_calibration(self, channel: int) -> str:
+        return self._call(EDAnalogueInput, "zero_calibration", channel)
+
+    def span_calibration(self, channel: int) -> str:
+        return self._call(EDAnalogueInput, "span_calibration", channel)
+
+    def internal_calibration(self) -> str:
+        return self._call(EDAnalogueInput, "internal_calibration")
+
+    def restore_factory_calibration(self) -> str:
+        return self._call(EDAnalogueInput, "restore_factory_calibration")
+
+    def read_device_location(self) -> str:
+        return self._call(EDAnalogueInput, "read_device_location")
+
+    def set_device_location(self, location: str) -> str:
+        return self._call(EDAnalogueInput, "set_device_location", location)
 
 
-class EDAnalogueOutputSync:
-    """
-    Synchronous wrapper around EDAnalogueOutput for blocking applications.
-
-    All methods are synchronous (non-async) and use ``asyncio.run()`` internally.
-    Each method opens a connection, executes the command, and closes the connection.
-
-    Usage::
-
-        from ed_device import EDAnalogueOutputSync
-
-        dev = EDAnalogueOutputSync("192.168.0.74")
-        dev.set_output_value(0, 10.5)
-    """
-
-    def __init__(self, ip_address: str, port: int = 10001, timeout_sec: int = 5) -> None:
-        self.ip_address = ip_address
-        self.port = port
-        self.timeout_sec = timeout_sec
-
-    def _run(self, coro):
-        """Helper: run an async coroutine synchronously."""
-        return asyncio.run(coro)
-
-    def _async_call(self, coro_fn):
-        """Helper: open connection, call async function, close connection."""
-        async def _wrapped():
-            device = EDAnalogueOutput(self.ip_address, self.port, self.timeout_sec)
-            async with device:
-                return await coro_fn(device)
-        return self._run(_wrapped())
+class EDAnalogueOutputSync(_SyncDeviceBase):
+    """Synchronous wrapper around EDAnalogueOutput for blocking applications."""
 
     def read_device_name(self) -> str:
-        """Read device name (blocking)."""
-        return self._async_call(lambda dev: dev.read_device_name())
+        return self._call(EDAnalogueOutput, "read_device_name")
 
     def read_firmware_version(self) -> str:
-        """Read firmware version (blocking)."""
-        return self._async_call(lambda dev: dev.read_firmware_version())
+        return self._call(EDAnalogueOutput, "read_firmware_version")
 
-    def read_output_value(self, channel: int) -> float:
-        """Read output value (blocking)."""
-        return self._async_call(lambda dev: dev.read_output_value(channel))
+    def set_output(self, channel: int, value: int | float | str) -> str:
+        return self._call(EDAnalogueOutput, "set_output", channel, value)
 
-    def set_output_value(self, channel: int, value: float) -> None:
-        """Set output value (blocking)."""
-        return self._async_call(lambda dev: dev.set_output_value(channel, value))
+    def read_output(self, channel: int) -> str:
+        return self._call(EDAnalogueOutput, "read_output", channel)
+
+    def set_power_on_value(self, channel: int) -> str:
+        return self._call(EDAnalogueOutput, "set_power_on_value", channel)
+
+    def read_power_on_value(self, channel: int) -> str:
+        return self._call(EDAnalogueOutput, "read_power_on_value", channel)
+
+    def set_safe_value(self, channel: int) -> str:
+        return self._call(EDAnalogueOutput, "set_safe_value", channel)
+
+    def read_safe_value(self, channel: int) -> str:
+        return self._call(EDAnalogueOutput, "read_safe_value", channel)
+
+    def set_output_range(self, channel: int, type_code: str, slew_rate: str = "00") -> str:
+        return self._call(EDAnalogueOutput, "set_output_range", channel, type_code, slew_rate)
+
+    def read_output_range(self, channel: int) -> str:
+        return self._call(EDAnalogueOutput, "read_output_range", channel)
 
 
+def example_usage_digital_sync():
+    dio = EDDigitalDeviceSync("192.168.0.30")
+    print("Device name:", dio.read_device_name())
+    print("Firmware version:", dio.read_firmware_version())
+    print("Current I/O status:", dio.read_io_status())
+    dio.set_digital_output(0xA5)
+    print("New I/O status:", dio.read_io_status())
+    
+if __name__ == "__main__":
+    example_usage_digital_sync()
+    

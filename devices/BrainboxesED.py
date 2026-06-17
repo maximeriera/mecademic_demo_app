@@ -35,8 +35,8 @@ import asyncio
 import threading
 from typing import Any
 
-from .Device import Device
-from .api.ed_device import EDAnalogueInput, EDAnalogueOutput, EDDigitalDevice, WatchdogConfig
+from Device import Device
+from api.ed_device import EDAnalogueInput, EDAnalogueOutput, EDDigitalDevice, WatchdogConfig
 
 
 # ---------------------------------------------------------------------------
@@ -782,3 +782,12 @@ class BrainboxesEDAnalogueOutput(Device):
     def set_watchdog_timeout(self, enable: bool, timeout_tenths_sec: int) -> str:
         """Enable/disable watchdog and set its timeout (blocking)."""
         return self._run(self._assert_connected().set_watchdog_timeout(enable, timeout_tenths_sec))
+
+def example_usage_digital_sync():
+    dio = BrainboxesEDDigital("192.168.0.30")
+    dio.initialize()
+    
+    dio.set_digital_output(1)
+    
+if __name__ == "__main__":
+    example_usage_digital_sync()
