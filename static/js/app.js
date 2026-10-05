@@ -1355,19 +1355,76 @@ function coloriseLine(line) {
     return escaped;
 }
 
+// Severity ranking used by the "Min level" filter. Lines whose level sits below
+// the selected threshold are hidden client-side, so switching level is instant
+// and needs no refetch.
+const LOG_LEVEL_RANK = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
+const LOG_LEVEL_RE = /\|\s*(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s*\|/;
+
+// Raw lines from the last fetch, kept so filtering does not hit the server.
+let currentLogLines = [];
+
+function lineLevelRank(line) {
+    const m = LOG_LEVEL_RE.exec(line);
+    // Continuation lines (tracebacks) have no level of their own; keep them
+    // visible so a stack trace is never silently truncated by the filter.
+    return m ? LOG_LEVEL_RANK[m[1]] : Number.MAX_SAFE_INTEGER;
+}
+
+function renderFilteredLog() {
+    const output = document.getElementById('log-output');
+    const countEl = document.getElementById('log-match-count');
+    if (!output) return;
+
+    const levelSel = document.getElementById('log-level-select');
+    const searchEl = document.getElementById('log-search');
+    const minRank = LOG_LEVEL_RANK[levelSel ? levelSel.value : 'ALL'] || 0;
+    const needle = (searchEl ? searchEl.value : '').trim().toLowerCase();
+
+    const filtered = currentLogLines.filter((line) => {
+        if (lineLevelRank(line) < minRank) return false;
+        if (needle && !line.toLowerCase().includes(needle)) return false;
+        return true;
+    });
+
+    if (countEl) {
+        countEl.textContent = currentLogLines.length
+            ? `${filtered.length} / ${currentLogLines.length} lines`
+            : '';
+    }
+
+    if (currentLogLines.length === 0) {
+        output.innerText = 'Select a log file above.';
+        return;
+    }
+    if (filtered.length === 0) {
+        output.innerText = 'No lines match the current level/text filter.';
+        return;
+    }
+
+    output.innerHTML = filtered.map(coloriseLine).join('');
+    const autoscroll = document.getElementById('log-autoscroll');
+    if (autoscroll && autoscroll.checked) {
+        output.scrollTop = output.scrollHeight;
+    }
+}
+
 function loadSelectedLog() {
     const sel = document.getElementById('log-file-select');
     const val = sel.value;
     const output = document.getElementById('log-output');
-    if (!val) { output.innerText = 'Select a log file above.'; return; }
-    fetch(`/api/logs/${val}?lines=300`)
+    if (!val) {
+        currentLogLines = [];
+        output.innerText = 'Select a log file above.';
+        renderFilteredLog();
+        return;
+    }
+    fetch(`/api/logs/${val}?lines=500`)
         .then(r => r.json())
         .then(data => {
             if (data.message) { output.innerText = data.message; return; }
-            output.innerHTML = data.lines.map(coloriseLine).join('');
-            if (document.getElementById('log-autoscroll').checked) {
-                output.scrollTop = output.scrollHeight;
-            }
+            currentLogLines = Array.isArray(data.lines) ? data.lines : [];
+            renderFilteredLog();
         })
         .catch(() => { output.innerText = 'Error loading log file.'; });
 }

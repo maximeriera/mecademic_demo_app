@@ -287,10 +287,29 @@
                                 <option value="">Select a log file</option>
                             </select>
                         </div>
+                        <label class="log-level-filter" for="log-level-select">
+                            Min level
+                            <select id="log-level-select" onchange="renderFilteredLog()">
+                                <option value="ALL" selected>All</option>
+                                <option value="DEBUG">Debug+</option>
+                                <option value="INFO">Info+</option>
+                                <option value="WARNING">Warning+</option>
+                                <option value="ERROR">Error+</option>
+                            </select>
+                        </label>
+                        <input
+                            type="search"
+                            id="log-search"
+                            class="log-search-input"
+                            placeholder="Filter text (e.g. req=1c4f6009, MonitorThread)"
+                            oninput="renderFilteredLog()"
+                            aria-label="Filter log lines by text"
+                        >
                         <label>
                             <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
                         </label>
                         <button type="button" onclick="loadSelectedLog()">Refresh</button>
+                        <span id="log-match-count" class="log-match-count"></span>
                     </div>
                     <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
 

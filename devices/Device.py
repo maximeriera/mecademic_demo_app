@@ -1,6 +1,7 @@
 import logging
-from logging.handlers import RotatingFileHandler
 import os
+
+from core.LogSetup import get_device_logger
 
 from abc import ABC, abstractmethod
 from typing import Any
@@ -86,26 +87,12 @@ class Device(ABC):
         self.logger.info(f"[{self.device_id}] device created.")
 
     def _setup_logger(self) -> logging.Logger:
-        """Creates a unique, rotating log file for this specific device."""
-        # Ensure the log directory exists
-        _root_dir = os.environ.get(
-            "MECADEMIC_DEMO_ROOT",
-            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
-        )
-        _log_dir = os.path.join(_root_dir, "logs", "devices")
-        os.makedirs(_log_dir, exist_ok=True)
-        
-        logger = logging.getLogger(f"Logger_{self.device_id}")
-        logger.setLevel(logging.DEBUG) # Capture everything for local files
+        """Return this device's logger (``logs/devices/<device_id>.log``).
 
-        if not logger.handlers:
-            file_path = os.path.join(_log_dir, f"{self.device_id}.log")
-            handler = RotatingFileHandler(file_path, maxBytes=5*1024*1024, backupCount=2)
-            formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            
-        return logger
+        Shares the format, the combined log and the level switches defined in
+        :mod:`core.LogSetup`.
+        """
+        return get_device_logger(self.device_id)
     
     def __del__(self):
         # Runs during garbage collection and at interpreter shutdown, by which

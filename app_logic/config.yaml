@@ -92,19 +92,5 @@
 production_context_file: "production_context.yaml"
 
 manual_actions:
-  - key: "inspect_only"
-    label: "Inspect"
-    description: "Run the inspection-only subroutine without full pick/place flow."
-    confirm_title: "Confirm Inspection"
-    confirm_message: "Run inspection-only routine now? Ensure workspace is safe before starting."
-
+  
 devices:
-
-  # --- Robots ---
-
-  camera_1:
-    type: "gigE_camera"
-    cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
-    camera_index: 0
-    autostart_stream: false
-

@@ -5,6 +5,8 @@ from pmclib import pmc_types                # Enums and Data Structures (Status 
 import time
 import logging
 
+from core.LogSetup import get_module_logger
+
 from dataclasses import dataclass
 
 @dataclass
@@ -36,7 +38,11 @@ class PlanarMotorApi:
     # abort() interrupts a wait promptly — the cell has moving magnetic movers.
     POLL_INTERVAL_S = 0.1
 
-    def __init__(self, ip: str, auto_connect: bool = False):
+    def __init__(self, ip: str, auto_connect: bool = False, logger: logging.Logger | None = None):
+        # Previously this class called bare logging.warning(), which went to the
+        # real root logger and therefore into none of the application's own log
+        # files. Accept the owning device's logger like the other drivers do.
+        self.logger = logger or get_module_logger("device.planarmotor.api")
         self.ip = ip
         self.auto_connect = auto_connect
         self.sys = sys
@@ -353,7 +359,7 @@ class PlanarMotorApi:
                     cmd()
                     break
                 except Exception as exc:
-                    logging.warning(f"Planar motor fault reset command '{cmd_name}' failed: {exc}")
+                    self.logger.warning(f"Planar motor fault reset command '{cmd_name}' failed: {exc}")
 
         try:
             self._faulted = self.get_pmc_status() == pmc_types.PMCSTATUS.PMC_ERROR
@@ -370,7 +376,7 @@ class PlanarMotorApi:
             try:
                 self.deactivate_bots()
             except Exception as e:
-                logging.warning(f"Error during PlanarMotor deactivation: {e}")
+                self.logger.warning(f"Error during PlanarMotor deactivation: {e}")
 
             self.sys.disconnect_from_pmc()
             self.is_connected = False

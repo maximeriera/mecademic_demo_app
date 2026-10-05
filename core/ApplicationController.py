@@ -35,6 +35,7 @@ from .Task import Task, TaskType
 from .ControllerState import ControllerState
 from .ProductionContext import ProductionContext
 from .ManualActions import load_manual_actions_registry, normalize_manual_actions_config
+from .LogSetup import get_controller_logger
 
 class ApplicationController:
     """
@@ -116,31 +117,17 @@ class ApplicationController:
 
     
     def _setup_logger(self):
-        """Create a rotating log file at ``logs/app/ApplicationController.log``.
+        """Return the shared controller logger (``logs/app/ApplicationController.log``).
+
+        Configuration lives in :mod:`core.LogSetup` so the Flask layer, the
+        controller and every device share one format, one combined log and one
+        set of level switches.
 
         Returns
         -------
         logging.Logger
         """
-        # Ensure the log directory exists
-        _root_dir = os.environ.get(
-            "MECADEMIC_DEMO_ROOT",
-            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
-        )
-        _log_dir = os.path.join(_root_dir, "logs", "app")
-        os.makedirs(_log_dir, exist_ok=True)
-        
-        logger = logging.getLogger(f"Logger_ApplicationController")
-        logger.setLevel(logging.DEBUG) # Capture everything for local files
-
-        if not logger.handlers:
-            file_path = os.path.join(_log_dir, "ApplicationController.log")
-            handler = RotatingFileHandler(file_path, maxBytes=5*1024*1024, backupCount=2)
-            formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            
-        return logger
+        return get_controller_logger()
     
     def _create_devices(self):
         """Instantiate all devices declared in the config and store them in
@@ -648,9 +635,27 @@ class ApplicationController:
         self.set_state(ControllerState.FAULTED)
         self._monitor_stop_event.set()
         if self._current_task and self._current_task.is_alive():
-            self.stop_current_task()
-            self._current_task.join(timeout=5) # Wait for task to finish gracefully
-        
+            # Abort, not stop. Two reasons:
+            #
+            # 1. stop_current_task() returns immediately unless the state is
+            #    BUSY, and we just set FAULTED above — so it never signalled
+            #    the task at all. The join below then burned its full timeout
+            #    and shutdown carried on disconnecting devices with the task
+            #    thread still mid-cycle.
+            # 2. Even if it did signal, stop() only ends the PROD loop
+            #    *between* cycles. We are about to drop the device
+            #    connections, so leaving queued motion running is worse than
+            #    interrupting it; abort() also unblocks any in-flight
+            #    blocking SDK call (e.g. WaitIdle()).
+            self._abort_current_task()
+            self._current_task.join(timeout=5)
+            if self._current_task.is_alive():
+                self.logger.warning(
+                    "Task thread %s did not exit within 5s; continuing with device shutdown.",
+                    self._current_task.name,
+                )
+
+
         # Wait for monitor thread
         self._monitor_thread.join(timeout=10)
         

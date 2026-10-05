@@ -1,6 +1,7 @@
 # app.py
 import argparse
 import atexit
+import signal
 import sys
 import os
 import threading
@@ -21,24 +22,22 @@ workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
 
 from flask import Flask, render_template, jsonify, request, send_from_directory, url_for
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 import logging
-from logging.handlers import RotatingFileHandler
+import time
+import uuid
 
 from core.Task import TaskType
 from core.ControllerState import ControllerState
 from core.BackupRestoreService import BackupRestoreService
+from core.LogSetup import describe_logging, get_app_logger, request_id_var
 
 # --- Logging Setup ---
-_APP_LOG_DIR = os.path.join(os.environ.get("MECADEMIC_DEMO_ROOT", str(PROJECT_ROOT)), "logs", "app")
-os.makedirs(_APP_LOG_DIR, exist_ok=True)
-logger = logging.getLogger("app")
-logger.setLevel(logging.DEBUG)
-if not logger.handlers:
-    _handler = RotatingFileHandler(os.path.join(_APP_LOG_DIR, "app.log"), maxBytes=5*1024*1024, backupCount=2)
-    _handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
-    logger.addHandler(_handler)
+# Format, levels, the combined log and the stdout stream all come from
+# core.LogSetup so the Flask layer, controller and devices stay consistent.
+logger = get_app_logger()
 
 # --- Flask Setup ---
 app = Flask(__name__)
@@ -101,6 +100,98 @@ def _parse_bool(value, default=False):
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# --- Request logging -------------------------------------------------------
+# The UI polls /api/status at 10 Hz and /api/info at 1 Hz. Logging a line per
+# request made those two endpoints ~92% of app.log, so a 5 MB x2 rotation held
+# well under an hour of history and any real incident scrolled away. These
+# endpoints are therefore excluded from per-request logging; what actually
+# matters about them — the controller state and device health — is logged by
+# _log_state_change() / _log_device_health_change() only when it *changes*.
+_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/context'})
+
+_last_logged_state = None
+_last_logged_health = None
+_state_log_lock = threading.Lock()
+
+
+def _is_noisy_path(path):
+    return path in _POLL_PATHS or path.startswith('/static/') or path.startswith('/api/logs/')
+
+
+def _log_state_change(state):
+    """Log the controller state only when it differs from the last logged one."""
+    global _last_logged_state
+    with _state_log_lock:
+        if state == _last_logged_state:
+            return
+        previous, _last_logged_state = _last_logged_state, state
+    logger.info("Controller state observed: %s -> %s", previous or '(initial)', state)
+
+
+def _log_device_health_change(entries):
+    """Log device connected/ready/faulted only when the overall picture changes."""
+    global _last_logged_health
+    snapshot = tuple(
+        (e.get('device_id'), bool(e.get('connected')), bool(e.get('ready')), bool(e.get('faulted')))
+        for e in entries
+    )
+    with _state_log_lock:
+        if snapshot == _last_logged_health:
+            return
+        _last_logged_health = snapshot
+    if not snapshot:
+        logger.info("Device health: no devices configured.")
+        return
+    logger.info(
+        "Device health changed: %s",
+        ' | '.join(
+            f"{d}(conn={'Y' if c else 'N'},ready={'Y' if r else 'N'},fault={'Y' if f else 'N'})"
+            for d, c, r, f in snapshot
+        ),
+    )
+
+
+@app.before_request
+def _assign_request_id():
+    """Tag each request so its log lines can be correlated.
+
+    The id is stored in a ContextVar that the log formatter renders as
+    ``[req=ab12cd34]``. It is thread-local, so it does not bleed into the
+    monitor or task threads — those are identified by thread name instead.
+    """
+    request._mecademic_token = request_id_var.set(uuid.uuid4().hex[:8])
+    request._mecademic_start = time.perf_counter()
+
+
+@app.after_request
+def _log_request(response):
+    """Log one line per meaningful request: method, path, status, duration."""
+    started = getattr(request, '_mecademic_start', None)
+    if started is not None and not _is_noisy_path(request.path):
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        log = logger.warning if response.status_code >= 400 else logger.info
+        log("%s %s -> %s in %.1f ms", request.method, request.path,
+            response.status_code, elapsed_ms)
+    return response
+
+
+@app.teardown_request
+def _clear_request_id(exception=None):
+    token = getattr(request, '_mecademic_token', None)
+    if token is not None:
+        request_id_var.reset(token)
+
+
+@app.errorhandler(Exception)
+def _log_unhandled_exception(error):
+    """Never let an unhandled error reach the client without a logged traceback."""
+    if isinstance(error, HTTPException):
+        return error
+    logger.error("Unhandled error on %s %s: %s", request.method, request.path, error,
+                 exc_info=True)
+    return jsonify({'message': f'Internal server error: {error}', 'success': False}), 500
+
+
 # --- Flask Routes (API Endpoints) ---
 
 @app.route('/')
@@ -112,7 +203,8 @@ def index():
 def get_status():
     """API endpoint to check the APPLICATION's current state."""
     current_state = APPLICATION.get_state().value
-    logger.debug(f"GET /api/status -> {current_state}")
+    # Polled at 10 Hz; log only on change (see _log_state_change).
+    _log_state_change(current_state)
     return jsonify({'status': current_state})
 
 @app.route('/api/task/<task_name>', methods=['POST'])
@@ -224,7 +316,8 @@ def get_APPLICATION_info():
                 entry['ready'] = dev.ready
                 entry['faulted'] = dev.faulted
             info_list.append(entry)
-        logger.debug(f"GET /api/info -> {len(info_list)} device(s) returned.")
+        # Polled at 1 Hz; log only when device health actually changes.
+        _log_device_health_change(info_list)
         return jsonify(info_list), 200
     except Exception as e:
         logger.error(f"Failed to retrieve device info: {e}", exc_info=True)
@@ -451,6 +544,16 @@ def list_logs():
         result[category] = files
     return jsonify(result)
 
+@app.route('/api/logs/config', methods=['GET'])
+def get_log_config():
+    """Report the active logging configuration (levels, paths, format)."""
+    try:
+        return jsonify(describe_logging()), 200
+    except Exception as e:
+        logger.error(f"Failed to describe logging config: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to describe logging config: {e}'}), 500
+
+
 @app.route('/api/logs/<category>/<filename>', methods=['GET'])
 def get_log(category, filename):
     """Returns the last N lines of a log file. Query param: ?lines=200"""
@@ -463,7 +566,12 @@ def get_log(category, filename):
     if not log_path.exists():
         return jsonify({'message': 'Log file not found.'}), 404
     try:
-        lines = int(request.args.get('lines', 200))
+        try:
+            lines = max(1, min(int(request.args.get('lines', 200)), 10000))
+        except (TypeError, ValueError):
+            logger.warning("Invalid 'lines' parameter %r; defaulting to 200.",
+                           request.args.get('lines'))
+            lines = 200
         with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.readlines()
         return jsonify({'filename': filename, 'lines': content[-lines:]}), 200
@@ -497,6 +605,33 @@ def shutdown_APPLICATION_controller():
 
 atexit.register(shutdown_APPLICATION_controller)
 
+
+def _handle_termination_signal(signum, _frame):
+    """Shut the cell down gracefully on SIGTERM / SIGINT, then exit.
+
+    Needed to run as a container service.  ``atexit`` only fires on a normal
+    interpreter exit, and a process running as PID 1 in a container does not
+    get the kernel's default SIGTERM action unless it installs a handler — so
+    without this, ``docker stop`` tore the process down with robots still
+    connected and motion still queued, and the graceful shutdown never ran.
+
+    Shutting the controller down explicitly here (rather than leaving it to
+    ``atexit``) also matters because :class:`~core.Task` threads are
+    non-daemon: ``shutdown()`` stops and joins the running task with a
+    timeout, so interpreter exit cannot block on an in-flight production cycle.
+    """
+    signal_name = signal.Signals(signum).name
+    print(f"Received {signal_name}: shutting down APPLICATION controller.")
+    logger.info(f"Received {signal_name} - shutting down APPLICATION controller.")
+    shutdown_APPLICATION_controller()
+    sys.exit(0)
+
+
 if __name__ == '__main__':
+    # Registered only under __main__ so a WSGI host (gunicorn, uWSGI) keeps
+    # control of its own signal handling.
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(_sig, _handle_termination_signal)
+
     logger.info(f"Starting Flask server on {args.host}:{args.port}")
     app.run(debug=False, host=args.host, port=args.port)

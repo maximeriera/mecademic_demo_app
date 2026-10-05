@@ -6,12 +6,18 @@ import signal
 import numpy as np
 from harvesters.core import Harvester
 
+from core.LogSetup import get_module_logger
+
 # NOTE: OpenCV is only needed by the standalone live-view demo at the bottom of
 # this file, not by GigECamera itself. It is imported there so that using the
 # camera from the application does not require opencv-python to be installed.
 
-# Setup basic logging to see connection steps
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Module logger instead of logging.basicConfig(). The old basicConfig() call
+# ran at import and reconfigured the *root* logger process-wide, so merely
+# having a camera in config.yaml duplicated every application record onto
+# stderr in a different format. Records from here now reach combined.log and
+# stdout through the mecademic.* hierarchy like everything else.
+logger = get_module_logger("device.gige.transport")
 
 
 class CameraConnectionError(RuntimeError):
@@ -46,24 +52,24 @@ class GigECamera:
         if not self.harvester:
             return
 
-        logging.info("========== GigE Discovery Diagnostics ==========")
-        logging.info(f"CTI path: {self.cti_path}")
+        logger.info("========== GigE Discovery Diagnostics ==========")
+        logger.info(f"CTI path: {self.cti_path}")
 
         interfaces = getattr(self.harvester, 'interface_info_list', None)
         if interfaces is None:
-            logging.info("Interfaces discovered: unsupported by current Harvester version")
+            logger.info("Interfaces discovered: unsupported by current Harvester version")
         else:
-            logging.info(f"Interfaces discovered: {len(interfaces)}")
+            logger.info(f"Interfaces discovered: {len(interfaces)}")
             for idx, interface in enumerate(interfaces):
                 interface_id = self._safe_attr(interface, 'id_')
                 display_name = self._safe_attr(interface, 'display_name')
                 tl_type = self._safe_attr(interface, 'tl_type')
-                logging.info(
+                logger.info(
                     f"  Interface[{idx}] id={interface_id}, display_name={display_name}, tl_type={tl_type}"
                 )
 
         devices = self.harvester.device_info_list
-        logging.info(f"Devices discovered: {len(devices)}")
+        logger.info(f"Devices discovered: {len(devices)}")
         for idx, device in enumerate(devices):
             vendor = self._safe_attr(device, 'vendor')
             model = self._safe_attr(device, 'model')
@@ -71,21 +77,21 @@ class GigECamera:
             user_defined_name = self._safe_attr(device, 'user_defined_name')
             tl_type = self._safe_attr(device, 'tl_type')
             id_ = self._safe_attr(device, 'id_')
-            logging.info(
+            logger.info(
                 f"  Device[{idx}] vendor={vendor}, model={model}, serial={serial_number}, "
                 f"name={user_defined_name}, tl_type={tl_type}, id={id_}"
             )
 
-        logging.info("================================================")
+        logger.info("================================================")
 
     def connect(self):
         """Initializes the GenTL producer and hooks into the specified camera."""
         if self._is_connected:
-            logging.warning("Camera already connected.")
+            logger.warning("Camera already connected.")
             return
 
         try:
-            logging.info("Initializing Harvester and loading GenTL driver...")
+            logger.info("Initializing Harvester and loading GenTL driver...")
             self.harvester = Harvester()
             self.harvester.add_file(self.cti_path)
             self.harvester.update()
@@ -102,12 +108,12 @@ class GigECamera:
                     f"{len(self.harvester.device_info_list)} discovered camera(s)."
                 )
 
-            logging.info(f"Found {len(self.harvester.device_info_list)} camera(s). Connecting to index {self.camera_index}...")
+            logger.info(f"Found {len(self.harvester.device_info_list)} camera(s). Connecting to index {self.camera_index}...")
             if hasattr(self.harvester, 'create'):
                 try:
                     self.ia = self.harvester.create(self.camera_index)
                 except Exception as create_exc:
-                    logging.warning(
+                    logger.warning(
                         f"harvester.create() failed ({create_exc}); falling back to create_image_acquirer()."
                     )
                     self.ia = self.harvester.create_image_acquirer(self.camera_index)
@@ -118,7 +124,7 @@ class GigECamera:
             connected_model = self._safe_attr(selected_device, 'model')
             connected_serial = self._safe_attr(selected_device, 'serial_number')
             self._is_connected = True
-            logging.info(f"Connected to camera: model={connected_model}, serial={connected_serial}")
+            logger.info(f"Connected to camera: model={connected_model}, serial={connected_serial}")
         except CameraConnectionError:
             self.disconnect()
             raise
@@ -137,9 +143,9 @@ class GigECamera:
             # remote_device.node_map exposes the GenICam XML tree on the camera
             node = getattr(self.ia.remote_device.node_map, feature_name)
             node.value = value
-            logging.info(f"Set GenICam node '{feature_name}' to {value}")
+            logger.info(f"Set GenICam node '{feature_name}' to {value}")
         except AttributeError:
-            logging.error(f"GenICam node '{feature_name}' does not exist on this camera.")
+            logger.error(f"GenICam node '{feature_name}' does not exist on this camera.")
             raise
 
     def start_stream(self):
@@ -149,7 +155,7 @@ class GigECamera:
         if self._is_streaming:
             return
 
-        logging.info("Starting image stream acquisition...")
+        logger.info("Starting image stream acquisition...")
         self.ia.start()
         self._is_streaming = True
 
@@ -178,7 +184,7 @@ class GigECamera:
     def stop_stream(self):
         """Stops transmission and frees up host memory buffers."""
         if self._is_streaming and self.ia:
-            logging.info("Stopping image stream...")
+            logger.info("Stopping image stream...")
             self.ia.stop()
             self._is_streaming = False
 
@@ -187,17 +193,17 @@ class GigECamera:
         self.stop_stream()
         
         if self.ia:
-            logging.info("Destroying Image Acquirer context...")
+            logger.info("Destroying Image Acquirer context...")
             self.ia.destroy()
             self.ia = None
             
         if self.harvester:
-            logging.info("Releasing Harvester engine...")
+            logger.info("Releasing Harvester engine...")
             self.harvester.reset()
             self.harvester = None
             
         self._is_connected = False
-        logging.info("Camera disconnected cleanly.")
+        logger.info("Camera disconnected cleanly.")
 
     # --- Python Context Manager Magic Methods ---
     def __enter__(self):
@@ -264,7 +270,7 @@ if __name__ == "__main__":
     def _handle_sigint(_signum, _frame):
         interrupt_state["count"] += 1
         if interrupt_state["count"] == 1:
-            logging.info("Ctrl+C received. Stopping now...")
+            logger.info("Ctrl+C received. Stopping now...")
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _handle_sigint)
@@ -277,9 +283,9 @@ if __name__ == "__main__":
         try:
             camera.connect()
         except CameraConnectionError as exc:
-            logging.error(f"Diagnostic connect failed: {exc}")
+            logger.error(f"Diagnostic connect failed: {exc}")
         except Exception as exc:
-            logging.exception(f"Unexpected diagnostic failure: {exc}")
+            logger.exception(f"Unexpected diagnostic failure: {exc}")
         finally:
             camera.disconnect()
         raise SystemExit(0)
@@ -303,7 +309,7 @@ if __name__ == "__main__":
             # 2. Start streaming
             camera.start_stream()
 
-            logging.info("Streaming continuously. Press 'q' or ESC to exit.")
+            logger.info("Streaming continuously. Press 'q' or ESC to exit.")
             frame_count = 0
             fps_window_start = time.time()
             consecutive_timeouts = 0
@@ -330,14 +336,14 @@ if __name__ == "__main__":
                         if is_timeout:
                             consecutive_timeouts += 1
                             if consecutive_timeouts in (1, 5) or consecutive_timeouts % 10 == 0:
-                                logging.warning(
+                                logger.warning(
                                     f"Frame timeout {consecutive_timeouts}/{args.max_consecutive_timeouts}: {e}"
                                 )
 
                             if consecutive_timeouts >= args.max_consecutive_timeouts:
                                 if args.auto_recover and not attempted_stream_recovery:
                                     attempted_stream_recovery = True
-                                    logging.warning(
+                                    logger.warning(
                                         "Too many consecutive timeouts. Reconnecting camera once to recover."
                                     )
                                     if interrupt_state["count"] > 0:
@@ -368,7 +374,7 @@ if __name__ == "__main__":
                         else:
                             consecutive_errors += 1
                             if consecutive_errors in (1, 5) or consecutive_errors % 50 == 0:
-                                logging.warning(
+                                logger.warning(
                                     f"Frame error {consecutive_errors}/{args.max_consecutive_errors}: {e}"
                                 )
 
@@ -380,7 +386,7 @@ if __name__ == "__main__":
                             if consecutive_errors >= args.max_consecutive_errors:
                                 if args.auto_recover and not attempted_stream_recovery:
                                     attempted_stream_recovery = True
-                                    logging.warning(
+                                    logger.warning(
                                         "Too many consecutive frame errors. Reconnecting camera once to recover."
                                     )
                                     if interrupt_state["count"] > 0:
@@ -423,7 +429,7 @@ if __name__ == "__main__":
                     elapsed = time.time() - fps_window_start
                     if elapsed >= 1.0:
                         fps = frame_count / elapsed
-                        logging.info(f"Live stream FPS: {fps:.1f}")
+                        logger.info(f"Live stream FPS: {fps:.1f}")
                         frame_count = 0
                         fps_window_start = time.time()
 
@@ -432,20 +438,20 @@ if __name__ == "__main__":
                         break
 
             except KeyboardInterrupt:
-                logging.info("Keyboard interrupt received. Stopping stream.")
+                logger.info("Keyboard interrupt received. Stopping stream.")
             finally:
                 cv2.destroyAllWindows()
 
             print("Finished continuous streaming loop.")
     except CameraConnectionError as exc:
-        logging.error(f"Camera connection failed: {exc}")
+        logger.error(f"Camera connection failed: {exc}")
         raise SystemExit(1)
     except KeyboardInterrupt:
-        logging.info("Interrupted by user (Ctrl+C). Exiting cleanly.")
+        logger.info("Interrupted by user (Ctrl+C). Exiting cleanly.")
         raise SystemExit(0)
     except RuntimeError as exc:
-        logging.error(f"Streaming stopped: {exc}")
+        logger.error(f"Streaming stopped: {exc}")
         raise SystemExit(1)
     except Exception as exc:
-        logging.error(f"Unexpected shutdown error: {exc}")
+        logger.error(f"Unexpected shutdown error: {exc}")
         raise SystemExit(1)

@@ -1,0 +1,109 @@
+# Run the Mecademic demo app as a long-lived service.
+#
+#   docker compose up -d --build     # build and start in the background
+#   docker compose logs -f           # follow output
+#   docker compose ps                # state + health
+#   docker compose restart           # graceful stop, then start
+#   docker compose down              # stop and remove the container
+#
+# The UI is then at http://localhost:8080 (override with MECADEMIC_PORT).
+
+services:
+  mecademic-demo:
+    build: .
+    image: mecademic-demo:latest
+    container_name: mecademic-demo
+
+    # Comes back after a crash and after a host reboot, but stays down if you
+    # ran `docker compose stop` yourself.
+    restart: unless-stopped
+
+    # Run an init process as PID 1 so signals reach Python with the kernel's
+    # default semantics and no zombies accumulate.
+    init: true
+
+    # The controller's shutdown joins the running task (up to 5s) and the
+    # monitor thread (up to 10s) before disconnecting devices. Give it room to
+    # park the cell properly instead of being killed mid-sequence.
+    stop_grace_period: 30s
+
+    # Host port defaults to 8080, not 5000: on macOS the AirPlay Receiver
+    # (ControlCenter) listens on 5000, so a 5000:5000 mapping fails to bind
+    # there. The container still serves on 5000 internally.
+    #   MECADEMIC_PORT=5000 docker compose up -d
+    ports:
+      - "${MECADEMIC_PORT:-8080}:5000"
+
+    environment:
+      # Level written to the log files (app.log, ApplicationController.log,
+      # per-device logs and combined.log).
+      MECADEMIC_LOG_LEVEL: "${MECADEMIC_LOG_LEVEL:-DEBUG}"
+      # Level echoed to stdout, i.e. what `docker compose logs -f` shows.
+      # Set to DEBUG when chasing a problem live.
+      MECADEMIC_CONSOLE_LOG_LEVEL: "${MECADEMIC_CONSOLE_LOG_LEVEL:-INFO}"
+
+    volumes:
+      # Cell configuration and task logic, editable without rebuilding the
+      # image. Must stay writable: ProductionContext writes production_context
+      # .yaml back when settings.storage_scope is "disk".
+      - ./app_logic:/webapp/app_logic
+
+      # Rotating app/device logs, so the Logs tab keeps history across restarts.
+      - ./logs:/webapp/logs
+
+      # Robot backup archives produced by the Backup/Restore tab. These are
+      # real data — without this mount they are lost whenever the container is
+      # recreated.
+      - ./backups:/webapp/backups
+
+    # python:*-slim ships no curl/wget, so probe with the interpreter.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys, urllib.request
+          with urllib.request.urlopen("http://127.0.0.1:5000/api/status", timeout=3) as r:
+              sys.exit(0 if r.status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+    # The app writes its own rotating files under /webapp/logs; cap the
+    # container's stdout capture so it cannot grow without bound.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # ---------------------------------------------------------------------
+    # Talking to real hardware
+    # ---------------------------------------------------------------------
+    # The default bridge network above reaches routable device IPs (Mecademic,
+    # Asyril, ioLogik, Brainboxes, LMI) just fine, and works on Docker Desktop
+    # for macOS and Windows.
+    #
+    # It does NOT pass UDP broadcast/multicast, which GigE Vision discovery
+    # (GVCP) and the planar motor's auto_search_and_connect_to_pmc() rely on.
+    # If you need those, run on a Linux host and swap the `ports:` block above
+    # for host networking:
+    #
+    #   network_mode: host
+    #
+    # (`ports:` and `network_mode: host` are mutually exclusive, and host mode
+    # is Linux-only — on Docker Desktop it does not behave the same way.)
+    #
+    # For serial devices (Arduino via Firmata, Zaber), pass the TTY through:
+    #
+    #   devices:
+    #     - "/dev/ttyUSB0:/dev/ttyUSB0"
+    #
+    # and set the matching `port:` in app_logic/config.yaml.
+    #
+    # NOTE: pmclib (planar motor) cannot import in this image — pythonnet needs
+    # a .NET/mono runtime that python:*-slim does not carry. Every other driver
+    # works. Add mono to the Dockerfile if you need planar motor support in a
+    # container.

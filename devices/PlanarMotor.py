@@ -8,7 +8,7 @@ class PlanarMotor(Device):
             name = f"PlanarMotor_{ip_address}"
         super().__init__(device_id=name)
         self._ip_address = ip_address
-        self._api = PlanarMotorApi(ip=ip_address)
+        self._api = PlanarMotorApi(ip=ip_address, logger=self.logger)
         self._connected = False
         self._faulted = False
         
