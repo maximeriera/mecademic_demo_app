@@ -291,6 +291,15 @@ class ApplicationController:
 
         Logs the transition only when the state actually changes.
 
+        ``FAULTED`` is a latching state: it can only be left through
+        ``INITIALIZING`` (re-initialisation / clear-faults) or ``OFF``
+        (shutdown).  A direct ``FAULTED -> READY`` transition is refused.
+        Without this guard a task that is aborted *because* a device faulted
+        would clear the fault state on its way out: the monitor sets
+        ``FAULTED`` and aborts the task, the task then unwinds cleanly and its
+        ``finally`` block reports ``READY``, leaving a faulted cell advertised
+        as ready to accept new tasks.
+
         Parameters
         ----------
         new_state : ControllerState
@@ -302,9 +311,17 @@ class ApplicationController:
             The current state after the call (may be unchanged).
         """
         with self._state_lock:
-            if self._state != new_state:
-                self.logger.info(f"--- State Change: {self._state.value} -> {new_state.value} ---")
-                self._state = new_state
+            if self._state == new_state:
+                return self._state
+
+            if self._state == ControllerState.FAULTED and new_state == ControllerState.READY:
+                self.logger.warning(
+                    "Refusing FAULTED -> READY transition. Clear faults or re-initialize the controller."
+                )
+                return self._state
+
+            self.logger.info(f"--- State Change: {self._state.value} -> {new_state.value} ---")
+            self._state = new_state
             return self._state
 
     def get_state(self) -> ControllerState:
@@ -530,21 +547,84 @@ class ApplicationController:
     def _check_reference_position(self):
         pass
     
-    def clear_faults(self):
-        """Call :meth:`~devices.Device.clear_fault` on every device.
+    def clear_faults(self) -> Dict[str, Any]:
+        """Call :meth:`~devices.Device.clear_fault` on every device, then return
+        to ``READY`` if the cell actually came back healthy.
 
-        Errors from individual devices are logged as warnings and do not
+        This is the *light* recovery path and deliberately moves no hardware.
+        It used to call ``shutdown()`` followed by ``initialize()``, which
+        disconnected every device and re-homed every robot — slow, physically
+        surprising for an operator who only asked to clear a fault, and it left
+        the cell stuck in ``OFF`` whenever ``shutdown()`` raised (its monitor
+        join can time out), because ``initialize()`` never ran.  Use
+        :meth:`initialize` when a full reconnect-and-home really is wanted;
+        that is what the INITIALIZE button already does.
+
+        Errors from individual devices are logged and reported, and do not
         prevent the remaining devices from being cleared.
+
+        Returns
+        -------
+        Dict[str, Any]
+            ``cleared``       — device ids whose ``clear_fault()`` succeeded.
+            ``errors``        — ``{device_id: message}`` for devices that raised.
+            ``still_faulted`` — device ids still reporting ``faulted`` afterwards.
+            ``state``         — controller state after the attempt.
+            ``success``       — ``True`` only if nothing errored, nothing is
+                                still faulted, and the controller left ``FAULTED``.
         """
+        cleared: list[str] = []
+        errors: Dict[str, str] = {}
+
+        # Never clear faults underneath a live task.
+        if self._current_task and self._current_task.is_alive():
+            self.logger.warning("Clear-faults requested while a task is still running. Aborting it first.")
+            self._abort_current_task()
+            self._current_task.join(timeout=5)
+
         for _, device in self.devices.items():
             try:
                 device.clear_fault()
+                cleared.append(device.device_id)
             except Exception as e:
                 self.logger.warning(f"Error clearing faults on device {device.device_id}: {e}")
-        
-        # Full shutdown and re-initialization to ensure clean state
-        self.shutdown()
-        self.initialize() 
+                errors[device.device_id] = str(e)
+
+        # Re-poll health: clear_fault() only asks, it does not guarantee.
+        still_faulted: list[str] = []
+        for _, device in self.devices.items():
+            try:
+                if device.faulted:
+                    still_faulted.append(device.device_id)
+            except Exception as e:
+                self.logger.warning(f"Could not read fault state of {device.device_id}: {e}")
+                still_faulted.append(device.device_id)
+
+        if still_faulted or errors:
+            self.logger.warning(
+                "Clear-faults incomplete. still_faulted=%s errors=%s. Controller stays %s.",
+                still_faulted,
+                sorted(errors),
+                self.get_state().value,
+            )
+        else:
+            # FAULTED is latching, so step out of it explicitly. Going through
+            # INITIALIZING keeps the documented transition order intact without
+            # reconnecting or re-homing anything.
+            if self.get_state() == ControllerState.FAULTED:
+                self.set_state(ControllerState.INITIALIZING)
+                self._last_not_ready_device_id = None
+                self.set_state(ControllerState.READY)
+            self.logger.info("Faults cleared on all devices. Controller is %s.", self.get_state().value)
+
+        state = self.get_state()
+        return {
+            "cleared": cleared,
+            "errors": errors,
+            "still_faulted": still_faulted,
+            "state": state.value,
+            "success": not errors and not still_faulted and state != ControllerState.FAULTED,
+        }
         
     def shutdown(self):
         """Gracefully shut down the controller and all devices.

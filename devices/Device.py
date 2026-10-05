@@ -108,10 +108,19 @@ class Device(ABC):
         return logger
     
     def __del__(self):
-        self.logger.info(f"[{self.device_id}] device is being deleted.")
+        # Runs during garbage collection and at interpreter shutdown, by which
+        # point the logging machinery may already be torn down. Nothing in here
+        # may raise: an exception escaping __del__ cannot be caught by the
+        # caller, it is only printed as a noisy "Exception ignored in:"
+        # traceback. The unguarded logger call used to do exactly that on every
+        # process exit.
+        try:
+            self.logger.info(f"[{self.device_id}] device is being deleted.")
+        except Exception:
+            pass
         try:
             self.shutdown()
-        except Exception as e:
+        except Exception:
             pass  # Avoid raising exceptions during garbage collection
         
     @property

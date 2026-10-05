@@ -354,20 +354,36 @@ class AsyrilEyePlusApi:
         Returns
         -------
         int
-            Remaining time in seconds, or an error code if not vibrating.
+            Remaining vibration time exactly as reported by the feeder in its
+            ``?46`` reply (the unit follows the Asycube configuration — verify
+            against your controller before treating it as seconds or
+            milliseconds).  Returns ``0`` when the feeder is not vibrating or
+            the reply could not be parsed; the failure is logged in that case.
         """
         command = "feeder ?46"
         self.__send_raw__(command)
         response = self.__receive_raw__()
-        response = "200 01182"
-        if response.startswith("200"):
-            duration_str = response.split(' ')[1]
-            try:
-                duration = int(duration_str)
-            except ValueError:
-                self.logger.error(f"Failed to parse vibration duration from response: {response}")
-                return 0
-        return duration
+
+        if not response.startswith("200"):
+            self.logger.warning(
+                f"Feeder did not report a vibration duration: {response.strip()!r}"
+            )
+            return 0
+
+        parts = response.split()
+        if len(parts) < 2:
+            self.logger.error(
+                f"Malformed vibration duration response (no value field): {response.strip()!r}"
+            )
+            return 0
+
+        try:
+            return int(parts[1])
+        except ValueError:
+            self.logger.error(
+                f"Failed to parse vibration duration from response: {response.strip()!r}"
+            )
+            return 0
 
 
     def can_take_image(self, value):

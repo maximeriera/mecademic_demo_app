@@ -4,8 +4,11 @@ import argparse
 import time
 import signal
 import numpy as np
-import cv2
 from harvesters.core import Harvester
+
+# NOTE: OpenCV is only needed by the standalone live-view demo at the bottom of
+# this file, not by GigECamera itself. It is imported there so that using the
+# camera from the application does not require opencv-python to be installed.
 
 # Setup basic logging to see connection steps
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -280,7 +283,11 @@ if __name__ == "__main__":
         finally:
             camera.disconnect()
         raise SystemExit(0)
-    
+
+    # Only the live-view loop below needs OpenCV, so import it here: --diagnose
+    # and the GigECamera class itself stay usable without opencv-python.
+    import cv2
+
     # Using 'with' ensures cleanup happens automatically even if an error pops up inside the block!
     try:
         with GigECamera(cti_path=CTI_PATH, camera_index=args.camera_index) as camera:

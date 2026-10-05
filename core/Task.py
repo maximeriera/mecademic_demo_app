@@ -52,10 +52,31 @@ def _load_workspace_task_function(function_name: str, module_candidates: tuple[s
     ) from last_error
 
 
-prod_cycle = _load_workspace_task_function("prod_cycle", ("prod", "app_logic.prod"))
-home = _load_workspace_task_function("home", ("home", "app_logic.home"))
-shipment = _load_workspace_task_function("shipment", ("shipment", "app_logic.shipment"))
-calib = _load_workspace_task_function("calib", ("calib", "app_logic.calib"))
+#: Workspace module candidates for each task entrypoint, tried in order.
+TASK_FUNCTION_MODULES: Dict[str, tuple[str, ...]] = {
+    "prod_cycle": ("prod", "app_logic.prod"),
+    "home": ("home", "app_logic.home"),
+    "shipment": ("shipment", "app_logic.shipment"),
+    "calib": ("calib", "app_logic.calib"),
+}
+
+
+def load_task_function(function_name: str):
+    """Resolve a workspace task function **at call time**.
+
+    Resolution is deliberately lazy.  Importing these at module scope meant a
+    single error in the workspace logic (a typo, a missing device SDK) raised
+    during ``import core.Task`` — before the Flask layer could fall back to its
+    mock controller — and took the whole server down with it.  Resolving per
+    run instead confines the failure to the task that needs it: the task faults,
+    the rest of the app (status, logs, device info, other tasks) keeps serving,
+    and a fix in the workspace is picked up without restarting the process.
+    """
+    try:
+        candidates = TASK_FUNCTION_MODULES[function_name]
+    except KeyError:
+        raise ValueError(f"Unknown task function '{function_name}'.") from None
+    return _load_workspace_task_function(function_name, candidates)
 
 # --- Enums for State Management ---
 
@@ -187,7 +208,7 @@ class Task(threading.Thread):
         """
         try:
             self.logger.info(f"[{self.name}] HOME routine started.")
-            home(self.devices)
+            load_task_function("home")(self.devices)
             self.logger.info(f"[{self.name}] HOME routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
@@ -205,7 +226,7 @@ class Task(threading.Thread):
         """
         try:        
             self.logger.info(f"[{self.name}] SHIPMENT routine started.")
-            shipment(self.devices)
+            load_task_function("shipment")(self.devices)
             self.logger.info(f"[{self.name}] SHIPMENT routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] SHIPMENT task encountered an error: {e}")
@@ -223,7 +244,7 @@ class Task(threading.Thread):
         """
         try:        
             self.logger.info(f"[{self.name}] CALIB routine started.")
-            calib(self.devices)
+            load_task_function("calib")(self.devices)
             self.logger.info(f"[{self.name}] CALIB routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] CALIB task encountered an error: {e}")
@@ -250,6 +271,7 @@ class Task(threading.Thread):
             genuine device fault and is re-raised to trigger ``FAULTED`` state.
         """
         try:
+            prod_cycle = load_task_function("prod_cycle")
             self._run_home()
             while not self.stopped():
                 cycle_number = int(self.production_context.get_variable("part_count", 0)) + 1

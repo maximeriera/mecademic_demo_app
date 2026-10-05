@@ -365,11 +365,17 @@ function sendManualAbort() {
 }
 
 /* ---- Production context ---- */
+// Escapes quotes as well as angle brackets. Without the quote cases, any value
+// interpolated into an HTML attribute (e.g. a str param's value="...") could
+// close the attribute and inject new ones — a str param set to
+// `x" onfocus=alert(1) autofocus x="` was enough to run script on render.
 function escapeHtml(text) {
     return String(text)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function parseFieldValue(typeName, inputEl) {
@@ -573,7 +579,41 @@ function renderProdContext(data) {
     if (varsContainer) {
         varsContainer.innerHTML = renderNamespaceTable('variables', data.variables || {}, locked);
     }
+    ensureProdCardHandlers();
     restoreProdScrollState(scrollState);
+}
+
+// The Apply/Reset buttons carry their target in data-* attributes and are wired
+// through one delegated listener per container, rather than an inline
+// onclick="...('${key}')" built by string interpolation — a key containing a
+// quote would otherwise have broken out of the handler and executed.
+// The containers themselves are never replaced (only their innerHTML), so these
+// listeners survive every re-render and only need attaching once.
+let prodCardHandlersInitialized = false;
+
+function ensureProdCardHandlers() {
+    if (prodCardHandlersInitialized) return;
+
+    ['prod-params-container', 'prod-variables-container'].forEach((containerId) => {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        container.addEventListener('click', (event) => {
+            const btn = event.target.closest('[data-prod-action]');
+            if (!btn || btn.disabled || !container.contains(btn)) return;
+
+            const namespace = btn.dataset.namespace;
+            const key = btn.dataset.key;
+            if (!namespace || !key) return;
+
+            if (btn.dataset.prodAction === 'apply') {
+                updateProdValue(namespace, key);
+            } else if (btn.dataset.prodAction === 'reset') {
+                resetProdContext(namespace, key);
+            }
+        });
+    });
+
+    prodCardHandlersInitialized = true;
 }
 
 function renderNamespaceTable(namespace, entries, locked) {
@@ -591,9 +631,9 @@ function renderNamespaceTable(namespace, entries, locked) {
 
         let editorHtml = '';
         if (entry.type === 'bool') {
-            editorHtml = `<input id="${inputId}" type="checkbox" ${entry.value ? 'checked' : ''} ${editable ? '' : 'disabled'}>`;
+            editorHtml = `<input id="${escapeHtml(inputId)}" type="checkbox" ${entry.value ? 'checked' : ''} ${editable ? '' : 'disabled'}>`;
         } else {
-            editorHtml = `<input id="${inputId}" type="text" value="${escapeHtml(entry.value)}" ${editable ? '' : 'disabled'}>`;
+            editorHtml = `<input id="${escapeHtml(inputId)}" type="text" value="${escapeHtml(entry.value)}" ${editable ? '' : 'disabled'}>`;
         }
 
         return `
@@ -611,8 +651,8 @@ function renderNamespaceTable(namespace, entries, locked) {
                         ${entry.description ? `<span class="prod-card-desc">${escapeHtml(entry.description)}</span>` : ''}
                     </div>
                     <div class="prod-card-actions">
-                        <button type="button" class="btn-task" onclick="updateProdValue('${namespace}','${key}')" ${editable ? '' : 'disabled'}>Apply</button>
-                        <button type="button" class="btn-shutdown" onclick="resetProdContext('${namespace}','${key}')" ${locked ? 'disabled' : ''}>Reset</button>
+                        <button type="button" class="btn-task" data-prod-action="apply" data-namespace="${escapeHtml(namespace)}" data-key="${escapeHtml(key)}" ${editable ? '' : 'disabled'}>Apply</button>
+                        <button type="button" class="btn-shutdown" data-prod-action="reset" data-namespace="${escapeHtml(namespace)}" data-key="${escapeHtml(key)}" ${locked ? 'disabled' : ''}>Reset</button>
                     </div>
                 </div>
             </div>

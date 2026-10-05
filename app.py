@@ -1,7 +1,9 @@
 # app.py
 import argparse
+import atexit
 import sys
 import os
+import threading
 from pathlib import Path
 
 # --- Workspace Setup ---
@@ -11,6 +13,8 @@ os.environ.setdefault("MECADEMIC_DEMO_ROOT", str(PROJECT_ROOT))
 
 parser = argparse.ArgumentParser(description="Mecademic Demo App")
 parser.add_argument('--workspace', type=str, default=BASE_DIR, help="Path to the external workspace")
+parser.add_argument('--host', type=str, default='0.0.0.0', help="Interface the server binds to")
+parser.add_argument('--port', type=int, default=5000, help="Port the server listens on")
 args, _ = parser.parse_known_args()
 
 workspace_path = os.path.abspath(args.workspace)
@@ -231,9 +235,33 @@ def clear_faults():
     """API endpoint to clear faults on all devices."""
     logger.info("POST /api/clear_faults - Clear faults requested.")
     try:
-        APPLICATION.clear_faults()
-        logger.info("Faults cleared successfully.")
-        return jsonify({'message': 'Faults cleared.', 'success': True}), 200
+        result = APPLICATION.clear_faults() or {}
+        # Older/mock controllers return None; treat that as a plain success.
+        if not isinstance(result, dict) or 'success' not in result:
+            logger.info("Faults cleared successfully.")
+            return jsonify({'message': 'Faults cleared.', 'success': True}), 200
+
+        if result['success']:
+            logger.info("Faults cleared successfully. Controller is %s.", result.get('state'))
+            return jsonify({
+                'message': f"Faults cleared. Controller is {result.get('state')}.",
+                'success': True,
+                **result,
+            }), 200
+
+        # Report *which* devices are still unhealthy rather than claiming success.
+        problems = []
+        if result.get('still_faulted'):
+            problems.append('still faulted: ' + ', '.join(result['still_faulted']))
+        if result.get('errors'):
+            problems.append('errors: ' + '; '.join(f'{k}: {v}' for k, v in result['errors'].items()))
+        detail = ' | '.join(problems) or 'cell did not return to a healthy state'
+        logger.warning("Clear faults incomplete - %s", detail)
+        return jsonify({
+            'message': f"Faults not fully cleared ({detail}). Controller is {result.get('state')}.",
+            'success': False,
+            **result,
+        }), 200
     except Exception as e:
         logger.error(f"Failed to clear faults: {e}", exc_info=True)
         return jsonify({'message': f'Failed to clear faults: {e}', 'success': False}), 500
@@ -444,19 +472,31 @@ def get_log(category, filename):
         return jsonify({'message': f'Failed to read log: {e}'}), 500
 
 
-# --- Cleanup on Server Shutdown ---
-# Uses a flag to ensure shutdown runs only once.
+# --- Cleanup on Process Exit ---
+# NOTE: this must NOT be a Flask `teardown_appcontext` hook — that hook runs at the
+# end of *every request*, which would shut the controller down on the first page load.
+_shutdown_lock = threading.Lock()
 _shutdown_called = False
 
-@app.teardown_appcontext
-def shutdown_APPLICATION_controller(exception=None):
+
+def shutdown_APPLICATION_controller():
+    """Shut the controller down exactly once, when the process exits."""
     global _shutdown_called
-    if not _shutdown_called:
+    with _shutdown_lock:
+        if _shutdown_called:
+            return
         _shutdown_called = True
-        print("Flask context teardown: Shutting down APPLICATION controller.")
-        logger.info("Flask context teardown: Shutting down APPLICATION controller.")
+
+    print("Process exit: Shutting down APPLICATION controller.")
+    logger.info("Process exit: Shutting down APPLICATION controller.")
+    try:
         APPLICATION.shutdown()
+    except Exception as e:
+        logger.warning(f"Error during controller shutdown at exit: {e}", exc_info=True)
+
+
+atexit.register(shutdown_APPLICATION_controller)
 
 if __name__ == '__main__':
-    logger.info("Starting Flask server on 0.0.0.0:5000")
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    logger.info(f"Starting Flask server on {args.host}:{args.port}")
+    app.run(debug=False, host=args.host, port=args.port)

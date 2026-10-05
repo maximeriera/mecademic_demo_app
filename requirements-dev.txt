@@ -1,0 +1,24 @@
+# Development-only tooling. Not needed to run the application or build the image.
+#
+#   pip install -r requirements-dev.txt
+#
+# The previous requirements.txt was a full `pip freeze` from a Windows dev
+# machine and carried ~68 Jupyter/notebook packages plus pandas, which the
+# application never imports. They are declared here as the few top-level
+# packages a developer actually asks for; pip resolves the rest.
+
+-r requirements.txt
+
+# Notebook workflow
+jupyterlab==4.4.10
+notebook==7.4.7
+pandas==2.3.3
+
+# Only needed by the standalone live-view demo in devices/api/gigE_vision.py
+# (`python -m devices.api.gigE_vision`). The GigECamera class itself and the
+# --diagnose path do not require OpenCV.
+#
+# NOTE: opencv-python cannot be imported on python:*-slim images — it links
+# against X11/GL libraries that are absent there. Install libgl1,
+# libglib2.0-0 and libxcb1 first if you need it inside a container.
+opencv-python==5.0.0.93

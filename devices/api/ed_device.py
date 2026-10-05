@@ -495,15 +495,23 @@ class EDDigitalDevice(EDDevice):
         """
         Set all digital outputs.  Command: ``@AA(Data)``
 
+        The data field must be an even number of hex digits: two for 8-channel
+        modules, four for 16-channel ones.  The width is chosen from the
+        magnitude of *value*, so ``0xFF`` sends ``@AAFF`` and ``0x01FA`` sends
+        ``@AA01FA``.  (Formatting every value as two digits produced an
+        odd-length field such as ``@AA1FA`` for anything above ``0xFF``, which
+        the device rejects.)
+
         Parameters
         ----------
         value : int
-            Bitmask (0x0000–0xFFFF).
+            Bitmask (0x0000–0xFFFF).  Bit 0 = DOut 0.
         """
         _require("value", value, int)
         if not (0x0000 <= value <= 0xFFFF):
             raise ValueError("value must be 0x0000–0xFFFF")
-        return self._parse_io(await self._cmd(f"@{self._addr}{value:02X}"))
+        width = 2 if value <= 0xFF else 4
+        return self._parse_io(await self._cmd(f"@{self._addr}{value:0{width}X}"))
 
     async def set_digital_output_lower8(self, value: int) -> str:
         """

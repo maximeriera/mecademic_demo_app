@@ -32,6 +32,10 @@ class PlanarMotorMove:
         self.end_speed = ending_speed
 
 class PlanarMotorApi:
+    # Status poll interval for the blocking wait helpers. Kept short so that
+    # abort() interrupts a wait promptly — the cell has moving magnetic movers.
+    POLL_INTERVAL_S = 0.1
+
     def __init__(self, ip: str, auto_connect: bool = False):
         self.ip = ip
         self.auto_connect = auto_connect
@@ -226,23 +230,64 @@ class PlanarMotorApi:
     def wait_move_done(self, bot_id: int, timeout: float = 10.0) -> pmc_types.XBOTSTATE:
         """
         Blocking Function: Pauses execution until the specific bot stops moving.
-        
+
+        Honours both `timeout` and :meth:`abort`, so a mover that never reaches
+        IDLE cannot wedge the calling task thread forever.
+
+        Args:
+            bot_id (int): The mover to wait on.
+            timeout (float): Maximum seconds to wait for IDLE.
+
         Returns:
             XBOTSTATE: The final state (IDLE or OBSTACLE_DETECTED).
-        """
-        # Poll status until it is no longer MOVING (Status is not IDLE usually means moving or error)
-        # Note: Logic assumes any state other than IDLE implies movement or busy-ness.
-        while self.bot.get_xbot_status(xbot_id=bot_id).xbot_state is not pmc_types.XBOTSTATE.XBOT_IDLE:
-            # Check for collision/obstacles immediately
-            if self.bot.get_xbot_status(xbot_id=bot_id).xbot_state == pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED:
-                return pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED
-            time.sleep(0.5)
-        return pmc_types.XBOTSTATE.XBOT_IDLE
 
-    def wait_multiple_move_done(self, bot_list, timeout: float = 10) -> None:
-        """Blocking Function: Waits for a list of bots to all reach IDLE."""
+        Raises:
+            TimeoutError: If the mover has not reached IDLE within `timeout`.
+            InterruptedError: If :meth:`abort` was requested while waiting.
+        """
+        deadline = time.time() + timeout
+        # Poll status until it is no longer MOVING (any state other than IDLE
+        # implies movement or busy-ness). One status read per iteration.
+        while True:
+            self._raise_if_aborted()
+            state = self.bot.get_xbot_status(xbot_id=bot_id).xbot_state
+
+            if state == pmc_types.XBOTSTATE.XBOT_IDLE:
+                return pmc_types.XBOTSTATE.XBOT_IDLE
+            # Surface collision/obstacle immediately rather than waiting it out.
+            if state == pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED:
+                return pmc_types.XBOTSTATE.XBOT_OBSTACLE_DETECTED
+
+            if time.time() >= deadline:
+                raise TimeoutError(
+                    f"Mover {bot_id} did not reach IDLE within {timeout}s (last state: {state})."
+                )
+            time.sleep(self.POLL_INTERVAL_S)
+
+    def wait_multiple_move_done(self, bot_list, timeout: float = 10) -> dict:
+        """Blocking Function: Waits for a list of bots to all reach IDLE.
+
+        `timeout` is the budget for the whole list, not per mover, so the total
+        wait stays bounded by it regardless of how many movers are passed.
+
+        Returns:
+            dict: Bot ID -> final XBOTSTATE for each mover waited on.
+
+        Raises:
+            TimeoutError: If the movers have not all reached IDLE within `timeout`.
+            InterruptedError: If :meth:`abort` was requested while waiting.
+        """
+        deadline = time.time() + timeout
+        states = {}
         for bot in bot_list:
-            self.wait_move_done(bot, timeout)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Movers {list(bot_list)} did not all reach IDLE within {timeout}s "
+                    f"(completed: {states})."
+                )
+            states[bot] = self.wait_move_done(bot, timeout=remaining)
+        return states
 
     def define_stereotype(self,
                           mover_type: pmc_types.XBOTTYPE,

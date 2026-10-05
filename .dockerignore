@@ -1,0 +1,36 @@
+# Keep the build context (and therefore the image) small and reproducible.
+# Without this, `COPY . .` pulls in .git, local logs, backups and venvs.
+
+.git
+.gitignore
+.dockerignore
+
+# Local runtime state — must not leak into the image
+logs/
+backups/
+test-results/
+playwright-report/
+
+# Python artefacts
+__pycache__/
+*.py[codz]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# OS / editor cruft
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Dev-only dependencies are installed explicitly, never baked into the image
+requirements-dev.txt
+
+# Docs
+README.md
+LICENSE
