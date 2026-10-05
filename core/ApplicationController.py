@@ -135,7 +135,8 @@ class ApplicationController:
 
         Supported ``type`` values (case-insensitive):
         ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``,
-        ``brainboxes_ed_digital``, ``zaber``.
+        ``brainboxes_ed_digital``, ``zaber``, ``gige_camera``, ``lmi``,
+        ``simulated`` (aliases: ``dummy``, ``fake``).
         Unknown types are skipped with a warning.
         """
         devices_config = self.config.get('devices', {})
@@ -229,6 +230,18 @@ class ApplicationController:
                     camera_index=device_info.get('camera_index', 0),
                     autostart_stream=device_info.get('autostart_stream', False),
                     name=device_name,
+                )
+                self.devices[device_name] = device
+
+            elif device_type in ('simulated', 'dummy', 'fake'):
+                from devices.SimulatedDevice import SimulatedDevice
+                self.logger.info(f"Creating Simulated (no-hardware) device for: {device_name}")
+                device = SimulatedDevice(
+                    name=device_name,
+                    connect_delay=device_info.get('connect_delay', 0.0),
+                    fail_to_connect=device_info.get('fail_to_connect', False),
+                    fail_rate=device_info.get('fail_rate', 0.0),
+                    info=device_info.get('info'),
                 )
                 self.devices[device_name] = device
 

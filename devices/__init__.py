@@ -13,6 +13,7 @@ __all__ = [
 	"IoLogikE1212",
 	"LMISensor",
 	"ZaberAxis",
+	"SimulatedDevice",
 ]
 
 
@@ -53,4 +54,8 @@ def __getattr__(name):
 		from .OLD_ZaberAxis import ZaberAxis
 
 		return ZaberAxis
+	if name == "SimulatedDevice":
+		from .SimulatedDevice import SimulatedDevice
+
+		return SimulatedDevice
 	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

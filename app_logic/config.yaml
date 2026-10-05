@@ -68,6 +68,19 @@
 #   camera_index: 0              # optional, default: 0
 #   autostart_stream: false      # optional, default: false
 #
+# --- Simulated Device (SimulatedDevice) — no hardware required ---
+#   Stands in for ANY device type above so the app can be developed/tested
+#   with no robot, feeder, or I/O hardware in the loop. Its `.api` accepts
+#   any method call (e.g. MoveJoints(...), WaitIdle()) and logs it as a
+#   no-op, so app_logic written against a real driver runs unmodified.
+#   type: "simulated"            # aliases: "dummy", "fake"
+#   connect_delay: 0.5           # optional, seconds — simulate connection latency
+#   fail_to_connect: false       # optional — raise on initialize(), to test FAULTED path
+#   fail_rate: 0.0               # optional, 0-1 — chance `faulted` flips True per check
+#   info:                        # optional — static info dict shown in the UI
+#     model: "SimulatedMecaRobot"
+#     serial_number: "SIM-0001"
+#
 # ============================================================
 # PRODUCTION CONTEXT CONFIGURATION
 # ============================================================
