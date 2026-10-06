@@ -53,6 +53,11 @@
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
             </nav>
+
+            <!-- The workspace's optional custom view (custom_view/ next to
+                 config.yaml). Unhidden by app.js only when the workspace has
+                 one; opens in its own browser tab, e.g. on a second screen. -->
+            <a id="custom-view-link" class="custom-view-link" href="/view/" target="_blank" rel="noopener" hidden>Custom view &#8599;</a>
         </aside>
 
         <main class="main-content">

@@ -24,6 +24,7 @@ import threading
 import time
 import yaml
 
+from importlib import import_module
 from typing import Dict, Any
 
 import logging
@@ -35,10 +36,15 @@ from .Task import Task, TaskType
 from .ControllerState import ControllerState
 from .AppContext import AppContext
 from .ContextStore import ContextStore
+from .DataHub import DataHub
 from .ProductionMetrics import ProductionMetrics
 from .StepTracker import StepTracker
 from .ManualActions import load_manual_actions_registry, normalize_manual_actions_config
 from .LogSetup import get_controller_logger
+
+#: Workspace module candidates for the optional custom view, tried in order
+#: (same flat-then-package convention as ``Task.TASK_FUNCTION_MODULES``).
+CUSTOM_VIEW_MODULES = ("custom_view", "app_logic.custom_view")
 
 class ApplicationController:
     """
@@ -152,7 +158,50 @@ class ApplicationController:
             )
 
         steps = StepTracker(self.logger, StepTracker.normalize_sequences(sequences, self.logger))
-        return AppContext(store=store, steps=steps, metrics=ProductionMetrics(self.logger))
+        return AppContext(store=store, steps=steps, metrics=ProductionMetrics(self.logger),
+                          data=DataHub(self.logger))
+
+    def _start_custom_view(self) -> None:
+        """Load the workspace's optional ``custom_view`` module and start its data sources.
+
+        Never raises. The custom view is a demo add-on: no module simply leaves
+        it disabled, and a broken one is reported through
+        ``context.data.setup_error`` while the controller still reaches READY.
+        """
+        hub = self.context.data
+        module = None
+        for name in CUSTOM_VIEW_MODULES:
+            try:
+                module = import_module(name)
+                break
+            except Exception as e:
+                # Only "this candidate does not exist" means try the next one; a
+                # missing import *inside* the module is a real setup error.
+                if (isinstance(e, ModuleNotFoundError) and e.name
+                        and (name == e.name or name.startswith(e.name + "."))):
+                    continue
+                hub.setup_error = f"{type(e).__name__}: {e}"
+                self.logger.error("Custom view module '%s' failed to import: %s", name, e, exc_info=True)
+                return
+
+        if module is None:
+            self.logger.info("No custom_view module in the workspace: custom view disabled.")
+            return
+
+        setup = getattr(module, "setup", None)
+        if not callable(setup):
+            hub.setup_error = f"{module.__name__} has no setup(hub, devices) function."
+            self.logger.error(hub.setup_error)
+            return
+
+        try:
+            setup(hub, self.devices)
+            hub.start()
+            self.logger.info("Custom view '%s' started.", module.__name__)
+        except Exception as e:
+            hub.clear()
+            hub.setup_error = f"{type(e).__name__}: {e}"
+            self.logger.error("Custom view setup failed: %s", e, exc_info=True)
 
     def _load_manual_actions_config(self) -> list[dict[str, str]]:
         """Load and validate manual action metadata from config and workspace registry."""
@@ -328,7 +377,9 @@ class ApplicationController:
             Re-raised from the failing device's ``initialize()`` after the
             controller is transitioned to ``FAULTED``.
         """
-        self.set_state(ControllerState.INITIALIZING)   
+        self.set_state(ControllerState.INITIALIZING)
+        # No sampler may read a device while it (re)connects.
+        self.context.data.clear()
         for _, device in self.devices.items():
             try:
                 self.logger.info(f"Initializing device: {device.device_id}")
@@ -346,7 +397,8 @@ class ApplicationController:
             self._monitor_thread = threading.Thread(target=self._monitor_devices_status, name="MonitorThread", daemon=True)
             self._monitor_stop_event.clear()
             self._monitor_thread.start()
-        
+
+        self._start_custom_view()
         self.context.apply_event("initialize")
         self.set_state(ControllerState.READY)
 
@@ -755,6 +807,9 @@ class ApplicationController:
                     self._current_task.name,
                 )
 
+
+        # Samplers must be gone before their devices disconnect.
+        self.context.data.stop()
 
         # Wait for monitor thread
         self._monitor_thread.join(timeout=10)

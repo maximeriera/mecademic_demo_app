@@ -21,11 +21,12 @@ args, _ = parser.parse_known_args()
 workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
 
-from flask import Flask, render_template, jsonify, request, send_from_directory, url_for
+from flask import Flask, abort, render_template, jsonify, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 import logging
+import math
 import time
 import uuid
 
@@ -46,11 +47,11 @@ app = Flask(__name__)
 # --- APPLICATION Controller Instance (Singleton) ---
 # Initialize the controller once outside the routes
 # NOTE: Replace dummy config with your actual Meca 500 connection details
+app_logic_dir = os.path.join(workspace_path, "app_logic")
+workspace_config_dir = app_logic_dir if os.path.isdir(app_logic_dir) else workspace_path
 try:
     # We must start the controller in the main thread before starting Flask's server
     from core.ApplicationController import ApplicationController
-    app_logic_dir = os.path.join(workspace_path, "app_logic")
-    workspace_config_dir = app_logic_dir if os.path.isdir(app_logic_dir) else workspace_path
     config_path = os.path.join(workspace_config_dir, "config.yaml")
     # The optional context file (context.yaml) is located by the controller,
     # relative to config.yaml, honouring `context_file:` in it.
@@ -119,7 +120,8 @@ _state_log_lock = threading.Lock()
 
 
 def _is_noisy_path(path):
-    return path in _POLL_PATHS or path.startswith('/static/') or path.startswith('/api/logs/')
+    return (path in _POLL_PATHS or path.startswith('/static/') or path.startswith('/api/logs/')
+            or path.startswith('/api/data') or path.startswith('/view/'))
 
 
 def _log_state_change(state):
@@ -558,6 +560,71 @@ def reset_context():
     except Exception as e:
         logger.error(f"Failed to reset context: {e}", exc_info=True)
         return jsonify({'message': f'Failed to reset context: {e}', 'success': False}), 400
+
+
+# --- Custom view (optional, per workspace) ----------------------------------
+# A workspace may ship custom_view/ next to its config.yaml: a Python module
+# (data sources + analysis, loaded by the controller) and a web page served
+# here. The standard UI only links to it.
+CUSTOM_VIEW_DIR = os.path.join(workspace_config_dir, "custom_view")
+
+
+def _data_hub():
+    return getattr(getattr(APPLICATION, 'context', None), 'data', None)
+
+
+def _jsonable(value):
+    """Coerce workspace-published values (numpy, tuples, NaN) into strict JSON."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        # JSON.parse rejects NaN/Infinity, which would break the whole response.
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, 'tolist'):
+        return _jsonable(value.tolist())
+    try:
+        return _jsonable(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+@app.route('/api/data', methods=['GET'])
+def get_data_manifest():
+    """Custom view manifest: whether it is available/running, and its channels."""
+    hub = _data_hub()
+    manifest = hub.describe() if hub is not None else {'active': False, 'setup_error': None, 'channels': {}}
+    manifest['view_available'] = os.path.isfile(os.path.join(CUSTOM_VIEW_DIR, 'index.html'))
+    return jsonify(_jsonable(manifest)), 200
+
+
+@app.route('/api/data/read', methods=['GET'])
+def read_data():
+    """Samples stored after ``after`` for each ``ch``: ``/api/data/read?ch=a&ch=b&after=1234``.
+
+    Pass the returned ``cursor`` back as ``after`` on the next poll.
+    """
+    channels = request.args.getlist('ch')
+    after = request.args.get('after', type=int)
+    hub = _data_hub()
+    if hub is None:
+        return jsonify({'now': None, 'cursor': after, 'data': {ch: [] for ch in channels}}), 200
+    cursor, data = hub.read(channels, after)
+    return jsonify({'now': hub.now(), 'cursor': cursor, 'data': _jsonable(data)}), 200
+
+
+@app.route('/view/')
+@app.route('/view/<path:filename>')
+def custom_view(filename='index.html'):
+    """Serve the workspace's custom view page and its assets (never its Python code)."""
+    if filename.endswith(('.py', '.pyc')) or '__pycache__' in filename.split('/'):
+        abort(404)
+    if not os.path.isdir(CUSTOM_VIEW_DIR):
+        abort(404)
+    return send_from_directory(CUSTOM_VIEW_DIR, filename)
 
 
 # --- Log directories (resolved relative to this file so they work regardless of cwd) ---

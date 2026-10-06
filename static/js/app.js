@@ -1853,6 +1853,17 @@ setInterval(() => {
     }
 }, 1000);
 
+/* ---- Custom view link ---- */
+// Shown only when the workspace ships custom_view/index.html.
+function initCustomViewLink() {
+    fetch('/api/data')
+        .then(r => r.json())
+        .then(info => {
+            document.getElementById('custom-view-link').hidden = !(info && info.view_available);
+        })
+        .catch(() => {});
+}
+
 /* ---- Startup ---- */
 setInterval(updateRobotStatus, 100);
 setInterval(loadRobotInfo, 1000);
@@ -1866,3 +1877,4 @@ ensureBackupRestoreDropdowns();
 renderBackupRestoreSelectMenu('backup-robot-picker');
 renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
+initCustomViewLink();

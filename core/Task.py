@@ -336,13 +336,16 @@ class Task(threading.Thread):
                 self.logger.info(f"[{self.name}] PROD cycle start #{cycle_number}")
                 self.context.metrics.mark_cycle_start()
                 self.context.steps.begin_cycle(cycle_number)
+                self.context.data.mark("cycle_start", cycle=cycle_number)
                 try:
                     prod_cycle(self.devices, self.context)
                     self.context.metrics.mark_cycle_end()
+                    self.context.data.mark("cycle_end", cycle=cycle_number)
                     self.context.steps.log_cycle_summary(cycle_number)
                     self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:
                     self.context.metrics.mark_cycle_error(str(e))
+                    self.context.data.mark("cycle_error", cycle=cycle_number, error=str(e))
                     if self.stopped():
                         # abort() called mid-cycle: ClearMotion() unblocked WaitIdle() — clean exit
                         self.logger.info(f"[{self.name}] Prod cycle interrupted by abort: {e}")

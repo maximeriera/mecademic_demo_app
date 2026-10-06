@@ -292,6 +292,36 @@ button, input, select, textarea {
     transform: none;
 }
 
+/* Link to the workspace's custom view: a page, not a tab, hence the outline. */
+.custom-view-link {
+    display: block;
+    margin-top: 12px;
+    padding: 11px 16px;
+    border: 1px solid var(--color-accent-2);
+    border-radius: var(--radius-control);
+    color: var(--color-accent);
+    font-size: 0.85em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-decoration: none;
+    transition: background 0.2s ease;
+}
+.custom-view-link:hover {
+    background: rgba(255,255,255,0.06);
+}
+/* display:block above would otherwise override the hidden attribute. */
+.custom-view-link[hidden] {
+    display: none;
+}
+@media (max-width: 1024px) {
+    .custom-view-link {
+        margin-top: 0;
+        margin-bottom: 12px;
+        text-align: center;
+    }
+}
+
 /* Enhanced Device Cards */
 .device-card {
     background: rgba(255, 255, 255, 0.03);

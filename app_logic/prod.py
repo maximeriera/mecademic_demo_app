@@ -83,6 +83,8 @@ def prod_cycle(devices: Dict[str, Device], context: AppContext | None = None):
     # --- 3. Inspect ------------------------------------------------------
     with context.step("Inspect part"):
         passed = inspect_part(devices, context=context)
+    # Shown by the custom view (custom_view/), next to its own profile analysis.
+    context.publish("inspection_passed", passed)
 
     # --- 4. Place, or discard --------------------------------------------
     # Only one of these two runs per cycle. "Discard rejected part" is declared
