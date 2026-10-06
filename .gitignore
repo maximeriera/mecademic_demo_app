@@ -223,3 +223,6 @@ __marimo__/
 
 # Older version
 accessories_api/
+
+# Runtime values saved by the context (see app_logic/context.yaml)
+*.state.json

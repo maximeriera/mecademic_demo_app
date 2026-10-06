@@ -8,6 +8,7 @@
 # Local runtime state — must not leak into the image
 logs/
 backups/
+*.state.json
 test-results/
 playwright-report/
 

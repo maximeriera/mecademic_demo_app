@@ -1,0 +1,79 @@
+# context.yaml  (optional)
+#
+# Params and variables shared by every task function through `context`, and
+# edited from the Variables tab. Delete this file and the app still runs:
+# context.get_param("x", default) then returns the default, the Variables tab
+# explains how to re-enable it, and steps/metrics are unaffected.
+#
+# The file has 3 sections:
+# 1) settings   -> default reset policy
+# 2) params     -> tunable inputs read by task logic
+# 3) variables  -> runtime values task logic carries between calls
+#
+# Notes:
+# - This file is only read, never rewritten, so comments here are safe.
+# - Values of entries marked `persist: true` are saved to context.state.json
+#   next to this file and restored on the next start. Delete that file to
+#   start again from the defaults.
+# - Only existing entries can be edited from the UI/API; add new ones here.
+# - Types are enforced: a value that cannot be read as the entry's type is
+#   rejected.
+# - Step sequences ("Step 3 of 5") are declared in config.yaml.
+
+settings:
+  # Events that reset an entry back to its `default`, for entries that do not
+  # define their own `reset_on`.
+  # Events: initialize, prod_start, prod_stop, abort, fault
+  # Use `none` (or [none]) to disable resets by default.
+  default_reset_events: none
+
+params:
+  # ENTRY FORMAT (params and variables alike)
+  # <name>:
+  #   type: int | float | bool | str
+  #   default: <typed value>        # starting value, and the value a reset restores
+  #   editable_when_idle: true      # false = read-only in the UI (code can still write it)
+  #   reset_on: [event, ...]        # optional; overrides settings.default_reset_events
+  #   reset_on: none                # never reset automatically
+  #   persist: false                # true = keep the value across restarts
+  #   description: <free text>      # shown in the Variables tab
+
+  cycle_wait_s:
+    type: float
+    default: 0.2
+    editable_when_idle: true
+    # This pause is deliberately NOT wrapped in a step, so it shows up as idle
+    # time on the Production tab - which is exactly how you spot dead time in
+    # a real cycle. Raise it and watch the gap between cycles grow.
+    description: Idle pause between cycles. Not part of any step, so it reads as idle time.
+
+  move_time_s:
+    type: float
+    default: 2
+    editable_when_idle: true
+    description: Simulated duration of one robot move. Lower it to speed the demo up.
+
+  reject_every_n:
+    type: int
+    default: 5
+    editable_when_idle: true
+    description: Every Nth part is treated as a reject. Set to 0 to accept every part.
+
+variables:
+  part_count:
+    type: int
+    default: 0
+    # Written by prod_cycle; read-only from the UI.
+    editable_when_idle: false
+    reset_on: prod_start
+    # Survives an app restart mid-run; still reset when a new run starts.
+    persist: true
+    description: Parts placed in the tray since production start.
+
+  reject_count:
+    type: int
+    default: 0
+    editable_when_idle: false
+    reset_on: prod_start
+    persist: true
+    description: Parts discarded by inspection since production start.

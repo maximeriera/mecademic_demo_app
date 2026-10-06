@@ -12,10 +12,11 @@ cannot report steps.
 import time
 from typing import Dict
 
+from core import AppContext
 from devices import Device
 
 
-def home(devices: Dict[str, Device], context=None):
+def home(devices: Dict[str, Device], context: AppContext | None = None):
     """Open the gripper, then move the robot to its home pose."""
     robot = devices["my_meca_robot"]
 

@@ -44,8 +44,8 @@ services:
 
     volumes:
       # Cell configuration and task logic, editable without rebuilding the
-      # image. Must stay writable: ProductionContext writes production_context
-      # .yaml back when settings.storage_scope is "disk".
+      # image. Must stay writable: the context saves `persist: true` values to
+      # app_logic/context.state.json.
       - ./app_logic:/webapp/app_logic
 
       # Rotating app/device logs, so the Logs tab keeps history across restarts.

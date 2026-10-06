@@ -1,7 +1,8 @@
+from .AppContext import AppContext
 from .ControllerState import ControllerState
 from .Task import Task, TaskType
 
-__all__ = ["ApplicationController", "ControllerState", "Task", "TaskType"]
+__all__ = ["AppContext", "ApplicationController", "ControllerState", "Task", "TaskType"]
 
 
 def __getattr__(name):

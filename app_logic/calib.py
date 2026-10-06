@@ -8,10 +8,11 @@ the per-step timings on the Production tab make obvious.
 import time
 from typing import Dict
 
+from core import AppContext
 from devices import Device
 
 
-def calib(devices: Dict[str, Device], context=None):
+def calib(devices: Dict[str, Device], context: AppContext | None = None):
     """Move to the calibration pose, capture, then solve and store."""
     robot = devices["my_meca_robot"]
     camera = devices["inspection_camera"]

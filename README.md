@@ -25,11 +25,15 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [Supported device types](#supported-device-types)
   - [Web UI](#web-ui)
     - [Control tab](#control-tab)
+    - [Production tab](#production-tab)
+    - [Variables tab](#variables-tab)
     - [Logs tab](#logs-tab)
   - [State Machine](#state-machine)
   - [Stop vs. Abort](#stop-vs-abort)
   - [Build your own application logic](#build-your-own-application-logic)
     - [Function signatures](#function-signatures)
+    - [Reporting sequence steps](#reporting-sequence-steps)
+    - [Context: params \& variables (optional)](#context-params--variables-optional)
     - [Accessing devices](#accessing-devices)
     - [How the PROD loop works](#how-the-prod-loop-works)
     - [Error handling](#error-handling)
@@ -42,6 +46,8 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [System](#system)
     - [Tasks](#tasks)
     - [Logs](#logs)
+    - [Production](#production)
+    - [Context](#context)
 
 ---
 
@@ -126,7 +132,7 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 
 ## Web UI
 
-The single-page UI at `http://localhost:5000` is divided into two tabs:
+The single-page UI at `http://localhost:5000` is divided into tabs, listed in the sidebar:
 
 ### Control tab
 
@@ -137,6 +143,14 @@ The single-page UI at `http://localhost:5000` is divided into two tabs:
 | **Tasks — Auto** | PROD (infinite loop), STOP (graceful), ABORT (immediate) |
 | **System Control** | INITIALIZE, CLEAR FAULTS, SHUTDOWN |
 | **Devices** | One card per device showing connected / ready / faulted badges and static info |
+
+### Production tab
+
+START / STOP / ABORT for the PROD loop, the live step and declared sequence, and cycle/run metrics (completed cycles, run time, last/average cycle time, last error). **Show Details** adds per-step timings and the recent cycle/run history; **Export Runs** downloads the archived runs as JSON.
+
+### Variables tab
+
+The params and variables declared in the optional `context.yaml` (see [Context](#context-params--variables-optional)), with their current value, default, reset policy and persistence. Values can be edited and reset while no task is running. Without a context file the tab explains how to add one.
 
 ### Logs tab
 
@@ -194,9 +208,9 @@ All user-facing task logic lives in the **`app_logic/`** folder. Each file expor
 | `home.py` | `home()` | `home(devices)` or `home(devices, context)` | HOME task, and automatically before/after the PROD loop |
 | `shipment.py` | `shipment()` | `shipment(devices)` or `shipment(devices, context)` | SHIPMENT task |
 | `calib.py` | `calib()` | `calib(devices)` or `calib(devices, context)` | CALIBRATION task |
-| `prod.py` | `prod_cycle()` | `prod_cycle(devices: Dict[str, Device], context: ProductionContext \| None = None)` | Each iteration of the PROD loop |
+| `prod.py` | `prod_cycle()` | `prod_cycle(devices: Dict[str, Device], context: AppContext \| None = None)` | Each iteration of the PROD loop |
 
-Every function receives `devices` — a dictionary mapping device names (as defined in `config.yaml`) to their `Device` instances. `prod_cycle` additionally receives a shared `context` object for persistent params/variables across cycles.
+Every function receives `devices` — a dictionary mapping device names (as defined in `config.yaml`) to their `Device` instances. `prod_cycle` (and any other function that accepts it) also receives the app-wide `context`: step reporting, plus the optional params and variables.
 
 `home`, `shipment` and `calib` receive `context` **only if they declare a second parameter**. Existing one-argument functions keep working unchanged — the second argument is passed only when the signature can accept it positionally.
 
@@ -226,7 +240,7 @@ Each step is timed automatically, closed even if the body raises, and closed by 
 
 For a one-liner without a block, `context.set_step("Pick part")` is closed by the next `set_step()`, by `context.clear_step()`, or when the task ends. Prefer `step()` — it also records failures.
 
-**Per-step timings** (average, last, min/max, and share of cycle time) accumulate automatically, so slow steps are visible without any configuration. Declaring the expected order in `production_context.yaml` additionally gives "Step 3 of 7", a progress bar and greyed-out upcoming steps:
+**Per-step timings** (average, last, min/max, and share of cycle time) accumulate automatically, so slow steps are visible without any configuration. Declaring the expected order under `sequences:` in `config.yaml` additionally gives "Step 3 of 7", a progress bar and greyed-out upcoming steps:
 
 ```yaml
 sequences:
@@ -240,11 +254,49 @@ A step the sequence does not contain is flagged **Off sequence** rather than rep
 
 > Step names must be **stable identifiers, not per-part data**. `f"Pick part {serial}"` creates a new timing bucket for every part; the backend caps this at 200 distinct names and warns, but the statistics stop being meaningful.
 
-The production context configuration is stored in `production_context.yaml` (or a custom path via `production_context_file` in `config.yaml`).
-It defines:
-- `params`: behavior inputs for prod logic
-- `variables`: runtime values that can be reused and updated every cycle
-- global default reset events with per-entry `reset_on` overrides
+### Context: params & variables (optional)
+
+Every task function receives the same `context` object (`core.AppContext`). Besides step reporting it gives access to **params** (tunable inputs, e.g. a move duration) and **variables** (runtime values carried between calls, e.g. a part counter). Both are declared in `app_logic/context.yaml` and edited from the **Variables** tab while no task is running.
+
+The context file is **optional**. Without one the app runs normally:
+- `context.get_param("x", default)` returns `default`.
+- `context.set_variable(...)` raises a `ContextError` naming the missing entry.
+- The Variables tab explains how to add a file.
+- Steps, the Production tab and metrics are unaffected.
+
+```yaml
+# app_logic/context.yaml
+settings:
+  default_reset_events: none        # reset policy for entries without reset_on
+
+params:
+  move_time_s:
+    type: float                     # int | float | bool | str
+    default: 2
+    editable_when_idle: true        # false = read-only in the UI
+    description: Duration of one robot move.
+
+variables:
+  part_count:
+    type: int
+    default: 0
+    editable_when_idle: false
+    reset_on: prod_start            # initialize, prod_start, prod_stop, abort, fault, or none
+    persist: true                   # keep the value across restarts
+```
+
+```python
+def prod_cycle(devices, context):
+    move_time_s = context.get_param("move_time_s", 0.4)
+    ...
+    context.set_variable("part_count", context.get_variable("part_count", 0) + 1)
+```
+
+- **Location.** `context.yaml` sits next to `config.yaml`. Alternatively, set any path with `context_file:` in `config.yaml`; a relative path resolves from config.yaml's folder. The file is read at startup.
+- **Writes.** Task code can always write params and variables. `editable_when_idle` only governs edits from the UI, and UI edits are refused while the controller is BUSY.
+- **Persistence.** `context.yaml` is never rewritten, so its comments are safe. Entries with `persist: true` are saved to `context.state.json` next to it (git-ignored) and restored on the next start. Delete that file to start over from the defaults.
+- **Resets.** An entry returns to its `default` on any event listed in its `reset_on`. If it has no `reset_on`, `settings.default_reset_events` applies instead. The Variables tab can also reset one entry or everything.
+- **Legacy files.** A workspace that still has `production_context.yaml` (or `production_context_file:`) keeps working, with a deprecation warning. Its `value` / `persist_scope` / `storage_scope` fields and its `sequences:` block are still read. To migrate, rename the file to `context.yaml` and move `sequences:` to `config.yaml`.
 
 ### Accessing devices
 
@@ -391,7 +443,6 @@ Logs are viewable in the browser via the **Logs** tab or the `/api/logs` endpoin
 
 ```
 app.py                        # Flask server — all REST API endpoints
-config.yaml                   # Device declarations (type, IP, …)
 requirements.txt              # Python dependencies
 autostart.bat                 # Windows quick-launch script
 
@@ -399,6 +450,10 @@ core/
     ApplicationController.py  # Orchestrator: devices, tasks, monitor thread
     ControllerState.py        # ControllerState enum (OFF → INITIALIZING → READY → BUSY → FAULTED)
     Task.py                   # Task thread — TaskType enum + execution logic
+    AppContext.py             # The `context` passed to task functions (facade below)
+    ContextStore.py           # Optional params/variables from context.yaml
+    StepTracker.py            # Live step reporting, per-step timings, sequences
+    ProductionMetrics.py      # PROD cycle/run statistics
 
 devices/
     Device.py                 # Abstract base class — contract for all devices
@@ -411,6 +466,8 @@ devices/
     api/                      # Low-level device protocol implementations
 
 app_logic/
+    config.yaml               # Devices, manual actions, step sequences
+    context.yaml              # Optional params/variables (Variables tab)
     home.py                   # HOME task — move all robots to home positions
     shipment.py               # SHIPMENT task — move robots to storage positions
     prod.py                   # PROD task — looped production sequence
@@ -453,25 +510,30 @@ logs/
 
 ### Logs
 
-### Production Context
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/logs` | List available log files grouped by category |
+| `GET` | `/api/logs/<category>/<file>` | Read last N lines of a log file (query: `?lines=200`) |
 
-- `GET /api/prod/context`
-  - Returns params, variables, runtime metadata (cycle count, timestamps, last error), and lock state.
-- `PATCH /api/prod/context`
-  - Updates context values/settings when controller is not BUSY.
+### Production
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/prod/metrics` | Cycle/run metrics, the live step, the declared sequence and per-step timings |
+| `GET` | `/api/prod/runs` | Archived run summaries, each with a snapshot of the context variables |
+
+### Context
+
+- `GET /api/context`
+  - Returns params, variables, `enabled` (false without a context file), `locked` (true while BUSY), and the source and state file paths.
+- `PATCH /api/context`
+  - Sets values. Refused while BUSY, and for entries with `editable_when_idle: false`.
   - Example payload:
     ```json
-    {
-      "params": {
-        "cycle_wait_s": { "value": 0.5 }
-      },
-      "variables": {
-        "part_count": { "value": 0 }
-      }
-    }
+    { "params": { "cycle_wait_s": { "value": 0.5 } } }
     ```
-- `POST /api/prod/context/reset`
-  - Resets a namespace/key to defaults.
+- `POST /api/context/reset`
+  - Resets entries to their defaults.
   - Example payloads:
     ```json
     { "namespace": "all" }
@@ -479,8 +541,3 @@ logs/
     ```json
     { "namespace": "variables", "key": "part_count" }
     ```
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/logs` | List available log files grouped by category |
-| `GET` | `/api/logs/<category>/<file>` | Read last N lines of a log file (query: `?lines=200`) |

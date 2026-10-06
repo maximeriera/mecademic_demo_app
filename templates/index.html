@@ -48,6 +48,7 @@
             <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-variables" id="tab-btn-variables" onclick="switchTab('variables', this)">Variables</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-manual" id="tab-btn-manual" onclick="switchTab('manual', this)">Manual</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
@@ -67,7 +68,7 @@
                     <!-- Same markup and id suffixes as the sidebar #step-indicator;
                          patchStepIndicators() updates both. Not .js-robot-state,
                          for the same reason as the sidebar one. -->
-                    <div class="section">
+                    <div class="section control-step-section">
                         <div class="section-title">Current Step</div>
                         <div id="control-step-indicator" class="step-indicator step-indicator-idle" aria-hidden="true">
                             <div class="step-indicator-meta">
@@ -137,76 +138,57 @@
                 </div>
             </div>
 
-            <div class="section prod-context-section">
-                <div class="section-title">Production Data</div>
-                <div class="prod-subtab-shell">
-                    <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
-                        <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
-                            <span class="prod-subtab-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">
-                                    <path d="M4 19V5"></path>
-                                    <path d="M4 19h16"></path>
-                                    <path d="M8 15v-4"></path>
-                                    <path d="M12 15V8"></path>
-                                    <path d="M16 15v-6"></path>
-                                </svg>
-                            </span>
-                            <span class="prod-subtab-label">Metrics</span>
-                        </button>
-                        <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
-                            <span class="prod-subtab-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">
-                                    <path d="M4 7h16"></path>
-                                    <path d="M7 7v10"></path>
-                                    <path d="M4 17h16"></path>
-                                    <path d="M14 7v10"></path>
-                                </svg>
-                            </span>
-                            <span class="prod-subtab-label">Variables / Params</span>
-                        </button>
+            <!-- "Show Details" puts .prod-details-open on this static wrapper, so
+                 the open state survives the 1 Hz re-renders of the containers. -->
+            <div id="prod-metrics-panel">
+                <div class="section">
+                    <div class="section-title">Current Sequence</div>
+                    <div id="prod-steps-container">Loading sequence...</div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Production Metrics</div>
+                    <div id="prod-metrics-container">Loading metrics...</div>
+                </div>
+
+                <div class="section">
+                    <div id="prod-action-log" class="message-log">No recent production action.</div>
+                    <div class="prod-toolbar">
+                        <button type="button" class="btn-task" onclick="refreshProdMetrics()">Refresh</button>
+                        <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
+                        <button type="button" class="btn-task" id="prod-details-toggle" aria-expanded="false" aria-controls="prod-metrics-panel" onclick="toggleProdDetails()">Show Details</button>
                     </div>
+                </div>
+            </div>
 
-                    <div class="prod-subtab-content">
-                        <div id="prod-subtab-metrics" class="prod-subtab-panel active" role="tabpanel" aria-labelledby="prod-subtab-btn-metrics">
-                            <div class="section">
-                                <div class="section-title">Current Sequence</div>
-                                <div id="prod-steps-container">Loading sequence...</div>
-                            </div>
+        </div>
 
-                            <div class="section">
-                                <div class="section-title">Production Metrics</div>
-                                <div id="prod-metrics-container">Loading metrics...</div>
-                            </div>
+        <!-- ===== VARIABLES TAB ===== -->
+        <!-- Params and variables from the optional context.yaml. Without one,
+             #ctx-empty explains how to add it and #ctx-content stays hidden. -->
+        <div id="tab-variables" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-variables" hidden>
 
-                            <div class="section">
-                                <div id="prod-action-log" class="message-log">No recent production context action.</div>
-                                <div class="prod-toolbar">
-                                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
-                                    <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
-                                    <button type="button" class="btn-task" id="prod-details-toggle" aria-expanded="false" aria-controls="prod-subtab-metrics" onclick="toggleProdDetails()">Show Details</button>
-                                </div>
-                            </div>
-                        </div>
+            <div id="ctx-empty" class="section" hidden></div>
 
-                        <div id="prod-subtab-context" class="prod-subtab-panel" role="tabpanel" aria-labelledby="prod-subtab-btn-context" hidden>
-                            <div class="section">
-                                <div class="section-title">Variables</div>
-                                <div id="prod-variables-container">Loading variables...</div>
-                            </div>
+            <div id="ctx-content" hidden>
+                <div class="section">
+                    <div class="section-title">Variables</div>
+                    <div id="ctx-state-hint" class="manual-state-hint">Loading...</div>
+                    <div id="ctx-variables-container">Loading variables...</div>
+                </div>
 
-                            <div class="section">
-                                <div class="section-title">Params</div>
-                                <div id="prod-params-container">Loading params...</div>
-                            </div>
+                <div class="section">
+                    <div class="section-title">Params</div>
+                    <div id="ctx-params-container">Loading params...</div>
+                </div>
 
-                            <div class="section">
-                                <div class="prod-toolbar">
-                                    <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
-                                    <button type="button" class="btn-clear" onclick="resetProdContext('all')">Reset All</button>
-                                </div>
-                            </div>
-                        </div>
+                <div class="section">
+                    <div id="ctx-action-log" class="message-log">No recent context change.</div>
+                    <div class="prod-toolbar">
+                        <button type="button" class="btn-task" onclick="refreshContext()">Refresh</button>
+                        <button type="button" class="btn-clear" id="ctx-reset-all" onclick="resetContext('all')">Reset All</button>
                     </div>
+                    <div id="ctx-source" class="ctx-source"></div>
                 </div>
             </div>
 

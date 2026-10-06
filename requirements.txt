@@ -10,7 +10,7 @@
 # --- Web layer ---
 Flask==3.1.2
 Werkzeug==3.1.3          # used directly for secure_filename in app.py
-PyYAML==6.0.3            # config.yaml / production_context.yaml
+PyYAML==6.0.3            # config.yaml / context.yaml
 
 # --- Device drivers ---
 mecademicpy==3.0.3       # Mecademic robots

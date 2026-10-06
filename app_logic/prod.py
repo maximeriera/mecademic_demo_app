@@ -9,8 +9,8 @@ What it demonstrates
 * ``with context.step(...)`` — what the cell is doing, shown live in the
   sidebar on every tab and on the Production tab. Each step is timed
   automatically and closed even if the body raises or the run is aborted.
-* **params** — tunable inputs you can edit from the Production tab while idle.
-* **variables** — counters that persist across cycles within a run.
+* **params** — tunable inputs you can edit from the Variables tab while idle.
+* **variables** — counters carried across cycles (declared in ``context.yaml``).
 * **nesting** — a step opened inside another step is timed separately.
 * **a conditional step** — the reject branch is only taken on some cycles.
 
@@ -22,6 +22,7 @@ line whether the device is simulated or a real Meca500.
 import time
 from typing import Dict
 
+from core import AppContext
 from devices import Device
 
 # Imported both ways on purpose: core/Task.py resolves this module as flat
@@ -33,14 +34,14 @@ except ImportError:  # pragma: no cover - depends on how the workspace is loaded
     from manual_actions import inspect_part
 
 
-def prod_cycle(devices: Dict[str, Device], context=None):
+def prod_cycle(devices: Dict[str, Device], context: AppContext | None = None):
     """Run one production cycle.
 
     Parameters
     ----------
     devices : Dict[str, Device]
         Devices from ``config.yaml``, keyed by the names declared there.
-    context : ProductionContext
+    context : AppContext
         Always supplied by the task runner. Carries params, variables, and the
         ``step()`` reporting API.
     """
@@ -85,7 +86,7 @@ def prod_cycle(devices: Dict[str, Device], context=None):
 
     # --- 4. Place, or discard --------------------------------------------
     # Only one of these two runs per cycle. "Discard rejected part" is declared
-    # last in the sequence (see production_context.yaml), so a passing cycle
+    # last in the sequence (see `sequences:` in config.yaml), so a passing cycle
     # finishes at step 4 of 5 rather than going "off sequence".
     if passed:
         with context.step("Place part in tray"):
@@ -93,14 +94,14 @@ def prod_cycle(devices: Dict[str, Device], context=None):
             robot.api.GripperOpen()
             robot.api.WaitIdle()
             time.sleep(move_time_s)
-        context.set_variable("part_count", part_count + 1, force=True)
+        context.set_variable("part_count", part_count + 1)
     else:
         with context.step("Discard rejected part"):
             robot.api.MovePose(-100, 200, 150, 0, 90, 0)
             robot.api.GripperOpen()
             robot.api.WaitIdle()
             time.sleep(move_time_s / 2)
-        context.set_variable("reject_count", reject_count + 1, force=True)
+        context.set_variable("reject_count", reject_count + 1)
         robot.logger.warning(f"Part #{part_number} rejected by inspection.")
 
     # Pacing only — remove this in a real cell, where the hardware sets the pace.

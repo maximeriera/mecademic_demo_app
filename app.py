@@ -31,6 +31,7 @@ import uuid
 
 from core.Task import TaskType
 from core.ControllerState import ControllerState
+from core.ContextStore import ContextError
 from core.BackupRestoreService import BackupRestoreService
 from core.LogSetup import describe_logging, get_app_logger, request_id_var
 
@@ -49,13 +50,11 @@ try:
     # We must start the controller in the main thread before starting Flask's server
     from core.ApplicationController import ApplicationController
     app_logic_dir = os.path.join(workspace_path, "app_logic")
-    if os.path.isdir(app_logic_dir):
-        config_path = os.path.join(app_logic_dir, "config.yaml")
-        prod_ctx_path = os.path.join(app_logic_dir, "production_context.yaml")
-    else:
-        config_path = os.path.join(workspace_path, "config.yaml")
-        prod_ctx_path = os.path.join(workspace_path, "production_context.yaml")
-    APPLICATION = ApplicationController(config_path=config_path, production_context_path=prod_ctx_path)
+    workspace_config_dir = app_logic_dir if os.path.isdir(app_logic_dir) else workspace_path
+    config_path = os.path.join(workspace_config_dir, "config.yaml")
+    # The optional context file (context.yaml) is located by the controller,
+    # relative to config.yaml, honouring `context_file:` in it.
+    APPLICATION = ApplicationController(config_path=config_path)
     logger.info("ApplicationController initialized successfully.")
 except Exception as e:
     # If connection fails, set a permanent FAULT state
@@ -75,18 +74,21 @@ except Exception as e:
         def get_manual_actions(self): return []
         def clear_faults(self): pass
         def get_live_step(self): return None
-        def get_prod_context_snapshot(self):
+        def get_prod_snapshot(self):
+            return {'state': ControllerState.OFF.value, 'metrics': {}, 'steps': {}}
+        def get_context_snapshot(self):
             return {
+                'enabled': False,
+                'source': None,
+                'state_file': None,
+                'load_error': 'Controller failed to start; see app.log.',
                 'state': ControllerState.OFF.value,
                 'locked': False,
-                'settings': {'storage_scope': 'memory', 'auto_persist': True, 'default_reset_events': []},
-                'metadata': {},
-                'metrics': {},
                 'params': {},
                 'variables': {},
             }
-        def update_prod_context(self, payload): return ([], ['Production context unavailable'])
-        def reset_prod_context(self, namespace, key=None, event=None): return None
+        def update_context(self, payload): return ([], ['Context unavailable: controller failed to start'])
+        def reset_context(self, namespace, key=None): raise RuntimeError('Controller failed to start')
     APPLICATION = MockApplicationController()
 
 BACKUP_DIR = os.path.join(workspace_path, "backups")
@@ -108,7 +110,7 @@ def _parse_bool(value, default=False):
 # endpoints are therefore excluded from per-request logging; what actually
 # matters about them — the controller state and device health — is logged by
 # _log_state_change() / _log_device_health_change() only when it *changes*.
-_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/context'})
+_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/metrics', '/api/context'})
 
 _last_logged_state = None
 _last_logged_health = None
@@ -489,21 +491,21 @@ def download_backup_archive(filename):
     return send_from_directory(str(root), safe_name, as_attachment=True)
 
 
-@app.route('/api/prod/context', methods=['GET'])
-def get_prod_context():
-    """Return production params/variables, settings and runtime metadata."""
+@app.route('/api/prod/metrics', methods=['GET'])
+def get_prod_metrics():
+    """Return PROD cycle/run metrics and the step tracker state for the Production tab."""
     try:
-        return jsonify(APPLICATION.get_prod_context_snapshot()), 200
+        return jsonify(APPLICATION.get_prod_snapshot()), 200
     except Exception as e:
-        logger.error(f"Failed to get production context: {e}", exc_info=True)
-        return jsonify({'message': f'Failed to get production context: {e}'}), 500
+        logger.error(f"Failed to get production metrics: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get production metrics: {e}'}), 500
 
 
 @app.route('/api/prod/runs', methods=['GET'])
 def get_prod_runs():
     """Return archived production run summaries for export or reporting."""
     try:
-        snapshot = APPLICATION.get_prod_context_snapshot()
+        snapshot = APPLICATION.get_prod_snapshot()
         metrics = snapshot.get('metrics', {}) if isinstance(snapshot, dict) else {}
         runs = metrics.get('run_history', []) if isinstance(metrics, dict) else []
         return jsonify({'runs': runs, 'count': len(runs)}), 200
@@ -512,37 +514,50 @@ def get_prod_runs():
         return jsonify({'message': f'Failed to get production run history: {e}'}), 500
 
 
-@app.route('/api/prod/context', methods=['PATCH'])
-def patch_prod_context():
-    """Update production context values/settings when controller is not BUSY."""
+@app.route('/api/context', methods=['GET'])
+def get_context():
+    """Return the optional params/variables context (``enabled: false`` without a context file)."""
+    try:
+        return jsonify(APPLICATION.get_context_snapshot()), 200
+    except Exception as e:
+        logger.error(f"Failed to get context: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get context: {e}'}), 500
+
+
+@app.route('/api/context', methods=['PATCH'])
+def patch_context():
+    """Update param/variable values. Refused while the controller is BUSY."""
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
         return jsonify({'message': 'Invalid payload format.', 'success': False}), 400
 
     try:
-        updated, errors = APPLICATION.update_prod_context(payload)
+        updated, errors = APPLICATION.update_context(payload)
         if errors:
-            return jsonify({'message': 'Production context updated with errors.', 'success': False, 'updated': updated, 'errors': errors}), 400
-        return jsonify({'message': 'Production context updated.', 'success': True, 'updated': updated}), 200
+            return jsonify({'message': 'Context updated with errors.', 'success': False, 'updated': updated, 'errors': errors}), 400
+        return jsonify({'message': 'Context updated.', 'success': True, 'updated': updated}), 200
     except Exception as e:
-        logger.error(f"Failed to update production context: {e}", exc_info=True)
-        return jsonify({'message': f'Failed to update production context: {e}', 'success': False}), 500
+        logger.error(f"Failed to update context: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to update context: {e}', 'success': False}), 500
 
 
-@app.route('/api/prod/context/reset', methods=['POST'])
-def reset_prod_context():
-    """Reset production context values to defaults, optionally filtered by event/key."""
+@app.route('/api/context/reset', methods=['POST'])
+def reset_context():
+    """Reset params/variables to their defaults: one key, one namespace, or all."""
     payload = request.get_json(silent=True) or {}
     namespace = payload.get('namespace', 'all')
     key = payload.get('key')
-    event = payload.get('event')
 
     try:
-        APPLICATION.reset_prod_context(namespace=namespace, key=key, event=event)
-        return jsonify({'message': 'Production context reset applied.', 'success': True}), 200
+        APPLICATION.reset_context(namespace=namespace, key=key)
+        return jsonify({'message': 'Context reset applied.', 'success': True}), 200
+    except ContextError as e:
+        # Expected refusals (locked while BUSY, unknown key): no traceback.
+        logger.warning(f"Context reset refused: {e}")
+        return jsonify({'message': f'Context reset refused: {e}', 'success': False}), 400
     except Exception as e:
-        logger.error(f"Failed to reset production context: {e}", exc_info=True)
-        return jsonify({'message': f'Failed to reset production context: {e}', 'success': False}), 400
+        logger.error(f"Failed to reset context: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to reset context: {e}', 'success': False}), 400
 
 
 # --- Log directories (resolved relative to this file so they work regardless of cwd) ---

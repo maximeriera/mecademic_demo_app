@@ -82,27 +82,21 @@
 #     serial_number: "SIM-0001"
 #
 # ============================================================
-# PRODUCTION CONTEXT CONFIGURATION
+# CONTEXT — params & variables (optional)
 # ============================================================
 #
-# The production runtime context (params/variables/reset rules) is loaded
-# from a separate YAML file.
+# Params (tunable inputs) and variables (runtime values) shared by every task
+# function through `context`, and edited from the Variables tab. They are
+# declared in a separate file, by default `context.yaml` next to this one.
 #
-# Top-level key:
-#   production_context_file: "production_context.yaml"
+# Top-level key (optional):
+#   context_file: "context.yaml"    # relative to this file's folder
 #
-# Notes:
-# - This key must be at top level (same level as `devices`), not nested
-#   under `devices`.
-# - If omitted, default file is: production_context.yaml
-# - The file defines:
-#   - settings: persistence mode and default reset events
-#   - params: production behavior inputs
-#   - variables: runtime values reused between cycles
+# Without a context file the app runs normally: context.get_param("x", default)
+# returns the default, the Variables tab explains how to add one, and step
+# tracking and production metrics are unaffected.
 #
-# Example:
-# production_context_file: "production_context.yaml"
-production_context_file: "production_context.yaml"
+# context_file: "context.yaml"
 
 # ============================================================
 # DEFAULT EXAMPLE CELL — simulated devices, no hardware needed
@@ -128,6 +122,63 @@ manual_actions:
     description: "Release whatever the gripper is currently holding."
     confirm_title: "Confirm Gripper Release"
     confirm_message: "Open the gripper? Any held part will be released immediately."
+
+# ============================================================
+# SEQUENCES (optional)
+# ============================================================
+#
+# Declaring the expected step order for a task adds "Step 3 of 7", a progress
+# bar, and greyed-out upcoming steps to the UI. It is entirely optional:
+# without it, steps are still recorded, timed and shown live — you just do not
+# get a position within the sequence.
+#
+# Keys are task function names (prod_cycle, home, shipment, calib) or
+# "manual:<action_key>" for a manual action. Only top-level steps are matched;
+# steps nested inside another step are timed but do not advance the position.
+#
+# Report steps from your task logic with the context manager:
+#
+#     def prod_cycle(devices, context):
+#         with context.step("Pick part from feeder"):
+#             robot.MoveJoints(...)
+#             robot.WaitIdle()
+#         with context.step("Inspect part"):
+#             ...
+#
+# home/shipment/calib receive `context` only if they declare a second
+# parameter — existing one-argument functions keep working unchanged.
+#
+# NOTE: step names must be stable identifiers, not per-part data. Using
+# f"Pick part {serial}" creates a new timing bucket per part; the backend caps
+# this at 200 distinct names and warns, but the statistics become useless.
+#
+# The declared sequence for the shipped example. "Discard rejected part" is the
+# conditional branch taken when inspection fails, so a passing cycle stops at
+# step 4 of 5 — that is expected, not an error.
+sequences:
+  prod_cycle:
+    - Request part from feeder
+    - Pick part
+    - Inspect part
+    - Place part in tray
+    - Discard rejected part
+
+  home:
+    - Open gripper
+    - Move to home position
+
+  shipment:
+    - Open gripper
+    - Move to shipment position
+
+  calib:
+    - Move to calibration pose
+    - Capture calibration image
+    - Solve and store calibration
+
+  "manual:inspect_only":
+    - Move to inspection pose
+    - Capture and evaluate image
 
 devices:
 

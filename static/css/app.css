@@ -147,7 +147,7 @@ button, input, select, textarea {
     border-right: 1px solid rgba(255,255,255,0.05);
     display: flex;
     flex-direction: column;
-    padding: 24px;
+    padding: 18px 20px;
     flex-shrink: 0;
     overflow-y: auto;
 }
@@ -202,7 +202,7 @@ button, input, select, textarea {
 .panel-header {
     color: white;
     text-align: left;
-    margin-bottom: 24px;
+    margin-bottom: 14px;
 }
 @media (max-width: 1024px) {
     .panel-header {
@@ -211,8 +211,8 @@ button, input, select, textarea {
     }
 }
 .panel-header h1 {
-    margin: 0 0 8px;
-    font-size: 1.3em;
+    margin: 0;
+    font-size: 1.05em;
     font-weight: 700;
     letter-spacing: 0.01em;
     color: var(--color-accent);
@@ -224,14 +224,14 @@ button, input, select, textarea {
    loads; these rules scale it to the sidebar's content width. */
 .panel-logo {
     display: block;
-    width: 100%;
-    max-width: 180px;
+    width: 100%; /* full sidebar content width */
     height: auto;
-    margin: 0 0 14px;
+    margin: 0 0 10px;
 }
 @media (max-width: 1024px) {
     /* The header centres at this breakpoint, so the logo must too. */
     .panel-logo {
+        max-width: 210px;
         margin-left: auto;
         margin-right: auto;
     }
@@ -241,13 +241,15 @@ button, input, select, textarea {
 .tab-bar {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-top: 20px;
+    gap: 6px;
+    margin-top: 12px;
 }
+/* Narrow screens: tabs flow into as many rows as they need, each row filled
+   edge to edge. A fixed column count overflowed sideways once a tab was added. */
 @media (max-width: 1024px) {
     .tab-bar {
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        flex-direction: row;
+        flex-wrap: wrap;
         gap: 8px;
         margin-top: 0;
         padding-bottom: 12px;
@@ -255,7 +257,7 @@ button, input, select, textarea {
 }
 .tab-btn {
     width: 100%;
-    padding: 14px 20px;
+    padding: 11px 16px;
     background: rgba(255,255,255,0.03);
     border: 1px solid transparent;
     color: rgba(255,255,255,0.62);
@@ -270,9 +272,10 @@ button, input, select, textarea {
 }
 @media (max-width: 1024px) {
     .tab-btn {
-        flex: 1;
+        flex: 1 1 auto;
+        width: auto;
         text-align: center;
-        padding: 10px 0;
+        padding: 10px 14px;
     }
 }
 .tab-btn:hover  {
@@ -336,7 +339,7 @@ button, input, select, textarea {
 }
 
 .global-status-wrap {
-    padding: 0 0 14px;
+    padding: 0 0 6px;
 }
 
 .global-status-label {
@@ -345,13 +348,13 @@ button, input, select, textarea {
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--color-muted);
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 }
 /* A second label stacked under an earlier block needs the same breathing room
    the first one gets from .global-status-wrap, otherwise it sits flush against
-   the box above it. Matches the 20px rhythm .tab-bar uses below. */
+   the box above it. Matches the 12px rhythm .tab-bar uses below. */
 .global-status-wrap .global-status-label:not(:first-child) {
-    margin-top: 20px;
+    margin-top: 12px;
 }
 
 .tab-panel { display: none; }
@@ -412,7 +415,7 @@ button, input, select, textarea {
 
 .status-box-compact {
     font-size: 1em;
-    padding: 10px;
+    padding: 8px;
 }
 
 /* --- Message Log --- */
@@ -502,6 +505,27 @@ button:active { transform: scale(0.98); }
     display: grid;
     grid-template-columns: 260px 1fr;
     gap: 24px;
+}
+
+/* The Current Step box grows so its bottom lines up with the ops cards beside
+   it (grid items already stretch to the row height); the progress bar stays at
+   the bottom of the box. */
+.control-side {
+    display: flex;
+    flex-direction: column;
+}
+.control-step-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+#control-step-indicator {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+#control-step-indicator .step-progress {
+    margin-top: auto;
 }
 
 /* Side by side only once the frame has reached its 1200px max width: below
@@ -903,17 +927,7 @@ button:active { transform: scale(0.98); }
     background: linear-gradient(180deg, rgba(157,245,215,0.85), rgba(93,239,191,0.85));
 }
 
-/* --- Production Context --- */
-.prod-subtab-shell {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
-    align-items: start;
-}
-
-.prod-context-section {
-    margin-top: 26px;
-}
+/* --- Production tab --- */
 
 .prod-toolbar {
     display: flex;
@@ -997,103 +1011,6 @@ button:active { transform: scale(0.98); }
     filter: none;
 }
 
-.prod-subtab-bar {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 14px 12px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.03) 100%);
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: var(--radius);
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,0.04),
-        inset 0 0 0 1px rgba(255,255,255,0.02),
-        0 12px 24px rgba(0,0,0,0.16);
-}
-
-.prod-subtab-btn {
-    flex: 1 1 220px;
-    width: auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 10px;
-    min-height: 54px;
-    padding: 12px 14px;
-    background: rgba(255,255,255,0.02);
-    border: 1px solid rgba(255,255,255,0.04);
-    color: rgba(255,255,255,0.66);
-    font-size: 0.8em;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: none;
-    cursor: pointer;
-    transition: color 0.2s, border-color 0.2s, background-color 0.2s, box-shadow 0.2s, transform 0.12s ease;
-    border-radius: var(--radius-control);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-}
-
-.prod-subtab-btn:hover {
-    color: white;
-    background: rgba(255,255,255,0.05);
-    border-color: rgba(255,255,255,0.08);
-    transform: translateY(-1px);
-}
-
-.prod-subtab-btn.active {
-    color: var(--color-text);
-    background: rgba(93,239,191,0.10);
-    border-color: rgba(93,239,191,0.35);
-    box-shadow:
-        0 8px 18px rgba(0,0,0,0.18),
-        inset 0 1px 0 rgba(255,255,255,0.08);
-}
-
-.prod-subtab-btn.active:hover {
-    transform: none;
-    background: rgba(93,239,191,0.14);
-}
-
-.prod-subtab-btn.active .prod-subtab-icon {
-    color: var(--color-accent);
-}
-
-.prod-subtab-icon {
-    width: 20px;
-    height: 20px;
-    flex: 0 0 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.prod-subtab-icon svg {
-    width: 20px;
-    height: 20px;
-}
-
-.prod-subtab-label {
-    white-space: nowrap;
-}
-
-.prod-subtab-content {
-    min-width: 0;
-    padding: 0;
-}
-
-.prod-subtab-content > .prod-subtab-panel > .section:first-child {
-    margin-top: 0;
-}
-
-.prod-subtab-panel {
-    display: none;
-}
-
-.prod-subtab-panel.active {
-    display: block;
-}
-
 .prod-metrics-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1154,7 +1071,7 @@ button:active { transform: scale(0.98); }
 }
 
 /* Step timings, recent cycles and recent runs: hidden until "Show Details"
-   (toggleProdDetails puts .prod-details-open on the Metrics subpanel). */
+   (toggleProdDetails puts .prod-details-open on #prod-metrics-panel). */
 .prod-detail {
     display: none;
 }
@@ -1205,7 +1122,7 @@ button:active { transform: scale(0.98); }
     font-size: 0.88em;
 }
 
-.prod-empty-panel {
+.empty-panel {
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: var(--radius);
     padding: 16px;
@@ -1213,7 +1130,7 @@ button:active { transform: scale(0.98); }
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
 }
 
-.prod-empty-title {
+.empty-panel-title {
     font-size: 0.72em;
     font-weight: 700;
     letter-spacing: 0.12em;
@@ -1222,7 +1139,7 @@ button:active { transform: scale(0.98); }
     margin-bottom: 8px;
 }
 
-.prod-empty-text {
+.empty-panel-text {
     color: var(--color-text);
     font-size: 0.92em;
     line-height: 1.5;
@@ -1238,43 +1155,52 @@ button:active { transform: scale(0.98); }
     color: #ff9ba5;
 }
 
-/* --- Production Context cards --- */
-.prod-cards {
+/* --- Variables tab: context cards --- */
+.ctx-cards {
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
 
-.prod-card {
+.ctx-card {
     border: 1px solid var(--color-border);
     border-radius: var(--radius);
     padding: 10px 14px;
     background: rgba(255,255,255,0.02);
 }
 
-.prod-card-editable {
+.ctx-card-editable {
     border-left: 3px solid rgba(93,239,191,0.45);
 }
 
-.prod-card-locked {
+.ctx-card-readonly {
     border-left: 3px solid rgba(255,90,107,0.3);
     opacity: 0.85;
 }
 
-.prod-card-header {
+/* A task is running: every card greys out, values still update live. */
+.ctx-cards-locked .ctx-card {
+    border-left-color: var(--color-border);
+    opacity: 0.55;
+    filter: grayscale(1);
+    transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.ctx-card-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 6px 10px;
     margin-bottom: 8px;
 }
 
-.prod-card-key {
+.ctx-card-key {
     font-weight: 700;
     color: var(--color-text);
     font-size: 0.9em;
 }
 
-.prod-card-type {
+.ctx-card-tag {
     font-size: 0.72em;
     color: var(--color-muted);
     background: rgba(255,255,255,0.06);
@@ -1284,7 +1210,7 @@ button:active { transform: scale(0.98); }
     letter-spacing: 0.05em;
 }
 
-.prod-card-body {
+.ctx-card-body {
     display: grid;
     grid-template-columns: 180px 1fr auto;
     gap: 16px;
@@ -1292,16 +1218,17 @@ button:active { transform: scale(0.98); }
 }
 
 @media (max-width: 900px) {
-    .prod-card-body {
+    .ctx-card-body {
         grid-template-columns: 1fr;
     }
-    .prod-card-actions {
+    .ctx-card-actions {
         flex-direction: row;
         justify-content: flex-start;
     }
 }
 
-.prod-card-value input[type="text"] {
+.ctx-card-value input[type="text"],
+.ctx-card-value input[type="number"] {
     width: 100%;
     padding: 7px 8px;
     border-radius: var(--radius-control);
@@ -1311,13 +1238,13 @@ button:active { transform: scale(0.98); }
     box-sizing: border-box;
 }
 
-.prod-card-value input[type="checkbox"] {
+.ctx-card-value input[type="checkbox"] {
     width: 18px;
     height: 18px;
     margin-top: 4px;
 }
 
-.prod-card-details {
+.ctx-card-details {
     display: flex;
     flex-wrap: wrap;
     gap: 4px 16px;
@@ -1326,29 +1253,81 @@ button:active { transform: scale(0.98); }
     line-height: 1.5;
 }
 
-.prod-card-desc {
+.ctx-card-desc {
     width: 100%;
     color: var(--color-muted);
     font-style: italic;
 }
 
-.prod-detail-label {
+.ctx-detail-label {
     color: var(--color-muted);
     font-weight: 700;
     margin-right: 4px;
 }
 
-.prod-card-actions {
+.ctx-card-actions {
     display: flex;
     flex-direction: column;
     gap: 6px;
     align-items: flex-end;
 }
 
-.prod-card-actions button {
+.ctx-card-actions button {
     padding: 6px 12px;
     font-size: 0.74em;
     white-space: nowrap;
+}
+
+.ctx-card-value input:disabled {
+    color: var(--color-muted);
+    cursor: not-allowed;
+}
+
+.ctx-card-actions button:disabled,
+#ctx-reset-all:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    filter: grayscale(1);
+    transform: none;
+}
+
+.ctx-card-tag-readonly {
+    color: #ff9ba5;
+    background: rgba(255,90,107,0.10);
+}
+
+.ctx-source {
+    margin-top: 10px;
+    font-size: 0.74em;
+    color: var(--color-muted);
+    overflow-wrap: anywhere;
+}
+
+/* Disabled-context empty state: how to add a context.yaml. */
+.empty-panel p.empty-panel-text {
+    margin: 0 0 10px;
+}
+
+.empty-panel code,
+.ctx-snippet {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    color: var(--color-accent-soft);
+}
+
+.ctx-snippet {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    background: var(--color-bg);
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.empty-panel .ctx-error {
+    color: #ff9ba5;
+    overflow-wrap: anywhere;
 }
 
 /* --- Backup / Restore --- */
@@ -1539,14 +1518,6 @@ button:active { transform: scale(0.98); }
         align-items: stretch;
     }
 
-    .tab-bar {
-        flex-direction: column;
-    }
-
-    .tab-btn {
-        width: 100%;
-    }
-
     .control-panel {
         width: 100%;
     }
@@ -1595,27 +1566,6 @@ button:active { transform: scale(0.98); }
 
     .backup-restore-card-wide {
         grid-column: span 1;
-    }
-
-    .prod-subtab-btn {
-        justify-content: flex-start;
-    }
-
-    .prod-subtab-shell {
-        grid-template-columns: 1fr;
-    }
-
-    .prod-subtab-bar {
-        flex-direction: row;
-        flex-wrap: wrap;
-        overflow-x: auto;
-        padding: 8px;
-        border-radius: var(--radius);
-    }
-
-    .prod-subtab-btn {
-        flex: 1 1 180px;
-        min-width: 0;
     }
 
     .prod-metrics-grid {
@@ -1799,6 +1749,21 @@ button:active { transform: scale(0.98); }
     line-height: 1.3;
     overflow-wrap: anywhere;
     margin-bottom: 10px;
+}
+
+/* Sidebar: tighter, and the step name held to one line so a long name never
+   changes the indicator's height (the full path is in its tooltip). */
+#step-indicator {
+    padding: 8px 10px;
+}
+#step-indicator .step-indicator-meta {
+    margin-bottom: 4px;
+}
+#step-indicator .step-indicator-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 8px;
 }
 
 /* --- Progress bar, shared by the sidebar and the Production panel --- */

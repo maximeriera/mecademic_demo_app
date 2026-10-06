@@ -3,10 +3,11 @@
 import time
 from typing import Dict
 
+from core import AppContext
 from devices import Device
 
 
-def shipment(devices: Dict[str, Device], context=None):
+def shipment(devices: Dict[str, Device], context: AppContext | None = None):
     """Release any held part, then move the robot to its shipment pose."""
     robot = devices["my_meca_robot"]
 

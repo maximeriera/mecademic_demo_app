@@ -17,5 +17,5 @@ COPY . .
 EXPOSE 5000
 
 # --workspace must point at a directory containing app_logic/ (config.yaml,
-# production_context.yaml and the task modules); that is /webapp in this image.
+# the optional context.yaml and the task modules); that is /webapp in this image.
 CMD ["python", "app.py", "--workspace", "/webapp", "--host", "0.0.0.0", "--port", "5000"]

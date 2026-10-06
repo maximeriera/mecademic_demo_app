@@ -1,7 +1,6 @@
 const stateDisplays = () => Array.from(document.querySelectorAll('.js-robot-state'));
 const messageLog   = document.getElementById('message-log');
-let latestProdContext = null;
-let activeProdSubTab = 'metrics';
+let latestContext = null;
 let logDropdownInitialized = false;
 let backupRestoreDropdownsInitialized = false;
 let backupRestoreRobots = [];
@@ -33,39 +32,16 @@ function switchTab(name, btn) {
     btn.setAttribute('aria-selected', 'true');
     if (name === 'logs') populateLogFileList();
     if (name === 'production') {
-        refreshProdContext();
-        switchProdSubTab(activeProdSubTab);
+        refreshProdMetrics();
+    }
+    if (name === 'variables') {
+        refreshContext();
     }
     if (name === 'backup-restore') {
         loadBackupRestoreRobots();
     }
     if (name === 'manual') {
         loadManualActions();
-    }
-}
-
-function switchProdSubTab(name, btn) {
-    activeProdSubTab = name;
-
-    document.querySelectorAll('#tab-production .prod-subtab-panel').forEach(panel => {
-        panel.classList.remove('active');
-        panel.hidden = true;
-    });
-    document.querySelectorAll('#tab-production .prod-subtab-btn').forEach(button => {
-        button.classList.remove('active');
-        button.setAttribute('aria-selected', 'false');
-    });
-
-    const activePanel = document.getElementById('prod-subtab-' + name);
-    if (activePanel) {
-        activePanel.classList.add('active');
-        activePanel.hidden = false;
-    }
-
-    const activeButton = btn || document.getElementById('prod-subtab-btn-' + name);
-    if (activeButton) {
-        activeButton.classList.add('active');
-        activeButton.setAttribute('aria-selected', 'true');
     }
 }
 
@@ -102,7 +78,14 @@ function setMessage(text) { messageLog.textContent = text || 'No recent command 
 function setProdActionMessage(text, isError = false) {
     const actionLog = document.getElementById('prod-action-log');
     if (!actionLog) return;
-    actionLog.textContent = text || 'No recent production context action.';
+    actionLog.textContent = text || 'No recent production action.';
+    actionLog.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
+function setContextMessage(text, isError = false) {
+    const actionLog = document.getElementById('ctx-action-log');
+    if (!actionLog) return;
+    actionLog.textContent = text || 'No recent context change.';
     actionLog.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
 }
 
@@ -404,7 +387,7 @@ function sendManualAbort() {
     );
 }
 
-/* ---- Production context ---- */
+/* ---- Shared rendering helpers ---- */
 // Escapes quotes as well as angle brackets. Without the quote cases, any value
 // interpolated into an HTML attribute (e.g. a str param's value="...") could
 // close the attribute and inject new ones — a str param set to
@@ -426,22 +409,20 @@ function parseFieldValue(typeName, inputEl) {
     return raw;
 }
 
-function isProdUserInteracting() {
-    const active = document.activeElement;
-    if (active && (active.closest('#prod-params-container') || active.closest('#prod-variables-container'))) {
-        return true;
-    }
-    return false;
+// innerHTML re-renders at 1 Hz can briefly shrink the page; keep the reader
+// where they were. Depending on the layout either the panel or .main-content
+// is the scroller, so both are saved.
+function captureScrollState(panelId) {
+    const panel = document.getElementById(panelId);
+    const main = document.querySelector('.main-content');
+    return { panel: panel ? panel.scrollTop : 0, main: main ? main.scrollTop : 0 };
 }
 
-function captureProdScrollState() {
-    const panel = document.getElementById('tab-production');
-    return { panelScrollTop: panel ? panel.scrollTop : 0 };
-}
-
-function restoreProdScrollState(state) {
-    const panel = document.getElementById('tab-production');
-    if (panel) panel.scrollTop = state.panelScrollTop || 0;
+function restoreScrollState(panelId, state) {
+    const panel = document.getElementById(panelId);
+    const main = document.querySelector('.main-content');
+    if (panel) panel.scrollTop = state.panel || 0;
+    if (main) main.scrollTop = state.main || 0;
 }
 
 function formatDurationSeconds(value) {
@@ -518,12 +499,13 @@ function renderRecentRuns(history) {
     return `<ul class="prod-metric-list">${rows}</ul>`;
 }
 
+/* ---- Production tab ---- */
 // Step timings and recent cycle/run history (.prod-detail) start hidden. The
-// open state is a class on the static Metrics subpanel rather than on the
-// containers renderProdMetrics/renderProdSteps rebuild at 1 Hz, so it survives
-// every re-render without being tracked here.
+// open state is a class on the static #prod-metrics-panel wrapper rather than
+// on the containers renderProdMetrics/renderProdSteps rebuild at 1 Hz, so it
+// survives every re-render without being tracked here.
 function toggleProdDetails() {
-    const panel = document.getElementById('prod-subtab-metrics');
+    const panel = document.getElementById('prod-metrics-panel');
     const button = document.getElementById('prod-details-toggle');
     if (!panel || !button) return;
     const open = panel.classList.toggle('prod-details-open');
@@ -541,7 +523,6 @@ function renderProdMetrics(data) {
     const cards = [
         renderMetricCard('Operational State', metrics.running ? 'RUNNING' : 'IDLE', metrics.running ? 'prod-metric-on' : 'prod-metric-off'),
         renderMetricCard('Completed Cycles', metrics.completed_cycles ?? 0),
-        renderMetricCard('Total Part Count', metrics.part_count ?? 0),
         renderMetricCard('Current Run Time', formatDurationSeconds(metrics.elapsed_production_s)),
         renderMetricCard('Last Cycle Duration', formatDurationSeconds(metrics.last_cycle_duration_s)),
         renderMetricCard('Average Cycle Time', formatDurationSeconds(metrics.average_cycle_duration_s)),
@@ -564,10 +545,10 @@ function renderProdMetrics(data) {
 
 /* ---- Sequence steps ----
  * Two writers on the same DOM, split by cadence:
- *   renderProdSteps(data)  - 1 Hz, from renderProdContext, writes structure via innerHTML
+ *   renderProdSteps(data)  - 1 Hz, from renderProdSnapshot, writes structure via innerHTML
  *   patchLiveStep(step)    - 10 Hz, from updateRobotStatus, touches ONLY textContent
  *                            and style.width on the ids below.
- * innerHTML at 10 Hz would destroy focus and fight isProdUserInteracting().
+ * innerHTML at 10 Hz would destroy focus and reset the reader's scroll.
  * Both writers must agree on these ids, so they live in one place. */
 const STEP_LIVE_IDS = {
     panelName: 'prod-step-name',
@@ -578,9 +559,14 @@ const STEP_LIVE_IDS = {
     cardPosition: 'prod-step-card-position',
 };
 
-// Compact live indicators (sidebar, Control tab). Each is an element with this
-// id plus -name / -timer / -counter / -fill children, so one patch serves both.
-const STEP_INDICATOR_IDS = ['step-indicator', 'control-step-indicator'];
+// Live indicators (sidebar, Control tab). Each is an element with this id plus
+// -name / -timer / -counter / -fill children, so one patch serves both. The
+// sidebar one is compact: it names only the top-level step (no "› sub-step"),
+// timed from when that step began, so it stays on one line.
+const STEP_INDICATORS = [
+    { id: 'step-indicator', compact: true },
+    { id: 'control-step-indicator', compact: false },
+];
 
 let lastAnnouncedStep = null;
 
@@ -594,17 +580,22 @@ function announceStep(text) {
     if (el) el.textContent = text;
 }
 
-function patchStepIndicators(active, name, timer, counter, pct) {
-    for (const base of STEP_INDICATOR_IDS) {
-        const indicator = document.getElementById(base);
+// full / compact: { name, timer, counter } for the full and compact indicators.
+function patchStepIndicators(active, full, compact, pct) {
+    for (const { id, compact: isCompact } of STEP_INDICATORS) {
+        const view = isCompact ? compact : full;
+        const indicator = document.getElementById(id);
         if (indicator) {
             indicator.classList.toggle('step-indicator-idle', !active);
             indicator.classList.toggle('step-indicator-active', active);
         }
-        setTextById(`${base}-name`, name);
-        setTextById(`${base}-timer`, timer);
-        setTextById(`${base}-counter`, counter);
-        const fill = document.getElementById(`${base}-fill`);
+        setTextById(`${id}-name`, view.name);
+        setTextById(`${id}-timer`, view.timer);
+        setTextById(`${id}-counter`, view.counter);
+        const nameEl = document.getElementById(`${id}-name`);
+        // The compact name is truncated to one line; the tooltip keeps the full path.
+        if (isCompact && nameEl && nameEl.title !== full.name) nameEl.title = full.name;
+        const fill = document.getElementById(`${id}-fill`);
         if (fill) fill.style.width = pct;
     }
 }
@@ -623,7 +614,8 @@ function patchLiveStep(step) {
         // not change shape between running and idle: an element that appears
         // and disappears moves everything below it and makes the operator hunt
         // for the information.
-        patchStepIndicators(false, 'Idle', '—', 'Not running', '0%');
+        const idle = { name: 'Idle', timer: '—', counter: 'Not running' };
+        patchStepIndicators(false, idle, idle, '0%');
 
         setTextById(STEP_LIVE_IDS.panelName, 'Idle');
         setTextById(STEP_LIVE_IDS.panelElapsed, '—');
@@ -648,8 +640,16 @@ function patchLiveStep(step) {
         : `Step ${step.depth + 1}`;
     const pct = `${Math.round((step.progress ?? 0) * 100)}%`;
 
-    patchStepIndicators(true, label, elapsed,
-        step.off_sequence ? 'Off sequence' : counter, pct);
+    const rootName = Array.isArray(step.path) && step.path.length > 0 ? step.path[0] : step.name;
+    patchStepIndicators(true,
+        { name: label, timer: elapsed, counter: step.off_sequence ? 'Off sequence' : counter },
+        {
+            name: rootName,
+            timer: formatDurationSeconds(step.root_elapsed_s ?? step.elapsed_s),
+            // Depth-based "Step 2" means nothing once sub-steps are hidden.
+            counter: step.off_sequence ? 'Off sequence' : (hasPosition ? counter : 'Running'),
+        },
+        pct);
 
     // Mirror into the Production panel when it is rendered.
     setTextById(STEP_LIVE_IDS.panelName, label);
@@ -809,25 +809,13 @@ function renderProdSteps(data) {
 
 function renderProdUnavailable(message) {
     const metricsContainer = document.getElementById('prod-metrics-container');
-    const paramsContainer = document.getElementById('prod-params-container');
-    const varsContainer = document.getElementById('prod-variables-container');
-
-    if (metricsContainer) {
-        metricsContainer.innerHTML = `
-            <div class="prod-empty-panel">
-                <div class="prod-empty-title">Production context unavailable</div>
-                <div class="prod-empty-text">${escapeHtml(message || 'Unable to load production context right now.')}</div>
-            </div>
-        `;
-    }
-
-    if (paramsContainer) {
-        paramsContainer.innerHTML = '<p class="empty-state">No production data available.</p>';
-    }
-
-    if (varsContainer) {
-        varsContainer.innerHTML = '<p class="empty-state">No production data available.</p>';
-    }
+    if (!metricsContainer) return;
+    metricsContainer.innerHTML = `
+        <div class="empty-panel">
+            <div class="empty-panel-title">Production metrics unavailable</div>
+            <div class="empty-panel-text">${escapeHtml(message || 'Unable to load production metrics right now.')}</div>
+        </div>
+    `;
 }
 
 function exportProdRunHistory() {
@@ -862,27 +850,171 @@ function exportProdRunHistory() {
         });
 }
 
-function renderProdContext(data) {
-    const scrollState = captureProdScrollState();
-    latestProdContext = data;
-    const paramsContainer = document.getElementById('prod-params-container');
-    const varsContainer = document.getElementById('prod-variables-container');
-    const metricsContainer = document.getElementById('prod-metrics-container');
+let prodMetricsLoaded = false;
 
-    const locked = !!data.locked;
-
-    if (metricsContainer) {
-        renderProdMetrics(data);
-    }
+function renderProdSnapshot(data) {
+    const scrollState = captureScrollState('tab-production');
+    prodMetricsLoaded = true;
+    renderProdMetrics(data);
     renderProdSteps(data);
-    if (paramsContainer) {
-        paramsContainer.innerHTML = renderNamespaceTable('params', data.params || {}, locked);
+    restoreScrollState('tab-production', scrollState);
+}
+
+function refreshProdMetrics() {
+    fetch('/api/prod/metrics')
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            // Without the ok check a 500 body ({message: ...}) rendered as an
+            // empty snapshot, blanking the metrics and step panels.
+            if (!ok) throw new Error(data.message || 'Failed to load production metrics.');
+            renderProdSnapshot(data);
+        })
+        .catch(() => {
+            if (!prodMetricsLoaded) {
+                renderProdUnavailable('Failed to load production metrics.');
+            }
+            setProdActionMessage('Production metrics are temporarily unavailable.', true);
+        });
+}
+
+/* ---- Variables tab (optional context: params & variables) ---- */
+function isContextUserInteracting() {
+    const active = document.activeElement;
+    return !!(active && (active.closest('#ctx-params-container') || active.closest('#ctx-variables-container')));
+}
+
+// "prod_start", "prod_start (default)", "never": what actually resets the entry,
+// including the file-wide default it inherits when it sets no reset_on.
+function describeResetPolicy(resetOn, defaults) {
+    const inherited = !Array.isArray(resetOn);
+    const events = inherited ? (Array.isArray(defaults) ? defaults : []) : resetOn;
+    const text = (events.length === 0 || events.includes('none')) ? 'never' : events.join(', ');
+    return inherited ? `${text} (default)` : text;
+}
+
+function renderContextEditor(namespace, key, entry, editable) {
+    const id = escapeHtml(`ctx-${namespace}-${key}-value`);
+    const data = `data-namespace="${escapeHtml(namespace)}" data-key="${escapeHtml(key)}"`;
+    const disabled = editable ? '' : 'disabled';
+    if (entry.type === 'bool') {
+        return `<input id="${id}" ${data} type="checkbox" ${entry.value ? 'checked' : ''} ${disabled}>`;
     }
-    if (varsContainer) {
-        varsContainer.innerHTML = renderNamespaceTable('variables', data.variables || {}, locked);
+    if (entry.type === 'int' || entry.type === 'float') {
+        const step = entry.type === 'int' ? '1' : 'any';
+        const mode = entry.type === 'int' ? 'numeric' : 'decimal';
+        return `<input id="${id}" ${data} type="number" step="${step}" inputmode="${mode}" value="${escapeHtml(entry.value)}" ${disabled}>`;
     }
-    ensureProdCardHandlers();
-    restoreProdScrollState(scrollState);
+    return `<input id="${id}" ${data} type="text" value="${escapeHtml(entry.value)}" ${disabled}>`;
+}
+
+function renderContextCards(namespace, entries, locked, defaultResetEvents) {
+    const keys = Object.keys(entries);
+    if (keys.length === 0) {
+        return `<p class="empty-state">No ${namespace} defined in the context file.</p>`;
+    }
+
+    const cards = keys.map((key) => {
+        const entry = entries[key];
+        const readOnly = !entry.editable_when_idle;
+        const editable = !locked && !readOnly;
+        const dataAttrs = `data-namespace="${escapeHtml(namespace)}" data-key="${escapeHtml(key)}"`;
+
+        return `
+            <div class="ctx-card${readOnly ? ' ctx-card-readonly' : ' ctx-card-editable'}">
+                <div class="ctx-card-header">
+                    <span class="ctx-card-key">${escapeHtml(key)}</span>
+                    <span class="ctx-card-tag">${escapeHtml(entry.type)}</span>
+                    ${readOnly ? '<span class="ctx-card-tag ctx-card-tag-readonly" title="editable_when_idle: false — only task logic writes it">read-only</span>' : ''}
+                </div>
+                <div class="ctx-card-body">
+                    <div class="ctx-card-value">${renderContextEditor(namespace, key, entry, editable)}</div>
+                    <div class="ctx-card-details">
+                        <span><span class="ctx-detail-label">Default:</span> ${escapeHtml(String(entry.default))}</span>
+                        <span><span class="ctx-detail-label">Reset:</span> ${escapeHtml(describeResetPolicy(entry.reset_on, defaultResetEvents))}</span>
+                        <span><span class="ctx-detail-label">Persist:</span> ${entry.persist ? 'yes' : 'no'}</span>
+                        ${entry.description ? `<span class="ctx-card-desc">${escapeHtml(entry.description)}</span>` : ''}
+                    </div>
+                    <div class="ctx-card-actions">
+                        <button type="button" class="btn-task" data-ctx-action="apply" ${dataAttrs} ${editable ? '' : 'disabled'}>Apply</button>
+                        <button type="button" class="btn-shutdown" data-ctx-action="reset" ${dataAttrs} ${locked ? 'disabled' : ''}>Reset</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // While a task runs every card is greyed out, not just the read-only ones.
+    return `<div class="ctx-cards${locked ? ' ctx-cards-locked' : ''}">${cards}</div>`;
+}
+
+function renderContextEmpty(data) {
+    const error = data && data.load_error;
+    const title = error ? 'Context unavailable' : 'No context configured';
+    return `
+        <div class="empty-panel">
+            <div class="empty-panel-title">${title}</div>
+            ${error ? `<p class="empty-panel-text ctx-error">${escapeHtml(error)}</p>` : ''}
+            <p class="empty-panel-text">
+                Params and variables are optional; the cell runs without them. To use them, add a
+                <code>context.yaml</code> next to <code>config.yaml</code> (or set <code>context_file:</code>
+                in config.yaml) and restart the app:
+            </p>
+            <pre class="ctx-snippet">params:
+  move_time_s: {type: float, default: 0.5, description: Duration of one move}
+variables:
+  part_count: {type: int, default: 0, reset_on: prod_start, persist: true}</pre>
+            <p class="empty-panel-text">
+                Task functions then read and write them through <code>context</code>:
+                <code>context.get_param("move_time_s", 0.5)</code>,
+                <code>context.set_variable("part_count", n)</code>.
+            </p>
+        </div>
+    `;
+}
+
+function renderContext(data) {
+    latestContext = data;
+    const empty = document.getElementById('ctx-empty');
+    const content = document.getElementById('ctx-content');
+    if (!empty || !content) return;
+
+    if (!data.enabled) {
+        empty.innerHTML = renderContextEmpty(data);
+        empty.hidden = false;
+        content.hidden = true;
+        return;
+    }
+    empty.hidden = true;
+    content.hidden = false;
+
+    const scrollState = captureScrollState('tab-variables');
+    const locked = !!data.locked;
+    const defaults = data.default_reset_events || [];
+
+    const hint = document.getElementById('ctx-state-hint');
+    if (hint) {
+        hint.textContent = locked
+            ? `Locked while a task runs (${data.state})`
+            : 'Editable while no task is running';
+        hint.className = 'manual-state-hint ' + (locked ? 'manual-state-blocked' : 'manual-state-ready');
+    }
+
+    document.getElementById('ctx-variables-container').innerHTML =
+        renderContextCards('variables', data.variables || {}, locked, defaults);
+    document.getElementById('ctx-params-container').innerHTML =
+        renderContextCards('params', data.params || {}, locked, defaults);
+
+    const resetAll = document.getElementById('ctx-reset-all');
+    if (resetAll) resetAll.disabled = locked;
+
+    const source = document.getElementById('ctx-source');
+    if (source) {
+        source.textContent = `Defined in ${data.source || '—'}`
+            + (data.state_file ? ` · persisted values saved to ${data.state_file}` : '');
+    }
+
+    ensureContextCardHandlers();
+    restoreScrollState('tab-variables', scrollState);
 }
 
 // The Apply/Reset buttons carry their target in data-* attributes and are wired
@@ -891,114 +1023,74 @@ function renderProdContext(data) {
 // quote would otherwise have broken out of the handler and executed.
 // The containers themselves are never replaced (only their innerHTML), so these
 // listeners survive every re-render and only need attaching once.
-let prodCardHandlersInitialized = false;
+let contextCardHandlersInitialized = false;
 
-function ensureProdCardHandlers() {
-    if (prodCardHandlersInitialized) return;
+function ensureContextCardHandlers() {
+    if (contextCardHandlersInitialized) return;
 
-    ['prod-params-container', 'prod-variables-container'].forEach((containerId) => {
+    ['ctx-params-container', 'ctx-variables-container'].forEach((containerId) => {
         const container = document.getElementById(containerId);
         if (!container) return;
         container.addEventListener('click', (event) => {
-            const btn = event.target.closest('[data-prod-action]');
+            const btn = event.target.closest('[data-ctx-action]');
             if (!btn || btn.disabled || !container.contains(btn)) return;
 
             const namespace = btn.dataset.namespace;
             const key = btn.dataset.key;
             if (!namespace || !key) return;
 
-            if (btn.dataset.prodAction === 'apply') {
-                updateProdValue(namespace, key);
-            } else if (btn.dataset.prodAction === 'reset') {
-                resetProdContext(namespace, key);
+            if (btn.dataset.ctxAction === 'apply') {
+                updateContextValue(namespace, key);
+            } else if (btn.dataset.ctxAction === 'reset') {
+                resetContext(namespace, key);
             }
+        });
+        // Enter in a value field applies it, like the Apply button.
+        container.addEventListener('keydown', (event) => {
+            const input = event.target;
+            if (event.key !== 'Enter' || input.tagName !== 'INPUT' || input.disabled) return;
+            if (!input.dataset.namespace || !input.dataset.key) return;
+            event.preventDefault();
+            updateContextValue(input.dataset.namespace, input.dataset.key);
         });
     });
 
-    prodCardHandlersInitialized = true;
+    contextCardHandlersInitialized = true;
 }
 
-function renderNamespaceTable(namespace, entries, locked) {
-    const keys = Object.keys(entries);
-    if (keys.length === 0) {
-        return '<p class="empty-state">No entries defined.</p>';
-    }
-
-    const cards = keys.map((key) => {
-        const entry = entries[key];
-        const editable = !locked && !!entry.editable_when_idle;
-        const inputId = `prod-${namespace}-${key}-value`;
-        const resetOn = Array.isArray(entry.reset_on) ? entry.reset_on.join(', ') : 'default policy';
-        const scope = entry.persist_scope || 'default';
-
-        let editorHtml = '';
-        if (entry.type === 'bool') {
-            editorHtml = `<input id="${escapeHtml(inputId)}" type="checkbox" ${entry.value ? 'checked' : ''} ${editable ? '' : 'disabled'}>`;
-        } else {
-            editorHtml = `<input id="${escapeHtml(inputId)}" type="text" value="${escapeHtml(entry.value)}" ${editable ? '' : 'disabled'}>`;
-        }
-
-        return `
-            <div class="prod-card${editable ? ' prod-card-editable' : ' prod-card-locked'}">
-                <div class="prod-card-header">
-                    <span class="prod-card-key">${escapeHtml(key)}</span>
-                    <span class="prod-card-type">${escapeHtml(entry.type)}</span>
-                </div>
-                <div class="prod-card-body">
-                    <div class="prod-card-value">${editorHtml}</div>
-                    <div class="prod-card-details">
-                        <span><span class="prod-detail-label">Default:</span> ${escapeHtml(String(entry.default))}</span>
-                        <span><span class="prod-detail-label">Reset:</span> ${escapeHtml(resetOn)}</span>
-                        <span><span class="prod-detail-label">Scope:</span> ${escapeHtml(scope)}</span>
-                        ${entry.description ? `<span class="prod-card-desc">${escapeHtml(entry.description)}</span>` : ''}
-                    </div>
-                    <div class="prod-card-actions">
-                        <button type="button" class="btn-task" data-prod-action="apply" data-namespace="${escapeHtml(namespace)}" data-key="${escapeHtml(key)}" ${editable ? '' : 'disabled'}>Apply</button>
-                        <button type="button" class="btn-shutdown" data-prod-action="reset" data-namespace="${escapeHtml(namespace)}" data-key="${escapeHtml(key)}" ${locked ? 'disabled' : ''}>Reset</button>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
-
-    return `<div class="prod-cards">${cards}</div>`;
-}
-
-function refreshProdContext(auto = false) {
-    if (auto && isProdUserInteracting()) {
+function refreshContext(auto = false) {
+    if (auto && isContextUserInteracting()) {
         return;
     }
-    fetch('/api/prod/context')
+    fetch('/api/context')
         .then(r => r.json().then(data => ({ ok: r.ok, data })))
         .then(({ ok, data }) => {
-            // Without the ok check a 500 body ({message: ...}) rendered as an
-            // empty snapshot, blanking the metrics and step panels.
-            if (!ok) throw new Error(data.message || 'Failed to load production context.');
-            renderProdContext(data);
+            if (!ok) throw new Error(data.message || 'Failed to load context.');
+            renderContext(data);
         })
         .catch(() => {
-            if (!latestProdContext) {
-                renderProdUnavailable('Failed to load production context.');
+            if (!latestContext) {
+                renderContext({ enabled: false, load_error: 'Failed to load the context from the server.' });
             }
-            setProdActionMessage('Production context is temporarily unavailable.', true);
+            setContextMessage('Context is temporarily unavailable.', true);
         });
 }
 
-function updateProdValue(namespace, key) {
-    if (!latestProdContext || !latestProdContext[namespace] || !latestProdContext[namespace][key]) return;
+function updateContextValue(namespace, key) {
+    if (!latestContext || !latestContext[namespace] || !latestContext[namespace][key]) return;
 
-    const entry = latestProdContext[namespace][key];
-    const input = document.getElementById(`prod-${namespace}-${key}-value`);
+    const entry = latestContext[namespace][key];
+    const input = document.getElementById(`ctx-${namespace}-${key}-value`);
     if (!input) return;
 
     const value = parseFieldValue(entry.type, input);
     if ((entry.type === 'int' || entry.type === 'float') && Number.isNaN(value)) {
-        setMessage(`Invalid numeric value for ${namespace}.${key}.`);
+        setContextMessage(`Invalid numeric value for ${namespace}.${key}.`, true);
         return;
     }
 
     const payload = { [namespace]: { [key]: { value } } };
-    fetch('/api/prod/context', {
+    fetch('/api/context', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1011,38 +1103,41 @@ function updateProdValue(namespace, key) {
                     : '';
                 const msg = (d.message || `Failed to update ${namespace}.${key}.`) + details;
                 setMessage(msg);
-                setProdActionMessage(msg, true);
+                setContextMessage(msg, true);
             } else {
-                const msg = d.message || `${namespace}.${key} updated.`;
+                const msg = `${namespace}.${key} set to ${value}.`;
                 setMessage(msg);
-                setProdActionMessage(msg, false);
+                setContextMessage(msg, false);
             }
-            refreshProdContext();
+            // The input had focus, which pauses the 1 Hz refresh; release it so
+            // the card shows the server-side value from here on.
+            if (document.activeElement === input) input.blur();
+            refreshContext();
         })
         .catch(() => {
-            const msg = 'Error updating production context value.';
+            const msg = 'Error updating context value.';
             setMessage(msg);
-            setProdActionMessage(msg, true);
+            setContextMessage(msg, true);
         });
 }
 
-function resetProdContext(namespace, key = null) {
+function resetContext(namespace, key = null) {
     if (namespace === 'all' || !key) {
         showConfirmModal(
             "Confirm Reset All",
-            "Are you sure you want to reset all production parameters and variables to their default values? This cannot be undone.",
-            () => executeReset(namespace, key)
+            "Reset all params and variables to their default values? Persisted values are reset too. This cannot be undone.",
+            () => executeContextReset(namespace, key)
         );
     } else {
-        executeReset(namespace, key);
+        executeContextReset(namespace, key);
     }
 }
 
-function executeReset(namespace, key) {
+function executeContextReset(namespace, key) {
     const payload = { namespace };
     if (key) payload.key = key;
 
-    fetch('/api/prod/context/reset', {
+    fetch('/api/context/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1050,24 +1145,23 @@ function executeReset(namespace, key) {
         .then(r => r.json())
         .then(d => {
             if (d.success === false) {
-                const msg = d.message || 'Failed to reset production context.';
+                const msg = d.message || 'Failed to reset context.';
                 setMessage(msg);
-                setProdActionMessage(msg, true);
+                setContextMessage(msg, true);
             } else {
-                const msg = d.message || 'Production context reset.';
+                const msg = key ? `${namespace}.${key} reset to default.` : 'All params and variables reset to defaults.';
                 setMessage(msg);
-                setProdActionMessage(msg, false);
+                setContextMessage(msg, false);
             }
-            refreshProdContext();
+            refreshContext();
         })
         .catch(() => {
-            const msg = 'Error resetting production context.';
+            const msg = 'Error resetting context.';
             setMessage(msg);
-            setProdActionMessage(msg, true);
+            setContextMessage(msg, true);
         });
 }
 
-/* ---- Device info cards ---- */
 function loadRobotInfo() {
     fetch('/api/info')
         .then(r => r.json())
@@ -1752,7 +1846,10 @@ setInterval(() => {
 
 setInterval(() => {
     if (document.getElementById('tab-production').classList.contains('active')) {
-        refreshProdContext(true);
+        refreshProdMetrics();
+    }
+    if (document.getElementById('tab-variables').classList.contains('active')) {
+        refreshContext(true);
     }
 }, 1000);
 
@@ -1761,7 +1858,8 @@ setInterval(updateRobotStatus, 100);
 setInterval(loadRobotInfo, 1000);
 updateRobotStatus();
 loadRobotInfo();
-refreshProdContext();
+refreshProdMetrics();
+refreshContext();
 loadManualActions();
 initRestoreDropzone();
 ensureBackupRestoreDropdowns();

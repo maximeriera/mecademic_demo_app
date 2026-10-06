@@ -34,7 +34,7 @@ from .ControllerState import ControllerState
 from .ManualActions import load_manual_actions_registry
 
 from devices import Device
-from .ProductionContext import ProductionContext
+from .AppContext import AppContext
 
 
 def _load_workspace_task_function(function_name: str, module_candidates: tuple[str, ...]):
@@ -142,6 +142,9 @@ class Task(threading.Thread):
     devices : Dict[str, Device]
         Shared device map passed down from the controller.  Keys are the
         ``device_id`` strings defined in ``config.yaml``.
+    context : AppContext
+        App-wide context handed to workspace functions as ``context``; also
+        carries the step tracker and PROD metrics the task reports into.
 
     Thread lifecycle
     ----------------
@@ -158,7 +161,7 @@ class Task(threading.Thread):
         task_type: TaskType,
         state_change_callback,
         devices: Dict[str, Device],
-        production_context: ProductionContext,
+        context: AppContext,
         manual_action_key: str | None = None,
     ):
         super().__init__()
@@ -170,7 +173,7 @@ class Task(threading.Thread):
         self.state_change_callback = state_change_callback
         self.name = f"TaskThread-{task_type.name}"
         self.devices = devices
-        self.production_context = production_context
+        self.context = context
         self.manual_action_key = (manual_action_key or "").strip() or None
 
     def run(self):
@@ -192,7 +195,7 @@ class Task(threading.Thread):
         )
 
         faulted = False
-        self.production_context.begin_task(self.task_type.value, self._sequence_key())
+        self.context.steps.begin_task(self.task_type.value, self._sequence_key())
 
         try:
             match self.task_type:
@@ -209,14 +212,14 @@ class Task(threading.Thread):
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
             if self.task_type == TaskType.PROD:
-                self.production_context.apply_event("fault")
-                self.production_context.mark_prod_running(False)
+                self.context.apply_event("fault")
+                self.context.metrics.mark_prod_running(False)
             self.state_change_callback(ControllerState.FAULTED)
             faulted = True
         finally:
             # Closes any step still open on this thread's unwind path, whatever
             # the exit route (success, fault, abort, stop).
-            self.production_context.end_task()
+            self.context.steps.end_task()
             self._is_finished.set()
             if not faulted:
                 # Only transition to READY if no FAULT was set during execution
@@ -242,7 +245,7 @@ class Task(threading.Thread):
         opt in to step reporting by adding a second parameter.
         """
         if _accepts_context(fn):
-            fn(self.devices, self.production_context)
+            fn(self.devices, self.context)
         else:
             fn(self.devices)
             
@@ -323,36 +326,37 @@ class Task(threading.Thread):
             prod_cycle = load_task_function("prod_cycle")
             # The entry and exit home sequences used to be untelemetered: the UI
             # showed running=True with no cycle in progress for their duration.
-            with self.production_context.step("Home (entry)"):
+            with self.context.step("Home (entry)"):
                 self._run_home()
             while not self.stopped():
                 # Authoritative counter. This used to read the *user variable*
                 # part_count, so a workspace cycle that does not increment it
                 # logged "cycle start #1" forever.
-                cycle_number = self.production_context.get_cycle_count() + 1
+                cycle_number = self.context.metrics.get_cycle_count() + 1
                 self.logger.info(f"[{self.name}] PROD cycle start #{cycle_number}")
-                self.production_context.mark_cycle_start()
-                self.production_context.reset_cycle_steps()
+                self.context.metrics.mark_cycle_start()
+                self.context.steps.begin_cycle(cycle_number)
                 try:
-                    prod_cycle(self.devices, self.production_context)
-                    self.production_context.mark_cycle_end()
-                    self.production_context.log_cycle_step_summary(cycle_number)
+                    prod_cycle(self.devices, self.context)
+                    self.context.metrics.mark_cycle_end()
+                    self.context.steps.log_cycle_summary(cycle_number)
                     self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:
-                    self.production_context.mark_cycle_error(str(e))
+                    self.context.metrics.mark_cycle_error(str(e))
                     if self.stopped():
                         # abort() called mid-cycle: ClearMotion() unblocked WaitIdle() — clean exit
                         self.logger.info(f"[{self.name}] Prod cycle interrupted by abort: {e}")
-                        self.production_context.mark_prod_running(False)
+                        self.context.metrics.mark_prod_running(False)
                         return
                     raise  # genuine device error → propagate → FAULTED
             # stop() called between cycles: finish the loop cleanly
-            self.production_context.apply_event("prod_stop")
-            self.production_context.mark_prod_running(False)
-            with self.production_context.step("Home (exit)"):
+            self.context.apply_event("prod_stop")
+            self.context.metrics.mark_prod_running(False)
+            self.context.steps.begin_cycle(None)
+            with self.context.step("Home (exit)"):
                 self._run_home()
         except Exception as e:
-            self.production_context.mark_prod_running(False)
+            self.context.metrics.mark_prod_running(False)
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
             raise e
 
@@ -377,7 +381,7 @@ class Task(threading.Thread):
 
         # Wrapping in a step both reports it live and persists the duration
         # that was previously measured here and only ever logged.
-        with self.production_context.step(f"Manual: {self.manual_action_key}"):
+        with self.context.step(f"Manual: {self.manual_action_key}"):
             self._call_workspace(action_fn)
         elapsed_s = time.perf_counter() - start_ts
         self.logger.info(

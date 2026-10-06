@@ -33,7 +33,10 @@ from devices import Device
 
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
-from .ProductionContext import ProductionContext
+from .AppContext import AppContext
+from .ContextStore import ContextStore
+from .ProductionMetrics import ProductionMetrics
+from .StepTracker import StepTracker
 from .ManualActions import load_manual_actions_registry, normalize_manual_actions_config
 from .LogSetup import get_controller_logger
 
@@ -63,7 +66,7 @@ class ApplicationController:
                 └─ FAULTED
     """
 
-    def __init__(self, config_path: str = 'config.yaml', production_context_path: str | None = None):
+    def __init__(self, config_path: str = 'config.yaml', context_path: str | None = None):
         
         self.logger = self._setup_logger()
         
@@ -82,13 +85,74 @@ class ApplicationController:
         self.devices: Dict[str, Device] = {}
         self._manual_actions = self._load_manual_actions_config()
         
-        if production_context_path is None:
-            production_context_path = self.config.get('production_context_file', 'production_context.yaml')
-        self.production_context = ProductionContext(self.logger, config_path=production_context_path) if production_context_path else ProductionContext(self.logger)
+        self.context = self._create_context(config_path, context_path)
 
         self._create_devices()
         self.logger.info("ApplicationController initialized with devices: " + ", ".join(self.devices.keys())) 
         self._monitor_thread.start()
+
+    def _resolve_context_path(self, config_path: str, context_path: str | None) -> str | None:
+        """Locate the optional context file. Relative paths resolve against config.yaml's folder.
+
+        Order: explicit ``context_path`` -> ``context_file`` in config.yaml
+        (default ``context.yaml``) -> legacy ``production_context_file`` /
+        ``production_context.yaml``. ``None`` means the workspace has no
+        context, which is a supported setup, not an error.
+        """
+        if context_path:
+            return context_path
+
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+
+        def resolve(path: str) -> str:
+            return path if os.path.isabs(path) else os.path.join(config_dir, path)
+
+        configured = self.config.get('context_file')
+        if configured:
+            # Returned even when missing, so the Variables tab reports the
+            # broken path instead of silently showing "no context".
+            return resolve(str(configured))
+
+        default_path = resolve('context.yaml')
+        if os.path.isfile(default_path):
+            return default_path
+
+        legacy_configured = self.config.get('production_context_file')
+        legacy_path = resolve(str(legacy_configured or 'production_context.yaml'))
+        if legacy_configured or os.path.isfile(legacy_path):
+            self.logger.warning(
+                "Using legacy context file %s. Rename it to context.yaml (or set `context_file:` "
+                "in config.yaml); `production_context_file` / production_context.yaml are deprecated.",
+                legacy_path,
+            )
+            return legacy_path
+
+        return None
+
+    def _create_context(self, config_path: str, context_path: str | None) -> AppContext:
+        """Build the app-wide context: optional params/variables, step tracking, PROD metrics."""
+        resolved = self._resolve_context_path(config_path, context_path)
+        if resolved is None:
+            self.logger.info(
+                "No context file (context.yaml) in the workspace: params/variables are disabled. "
+                "Step tracking and production metrics work as usual."
+            )
+        store = ContextStore(self.logger, resolved)
+
+        sequences = self.config.get('sequences')
+        if sequences is None and store.legacy_sequences is not None:
+            self.logger.warning(
+                "Reading `sequences:` from %s (legacy location). Move the block to config.yaml.",
+                store.path,
+            )
+            sequences = store.legacy_sequences
+        elif sequences is not None and store.legacy_sequences is not None:
+            self.logger.warning(
+                "`sequences:` in %s is ignored: config.yaml defines its own.", store.path,
+            )
+
+        steps = StepTracker(self.logger, StepTracker.normalize_sequences(sequences, self.logger))
+        return AppContext(store=store, steps=steps, metrics=ProductionMetrics(self.logger))
 
     def _load_manual_actions_config(self) -> list[dict[str, str]]:
         """Load and validate manual action metadata from config and workspace registry."""
@@ -283,7 +347,7 @@ class ApplicationController:
             self._monitor_stop_event.clear()
             self._monitor_thread.start()
         
-        self.production_context.apply_event("initialize")
+        self.context.apply_event("initialize")
         self.set_state(ControllerState.READY)
 
     def set_state(self, new_state: ControllerState) -> ControllerState:
@@ -382,15 +446,15 @@ class ApplicationController:
 
         # Start the new task
         if task_type == TaskType.PROD:
-            self.production_context.apply_event("prod_start")
-            self.production_context.mark_prod_running(True)
+            self.context.apply_event("prod_start")
+            self.context.metrics.mark_prod_running(True)
 
         self._current_task = Task(
             logger=self.logger,
             task_type=task_type, 
             state_change_callback=self.set_state, 
             devices=self.devices,
-            production_context=self.production_context,
+            context=self.context,
             manual_action_key=manual_action_key,
         )
         self.logger.info(
@@ -461,36 +525,46 @@ class ApplicationController:
         """
         if self._current_task and self._current_task.is_alive():
             self.logger.warning("Aborting current task due to device fault or stop request.")
-            self.production_context.apply_event("abort")
-            self.production_context.mark_prod_running(False)
+            self.context.apply_event("abort")
+            self.context.metrics.mark_prod_running(False)
             # Close the open step from THIS thread. The task thread may sit in a
             # non-interruptible SDK call for seconds, and until it unwinds the UI
             # would keep showing "Pick part - 48 s and counting" on a dead cell.
-            self.production_context.abandon_open_steps("aborted")
+            self.context.steps.abandon_open_steps("aborted")
             self._current_task.abort()
             # The Task thread will handle the transition back to READY or FAULTED
 
     def get_live_step(self) -> Dict[str, Any] | None:
         """Current sequence step, or None when idle.
 
-        Lock-free in ProductionContext, so this is safe on the 10 Hz
-        /api/status path.
+        Lock-free in StepTracker, so this is safe on the 10 Hz /api/status path.
         """
-        return self.production_context.get_live_step()
+        return self.context.steps.get_live()
 
-    def get_prod_context_snapshot(self) -> Dict[str, Any]:
-        """Return a full production context snapshot for API/UI consumption."""
-        return self.production_context.snapshot(self.get_state().value)
+    def get_prod_snapshot(self) -> Dict[str, Any]:
+        """PROD metrics and step state for the Production tab."""
+        return {
+            "state": self.get_state().value,
+            "metrics": self.context.metrics.snapshot(),
+            "steps": self.context.steps.snapshot(),
+        }
 
-    def update_prod_context(self, payload: Dict[str, Any]) -> tuple[list[str], list[str]]:
-        """Update production context entries from an API payload."""
+    def get_context_snapshot(self) -> Dict[str, Any]:
+        """Params/variables for the Variables tab. ``enabled`` is False without a context file."""
+        snapshot = self.context.store.snapshot()
+        snapshot["state"] = self.get_state().value
+        snapshot["locked"] = self.get_state() == ControllerState.BUSY
+        return snapshot
+
+    def update_context(self, payload: Dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Apply value edits from the API. Refused while a task is running."""
         locked = self.get_state() == ControllerState.BUSY
-        return self.production_context.update_from_payload(payload, locked=locked)
+        return self.context.store.update_from_payload(payload, locked=locked)
 
-    def reset_prod_context(self, namespace: str, key: str | None = None, event: str | None = None) -> None:
-        """Reset production context values to their defaults."""
+    def reset_context(self, namespace: str, key: str | None = None) -> None:
+        """Reset params/variables to their defaults. Refused while a task is running."""
         locked = self.get_state() == ControllerState.BUSY
-        self.production_context.reset(namespace_name=namespace, key=key, event=event, locked=locked)
+        self.context.store.reset(namespace, key=key, locked=locked)
 
     # --- Monitoring Thread ---
 
@@ -523,9 +597,9 @@ class ApplicationController:
                 if device.faulted:
                     if self.get_state() != ControllerState.FAULTED:
                         self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state and aborting task.")
-                        self.production_context.apply_event("fault")
-                        self.production_context.mark_prod_running(False)
-                        self.production_context.abandon_open_steps("faulted")
+                        self.context.apply_event("fault")
+                        self.context.metrics.mark_prod_running(False)
+                        self.context.steps.abandon_open_steps("faulted")
                         self.set_state(ControllerState.FAULTED)
                         self._abort_current_task()
                     all_healthy = False
@@ -657,7 +731,7 @@ class ApplicationController:
             If the monitor thread does not exit within the timeout.
         """
         self.logger.info("Shutting down Robot Controller...")
-        self.production_context.mark_prod_running(False)
+        self.context.metrics.mark_prod_running(False)
         self.set_state(ControllerState.FAULTED)
         self._monitor_stop_event.set()
         if self._current_task and self._current_task.is_alive():

@@ -17,10 +17,11 @@ from __future__ import annotations
 import time
 from typing import Dict
 
+from core import AppContext
 from devices import Device
 
 
-def inspect_part(devices: Dict[str, Device], context=None) -> bool:
+def inspect_part(devices: Dict[str, Device], context: AppContext | None = None) -> bool:
     """Inspect the part currently held, and report whether it passed.
 
     Called two ways, which is the point of putting it here:
@@ -57,7 +58,7 @@ def inspect_part(devices: Dict[str, Device], context=None) -> bool:
     return part_number % reject_every_n != 0
 
 
-def inspect_only(devices: Dict[str, Device], context=None):
+def inspect_only(devices: Dict[str, Device], context: AppContext | None = None):
     """Manual action: run the inspection routine on its own.
 
     Reports its own steps, so the Manual tab shows progress the same way the
@@ -77,7 +78,7 @@ def inspect_only(devices: Dict[str, Device], context=None):
     robot.logger.info(f"[inspect_only] inspection {'passed' if passed else 'failed'}")
 
 
-def open_gripper(devices: Dict[str, Device], context=None):
+def open_gripper(devices: Dict[str, Device], context: AppContext | None = None):
     """Manual action: release whatever the gripper is holding.
 
     The smallest useful example: one device, one step, no parameters.
