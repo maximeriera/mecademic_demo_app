@@ -183,21 +183,23 @@ body {
     text-shadow: 0 0 18px rgba(0,255,153,0.25);
 }
 
-.panel-kicker {
-    margin-bottom: 8px;
-    font-size: 0.72em;
-    font-weight: 700;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: rgba(255,255,255,0.46);
+/* Brand mark, in place of the old .panel-kicker text. The SVG is already
+   white, so it sits directly on the dark sidebar with no filtering. The
+   intrinsic width/height on the <img> reserves the right box before the file
+   loads; these rules scale it to the sidebar's content width. */
+.panel-logo {
+    display: block;
+    width: 100%;
+    max-width: 180px;
+    height: auto;
+    margin: 0 0 14px;
 }
-
-.panel-subtitle {
-    max-width: 42ch;
-    margin: 0 auto 18px;
-    font-size: 0.92em;
-    line-height: 1.55;
-    color: var(--color-muted);
+@media (max-width: 1024px) {
+    /* The header centres at this breakpoint, so the logo must too. */
+    .panel-logo {
+        margin-left: auto;
+        margin-right: auto;
+    }
 }
 
 /* --- Tabs --- */
@@ -312,6 +314,12 @@ body {
     text-transform: uppercase;
     color: var(--color-muted);
     margin-bottom: 8px;
+}
+/* A second label stacked under an earlier block needs the same breathing room
+   the first one gets from .global-status-wrap, otherwise it sits flush against
+   the box above it. Matches the 20px rhythm .tab-bar uses below. */
+.global-status-wrap .global-status-label:not(:first-child) {
+    margin-top: 20px;
 }
 
 .tab-panel { display: none; }
@@ -1662,43 +1670,62 @@ button:active { transform: scale(0.98); }
     border: 0;
 }
 
-/* --- Sidebar live indicator --- */
+/* --- Sidebar live indicator ---
+   Chrome matches .status-box above it (same radius, border, inset highlight
+   and background), so the two read as one stack. State is applied as a tint,
+   exactly the way .BUSY/.READY tint the status box, rather than as a
+   different box style. */
 .step-indicator {
-    margin-top: 10px;
-    padding: 10px 12px;
-    border: 1px solid rgba(255, 212, 71, 0.28);
+    padding: 12px;
     border-radius: var(--radius);
-    background: linear-gradient(145deg, rgba(255, 212, 71, 0.07), rgba(255, 255, 255, 0.01));
+    /* Matches .OFF, the neutral state of the status box directly above. The
+       base .status-box style is never actually seen, because that element
+       always carries a state class. */
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    transition: background-color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
-.step-indicator[hidden] { display: none !important; }
+
+/* Running: the exact tint .BUSY applies to the status box, so the two boxes
+   change state together and read as one stack. */
+.step-indicator-active {
+    background: rgba(255, 212, 71, 0.18);
+    border-color: rgba(255, 212, 71, 0.3);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 12px rgba(255, 212, 71, 0.12);
+}
+
+/* Idle keeps the neutral chrome above and only mutes the content, so the
+   indicator never unmounts and the sidebar keeps its shape. */
+.step-indicator-idle .step-indicator-name { color: var(--color-muted); font-weight: 500; }
+.step-indicator-idle .step-indicator-timer { color: var(--color-muted); }
 
 .step-indicator-meta {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     gap: 8px;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
 }
 .step-indicator-counter {
-    font-size: 0.62em;
+    font-size: 0.64em;
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--color-muted);
 }
 .step-indicator-timer {
-    font-size: 0.72em;
+    font-size: 0.7em;
     font-family: "Consolas", monospace;
     color: var(--color-yellow);
     font-variant-numeric: tabular-nums;
 }
 .step-indicator-name {
-    font-size: 0.86em;
+    font-size: 0.9em;
     font-weight: 600;
     color: var(--color-text);
-    line-height: 1.35;
+    line-height: 1.3;
     overflow-wrap: anywhere;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 /* --- Progress bar, shared by the sidebar and the Production panel --- */

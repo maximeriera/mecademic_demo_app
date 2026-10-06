@@ -591,10 +591,23 @@ function patchLiveStep(step) {
     const indicator = document.getElementById('step-indicator');
 
     if (!step) {
-        if (indicator) indicator.hidden = true;
+        // Switch to an idle state rather than unmounting. The sidebar must not
+        // change shape between running and idle: an element that appears and
+        // disappears moves everything below it and makes the operator hunt for
+        // the information.
+        if (indicator) {
+            indicator.classList.add('step-indicator-idle');
+            indicator.classList.remove('step-indicator-active');
+        }
+        setTextById(STEP_LIVE_IDS.name, 'Idle');
+        setTextById(STEP_LIVE_IDS.timer, '—');
+        setTextById(STEP_LIVE_IDS.counter, 'Not running');
+        const fill = document.getElementById(STEP_LIVE_IDS.fill);
+        if (fill) fill.style.width = '0%';
+
         setTextById(STEP_LIVE_IDS.panelName, 'Idle');
         setTextById(STEP_LIVE_IDS.panelElapsed, '—');
-        setTextById(STEP_LIVE_IDS.panelCounter, '');
+        setTextById(STEP_LIVE_IDS.panelCounter, 'Not running');
         setTextById(STEP_LIVE_IDS.cardName, 'Idle');
         setTextById(STEP_LIVE_IDS.cardElapsed, '—');
         setTextById(STEP_LIVE_IDS.cardPosition, '—');
@@ -615,7 +628,10 @@ function patchLiveStep(step) {
         : `Step ${step.depth + 1}`;
     const pct = `${Math.round((step.progress ?? 0) * 100)}%`;
 
-    if (indicator) indicator.hidden = false;
+    if (indicator) {
+        indicator.classList.remove('step-indicator-idle');
+        indicator.classList.add('step-indicator-active');
+    }
     setTextById(STEP_LIVE_IDS.name, step.name);
     setTextById(STEP_LIVE_IDS.timer, elapsed);
     setTextById(STEP_LIVE_IDS.counter, step.off_sequence ? 'Off sequence' : counter);

@@ -10,21 +10,30 @@
     <div class="app-container">
         <aside class="sidebar">
             <div class="panel-header">
-                <div class="panel-kicker">Mecademic Demo Network</div>
+                <img
+                    class="panel-logo"
+                    src="{{ url_for('static', filename='img/mecademic-logo-white.svg') }}"
+                    alt="Mecademic"
+                    width="1868"
+                    height="619"
+                >
                 <h1>Demo Application Controller</h1>
-                <p class="panel-subtitle">Monitor status, send task commands, and inspect device activity.</p>
             </div>
 
             <div class="global-status-wrap">
                 <div class="global-status-label">System Status</div>
                 <div id="robot-state-global" class="status-box status-box-compact js-robot-state">Loading...</div>
 
-                <!-- Live sequence step. Deliberately NOT marked .js-robot-state:
-                     updateRobotStatus() rewrites className wholesale on every such
-                     element at 10 Hz and would strip these classes. -->
-                <div id="step-indicator" class="step-indicator" aria-hidden="true" hidden>
+                <!-- Live sequence step. Always present: it switches to an idle
+                     state rather than unmounting, so the sidebar never changes
+                     shape and the operator always looks in the same place.
+                     Deliberately NOT marked .js-robot-state: updateRobotStatus()
+                     rewrites className wholesale on every such element at 10 Hz
+                     and would strip these classes. -->
+                <div class="global-status-label">Current Step</div>
+                <div id="step-indicator" class="step-indicator step-indicator-idle" aria-hidden="true">
                     <div class="step-indicator-meta">
-                        <span id="step-indicator-counter" class="step-indicator-counter"></span>
+                        <span id="step-indicator-counter" class="step-indicator-counter">Not running</span>
                         <span id="step-indicator-timer" class="step-indicator-timer">—</span>
                     </div>
                     <div id="step-indicator-name" class="step-indicator-name">Idle</div>
