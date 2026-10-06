@@ -104,6 +104,59 @@
 # production_context_file: "production_context.yaml"
 production_context_file: "production_context.yaml"
 
+# ============================================================
+# DEFAULT EXAMPLE CELL — simulated devices, no hardware needed
+# ============================================================
+# Everything below runs out of the box: all three devices are
+# `type: "simulated"`, so INITIALIZE connects instantly and the PROD loop runs
+# a full pick / inspect / place cycle with no robot, feeder, or camera present.
+#
+# To drive real hardware, change a device's `type` and add its connection
+# fields (see the reference list above). The task logic in app_logic/*.py does
+# not need to change: a SimulatedDevice's `.api` accepts any method call, so
+# `robot.api.MovePose(...)` is the same line either way.
+
 manual_actions:
-  
+  - key: "inspect_only"
+    label: "Inspect Part"
+    description: "Run the inspection subroutine on its own, without a full pick/place cycle."
+    confirm_title: "Confirm Inspection"
+    confirm_message: "Run the inspection routine now? Ensure the cell is clear before starting."
+
+  - key: "open_gripper"
+    label: "Open Gripper"
+    description: "Release whatever the gripper is currently holding."
+    confirm_title: "Confirm Gripper Release"
+    confirm_message: "Open the gripper? Any held part will be released immediately."
+
 devices:
+
+  # --- Robot ---
+  my_meca_robot:
+    type: "simulated"          # change to "mecademic" + ip_address for real hardware
+    connect_delay: 0.3         # pretend the connection takes a moment
+    info:
+      model: "SimulatedMeca500"
+      serial_number: "SIM-ROBOT-0001"
+
+  # --- Part feeder ---
+  part_feeder:
+    type: "simulated"          # change to "asyril" + ip_address/recipe for real hardware
+    connect_delay: 0.2
+    info:
+      model: "SimulatedAsyrilEyePlus"
+      serial_number: "SIM-FEEDER-0001"
+
+  # --- Inspection camera ---
+  inspection_camera:
+    type: "simulated"          # change to "gige_camera" + cti_path for real hardware
+    connect_delay: 0.2
+    info:
+      model: "SimulatedGigECamera"
+      serial_number: "SIM-CAM-0001"
+
+  # Uncomment to exercise the fault-handling path: this device randomly reports
+  # faulted, which drives the controller to FAULTED and aborts the running task.
+  # flaky_io:
+  #   type: "simulated"
+  #   fail_rate: 0.02

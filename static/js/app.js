@@ -27,6 +27,8 @@ function switchTab(name, btn) {
     const activePanel = document.getElementById('tab-' + name);
     activePanel.classList.add('active');
     activePanel.hidden = false;
+    // The frame no longer resizes per tab, so start each tab at the top.
+    document.querySelector('.main-content').scrollTop = 0;
     btn.classList.add('active');
     btn.setAttribute('aria-selected', 'true');
     if (name === 'logs') populateLogFileList();
@@ -73,6 +75,7 @@ function updateRobotStatus() {
         .then(r => r.json())
         .then(data => {
             latestControllerStatus = data.status;
+            patchLiveStep(data.step || null);
             stateDisplays().forEach((el) => {
                 const compact = el.classList.contains('status-box-compact');
                 el.textContent = data.status;
@@ -82,6 +85,9 @@ function updateRobotStatus() {
         })
         .catch(() => {
             latestControllerStatus = 'FAULTED';
+            // Without this the indicator freezes on a stale step while the
+            // status box reads COMMUNICATION ERROR.
+            patchLiveStep(null);
             stateDisplays().forEach((el) => {
                 const compact = el.classList.contains('status-box-compact');
                 el.textContent = 'COMMUNICATION ERROR';
@@ -209,6 +215,36 @@ function sendShutdown() {
 }
 
 /* ---- Manual runtime actions ---- */
+
+// Built-in tasks shown on the Manual tab for every project, ahead of the
+// project-specific actions from config.yaml. They run through /api/task/<key>.
+const DEFAULT_MANUAL_ACTIONS = [
+    {
+        key: 'home',
+        label: 'Home',
+        description: 'Move the cell to its home position.',
+        confirm_title: 'Confirm Home',
+        confirm_message: 'Run the HOME task now? Ensure the cell is clear before starting.',
+        task: 'home',
+    },
+    {
+        key: 'shipment',
+        label: 'Shipment',
+        description: 'Move the robots to their shipment/packing position.',
+        confirm_title: 'Confirm Shipment',
+        confirm_message: 'Run the SHIPMENT task now? Ensure the cell is clear before starting.',
+        task: 'shipment',
+    },
+    {
+        key: 'calibration',
+        label: 'Calibration',
+        description: 'Run the cell calibration routine.',
+        confirm_title: 'Confirm Calibration',
+        confirm_message: 'Run the CALIBRATION task now? Ensure the cell is clear before starting.',
+        task: 'calibration',
+    },
+];
+
 function loadManualActions() {
     fetch('/api/manual/actions')
         .then(r => r.json().then((data) => ({ ok: r.ok, data })))
@@ -220,28 +256,23 @@ function loadManualActions() {
             renderManualActions();
         })
         .catch((err) => {
-            const container = document.getElementById('manual-actions-container');
-            if (container) {
-                container.innerHTML = `<p class="empty-state empty-state-error">${escapeHtml(err.message || 'Failed to load manual actions.')}</p>`;
-            }
+            manualActions = [];
+            renderManualActions(err.message || 'Failed to load manual actions.');
             setManualActionMessage(err.message || 'Failed to load manual actions.', true);
         });
 }
 
-function renderManualActions() {
+function renderManualActions(loadError = null) {
     const container = document.getElementById('manual-actions-container');
     if (!container) return;
 
-    if (!Array.isArray(manualActions) || manualActions.length === 0) {
-        container.innerHTML = '<p class="empty-state">No manual actions configured for this project.</p>';
-        return;
-    }
+    const configuredActions = Array.isArray(manualActions) ? manualActions : [];
 
     container.innerHTML = '';
     const grid = document.createElement('div');
     grid.className = 'manual-actions-grid';
 
-    manualActions.forEach((action) => {
+    [...DEFAULT_MANUAL_ACTIONS, ...configuredActions].forEach((action) => {
         const card = document.createElement('div');
         card.className = 'manual-action-card';
 
@@ -270,6 +301,7 @@ function renderManualActions() {
         button.dataset.actionLabel = action.label || action.key || 'Action';
         button.dataset.confirmTitle = action.confirm_title || `Confirm ${action.label || action.key || 'Action'}`;
         button.dataset.confirmMessage = action.confirm_message || `Run manual action '${action.label || action.key || 'Action'}'? Ensure the cell is clear before proceeding.`;
+        if (action.task) button.dataset.task = action.task;
         button.addEventListener('click', () => runManualAction(button));
         card.appendChild(button);
 
@@ -277,6 +309,14 @@ function renderManualActions() {
     });
 
     container.appendChild(grid);
+
+    if (loadError) {
+        const error = document.createElement('p');
+        error.className = 'empty-state empty-state-error';
+        error.textContent = loadError;
+        container.appendChild(error);
+    }
+
     updateManualActionAvailability(latestControllerStatus);
 }
 
@@ -324,8 +364,13 @@ function runManualAction(buttonEl) {
         return;
     }
 
+    const task = buttonEl?.dataset?.task || '';
+    const url = task
+        ? `/api/task/${encodeURIComponent(task)}`
+        : `/api/manual/actions/${encodeURIComponent(actionKey)}/run`;
+
     showConfirmModal(confirmTitle, confirmMessage, () => {
-        fetch(`/api/manual/actions/${encodeURIComponent(actionKey)}/run`, { method: 'POST' })
+        fetch(url, { method: 'POST' })
             .then(r => r.json().then((data) => ({ ok: r.ok, data })))
             .then(({ ok, data }) => {
                 const msg = data.message || `Manual action '${actionLabel}' requested.`;
@@ -421,11 +466,14 @@ function formatTimestamp(value) {
     return parsed.toLocaleString();
 }
 
-function renderMetricCard(label, value, tone = '') {
+function renderMetricCard(label, value, tone = '', valueId = '') {
+    // valueId is optional and lets a card's value be patched in place at 10 Hz
+    // (see patchLiveStep) instead of waiting for the next 1 Hz re-render.
+    const idAttr = valueId ? ` id="${escapeHtml(valueId)}"` : '';
     return `
         <div class="prod-metric-card ${tone}">
             <div class="prod-metric-label">${escapeHtml(label)}</div>
-            <div class="prod-metric-value">${escapeHtml(String(value))}</div>
+            <div class="prod-metric-value"${idAttr}>${escapeHtml(String(value))}</div>
         </div>
     `;
 }
@@ -506,6 +554,237 @@ function renderProdMetrics(data) {
     `;
 }
 
+/* ---- Sequence steps ----
+ * Two writers on the same DOM, split by cadence:
+ *   renderProdSteps(data)  - 1 Hz, from renderProdContext, writes structure via innerHTML
+ *   patchLiveStep(step)    - 10 Hz, from updateRobotStatus, touches ONLY textContent
+ *                            and style.width on the ids below.
+ * innerHTML at 10 Hz would destroy focus and fight isProdUserInteracting().
+ * Both writers must agree on these ids, so they live in one place. */
+const STEP_LIVE_IDS = {
+    name: 'step-indicator-name',
+    timer: 'step-indicator-timer',
+    counter: 'step-indicator-counter',
+    fill: 'step-indicator-fill',
+    panelName: 'prod-step-name',
+    panelElapsed: 'prod-step-elapsed',
+    panelCounter: 'prod-step-counter',
+    panelFill: 'prod-step-fill',
+    cardName: 'prod-step-card-name',
+    cardElapsed: 'prod-step-card-elapsed',
+    cardPosition: 'prod-step-card-position',
+};
+
+let lastAnnouncedStep = null;
+
+function setTextById(id, text) {
+    const el = document.getElementById(id);
+    if (el && el.textContent !== text) el.textContent = text;
+}
+
+function announceStep(text) {
+    const el = document.getElementById('step-announcer');
+    if (el) el.textContent = text;
+}
+
+function patchLiveStep(step) {
+    const indicator = document.getElementById('step-indicator');
+
+    if (!step) {
+        if (indicator) indicator.hidden = true;
+        setTextById(STEP_LIVE_IDS.panelName, 'Idle');
+        setTextById(STEP_LIVE_IDS.panelElapsed, '—');
+        setTextById(STEP_LIVE_IDS.panelCounter, '');
+        setTextById(STEP_LIVE_IDS.cardName, 'Idle');
+        setTextById(STEP_LIVE_IDS.cardElapsed, '—');
+        setTextById(STEP_LIVE_IDS.cardPosition, '—');
+        patchSequenceHighlight(null);
+        const panelFill = document.getElementById(STEP_LIVE_IDS.panelFill);
+        if (panelFill) panelFill.style.width = '0%';
+        if (lastAnnouncedStep !== null) {
+            announceStep('Idle');
+            lastAnnouncedStep = null;
+        }
+        return;
+    }
+
+    const elapsed = formatDurationSeconds(step.elapsed_s);
+    const hasPosition = step.total && step.index !== null && step.index !== undefined;
+    const counter = hasPosition
+        ? `Step ${step.index} of ${step.total}`
+        : `Step ${step.depth + 1}`;
+    const pct = `${Math.round((step.progress ?? 0) * 100)}%`;
+
+    if (indicator) indicator.hidden = false;
+    setTextById(STEP_LIVE_IDS.name, step.name);
+    setTextById(STEP_LIVE_IDS.timer, elapsed);
+    setTextById(STEP_LIVE_IDS.counter, step.off_sequence ? 'Off sequence' : counter);
+    const fill = document.getElementById(STEP_LIVE_IDS.fill);
+    if (fill) fill.style.width = pct;
+
+    // Mirror into the Production panel when it is rendered.
+    setTextById(STEP_LIVE_IDS.panelName, step.name);
+    setTextById(STEP_LIVE_IDS.panelElapsed, elapsed);
+    setTextById(STEP_LIVE_IDS.panelCounter, step.off_sequence ? 'Off sequence' : counter);
+    const panelFill = document.getElementById(STEP_LIVE_IDS.panelFill);
+    if (panelFill) panelFill.style.width = pct;
+
+    // The cards duplicate the live row, so they must move on the same tick -
+    // otherwise the 1 Hz card and the 10 Hz row show different steps at once.
+    setTextById(STEP_LIVE_IDS.cardName, step.name);
+    setTextById(STEP_LIVE_IDS.cardElapsed, elapsed);
+    setTextById(STEP_LIVE_IDS.cardPosition,
+        hasPosition ? `${step.index} / ${step.total}` : `Step ${step.depth + 1}`);
+
+    patchSequenceHighlight(hasPosition ? step.index - 1 : null);
+
+    // Announce only on an actual step change - a live region that updates
+    // 10x/sec would make a screen reader unusable.
+    if (step.name !== lastAnnouncedStep) {
+        announceStep(counter ? `${step.name}, ${counter}` : step.name);
+        lastAnnouncedStep = step.name;
+    }
+}
+
+function patchSequenceHighlight(currentIndex) {
+    // Class-only update on a stable list: the declared steps do not change
+    // within a run, so the highlight can follow the 10 Hz live step without
+    // re-rendering (and without fighting the 1 Hz structural render).
+    const items = document.querySelectorAll('#prod-steps-container .step-seq-item');
+    if (items.length === 0) return;
+    items.forEach((li) => {
+        const index = Number(li.dataset.seqIndex);
+        let cls = 'step-seq-upcoming';
+        let marker = '';
+        if (currentIndex === null) {
+            cls = 'step-seq-upcoming';
+        } else if (index < currentIndex) {
+            cls = 'step-seq-done'; marker = '\u2713';
+        } else if (index === currentIndex) {
+            cls = 'step-seq-current'; marker = '\u25b6';
+        }
+        if (!li.classList.contains(cls)) {
+            li.classList.remove('step-seq-done', 'step-seq-current', 'step-seq-upcoming');
+            li.classList.add(cls);
+        }
+        const markerEl = li.querySelector('.step-seq-marker');
+        if (markerEl && markerEl.textContent !== marker) markerEl.textContent = marker;
+    });
+}
+
+function renderStepSequence(sequence, live) {
+    if (!sequence || !Array.isArray(sequence.declared) || sequence.declared.length === 0) {
+        return '';
+    }
+    const currentName = live ? live.name : null;
+    const items = sequence.declared.map((name, i) => {
+        let cls = 'step-seq-upcoming';
+        if (i < sequence.current_index) cls = 'step-seq-done';
+        else if (i === sequence.current_index && live) cls = 'step-seq-current';
+        else if (i === sequence.current_index) cls = 'step-seq-done';
+        const marker = cls === 'step-seq-done' ? '✓' : (cls === 'step-seq-current' ? '▶' : '');
+        return `<li class="step-seq-item ${cls}" data-seq-index="${i}">
+                    <span class="step-seq-marker" aria-hidden="true">${marker}</span>
+                    <span class="step-seq-index">${i + 1}</span>
+                    <span class="step-seq-name">${escapeHtml(name)}</span>
+                </li>`;
+    }).join('');
+
+    const offBadge = sequence.off_sequence
+        ? '<span class="step-off-sequence">Off sequence</span>'
+        : '';
+    return `
+        <div class="prod-metric-history">
+            <div class="prod-metric-history-title">Declared Sequence ${offBadge}</div>
+            <ol class="step-seq-list">${items}</ol>
+        </div>
+    `;
+}
+
+function renderStepStats(stats) {
+    const rows = (stats || []).filter(s => (s.count || 0) > 0 || (s.fail_count || 0) > 0);
+    if (rows.length === 0) {
+        return '<p class="prod-metric-empty">No completed steps yet.</p>';
+    }
+    const items = rows.slice(0, 12).map((s) => {
+        const share = (s.share !== null && s.share !== undefined)
+            ? ` · ${Math.round(s.share * 100)}% of cycle` : '';
+        const fails = s.fail_count
+            ? ` · <span class="step-stat-fail">${s.fail_count} failed</span>` : '';
+        const indent = s.depth > 0 ? ' step-stat-nested' : '';
+        return `
+            <li class="${indent.trim()}">
+                <strong>${escapeHtml(s.name)}</strong>
+                <span>avg ${escapeHtml(formatDurationSeconds(s.avg_s))} ·
+                      last ${escapeHtml(formatDurationSeconds(s.last_s))} ·
+                      min ${escapeHtml(formatDurationSeconds(s.min_s))} /
+                      max ${escapeHtml(formatDurationSeconds(s.max_s))}</span>
+                <span>${s.count} run(s)${share}${fails}</span>
+            </li>
+        `;
+    }).join('');
+    return `<ul class="prod-metric-list">${items}</ul>`;
+}
+
+function renderProdSteps(data) {
+    const container = document.getElementById('prod-steps-container');
+    if (!container) return;
+
+    const steps = data.steps || {};
+    const live = steps.live || null;
+    const metrics = data.metrics || {};
+
+    const cards = [
+        renderMetricCard('Current Step',
+            live ? live.name : 'Idle',
+            live ? 'prod-metric-on' : 'prod-metric-off',
+            STEP_LIVE_IDS.cardName),
+        renderMetricCard('Step Elapsed', formatDurationSeconds(live ? live.elapsed_s : null),
+            '', STEP_LIVE_IDS.cardElapsed),
+        renderMetricCard('Sequence Position',
+            live
+                ? ((live.total && live.index !== null && live.index !== undefined)
+                    ? `${live.index} / ${live.total}`
+                    : `Step ${live.depth + 1}`)
+                : '—',
+            live && live.off_sequence ? 'prod-metric-warn' : '',
+            STEP_LIVE_IDS.cardPosition),
+        // metrics.current_cycle_elapsed_s has been served on every poll since
+        // the context was introduced and was never displayed until now.
+        renderMetricCard('Cycle Elapsed', formatDurationSeconds(metrics.current_cycle_elapsed_s)),
+    ].join('');
+
+    // The live row carries the ids patchLiveStep writes at 10 Hz.
+    const liveRow = `
+        <div class="step-live-row">
+            <div class="step-live-head">
+                <span id="${STEP_LIVE_IDS.panelCounter}" class="step-indicator-counter"></span>
+                <span id="${STEP_LIVE_IDS.panelElapsed}" class="step-indicator-timer">—</span>
+            </div>
+            <div id="${STEP_LIVE_IDS.panelName}" class="step-live-name">${escapeHtml(live ? live.name : 'Idle')}</div>
+            <div class="step-progress">
+                <div id="${STEP_LIVE_IDS.panelFill}" class="step-progress-fill"></div>
+            </div>
+            ${live && live.path && live.path.length > 1
+                ? `<div class="step-live-path">${escapeHtml(live.path.join('  ›  '))}</div>` : ''}
+        </div>
+    `;
+
+    container.innerHTML = `
+        ${liveRow}
+        <div class="prod-metrics-grid">${cards}</div>
+        ${renderStepSequence(steps.sequence, live)}
+        <div class="prod-metric-history">
+            <div class="prod-metric-history-title">Step Timings${steps.stats_truncated ? ' (truncated)' : ''}</div>
+            ${renderStepStats(steps.stats)}
+        </div>
+    `;
+
+    // Re-apply live values immediately: the structure was just replaced, so the
+    // next 10 Hz tick would otherwise leave stale text for up to 100 ms.
+    patchLiveStep(live);
+}
+
 function renderProdUnavailable(message) {
     const metricsContainer = document.getElementById('prod-metrics-container');
     const paramsContainer = document.getElementById('prod-params-container');
@@ -573,6 +852,7 @@ function renderProdContext(data) {
     if (metricsContainer) {
         renderProdMetrics(data);
     }
+    renderProdSteps(data);
     if (paramsContainer) {
         paramsContainer.innerHTML = renderNamespaceTable('params', data.params || {}, locked);
     }
@@ -667,8 +947,13 @@ function refreshProdContext(auto = false) {
         return;
     }
     fetch('/api/prod/context')
-        .then(r => r.json())
-        .then(data => renderProdContext(data))
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            // Without the ok check a 500 body ({message: ...}) rendered as an
+            // empty snapshot, blanking the metrics and step panels.
+            if (!ok) throw new Error(data.message || 'Failed to load production context.');
+            renderProdContext(data);
+        })
         .catch(() => {
             if (!latestProdContext) {
                 renderProdUnavailable('Failed to load production context.');

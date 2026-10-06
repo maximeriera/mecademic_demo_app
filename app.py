@@ -74,6 +74,7 @@ except Exception as e:
         def get_devices_info(self): return {}
         def get_manual_actions(self): return []
         def clear_faults(self): pass
+        def get_live_step(self): return None
         def get_prod_context_snapshot(self):
             return {
                 'state': ControllerState.OFF.value,
@@ -111,6 +112,7 @@ _POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/context'})
 
 _last_logged_state = None
 _last_logged_health = None
+_step_read_failed = False   # log a live-step read failure once, not 10x/second
 _state_log_lock = threading.Lock()
 
 
@@ -205,7 +207,25 @@ def get_status():
     current_state = APPLICATION.get_state().value
     # Polled at 10 Hz; log only on change (see _log_state_change).
     _log_state_change(current_state)
-    return jsonify({'status': current_state})
+
+    # The live step rides along here rather than on a new endpoint: /api/status
+    # is already polled at 10 Hz on every tab and already excluded from request
+    # logging via _POLL_PATHS, so this costs no new timer, route or log noise.
+    #
+    # This route is also the Docker healthcheck probe (see docker-compose.yml),
+    # so step tracking must never be able to fail it, and must never log 10
+    # lines/second when the controller has no step support.
+    global _step_read_failed
+    step = None
+    try:
+        getter = getattr(APPLICATION, 'get_live_step', None)
+        if getter is not None:
+            step = getter()
+    except Exception as e:
+        if not _step_read_failed:
+            _step_read_failed = True
+            logger.error("Live step read failed; step info suppressed: %s", e, exc_info=True)
+    return jsonify({'status': current_state, 'step': step})
 
 @app.route('/api/task/<task_name>', methods=['POST'])
 def handle_task(task_name):

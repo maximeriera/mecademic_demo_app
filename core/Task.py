@@ -61,6 +61,28 @@ TASK_FUNCTION_MODULES: Dict[str, tuple[str, ...]] = {
 }
 
 
+def _accepts_context(fn) -> bool:
+    """True if *fn* can be called as ``fn(devices, context)`` positionally.
+
+    Counts only positional-capable parameters. The previous check in
+    ``_run_manual_action`` was ``len(params) >= 2``, which also counted
+    keyword-only parameters and ``**kwargs`` — so ``def act(devices, **opts)``
+    and ``def act(devices, *, context=None)`` both passed it and were then
+    called with two positional arguments, raising TypeError.
+    """
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        # C builtins and some exotic callables have no introspectable signature.
+        return False
+    positional = sum(
+        1 for p in params
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    )
+    has_varargs = any(p.kind is p.VAR_POSITIONAL for p in params)
+    return positional >= 2 or has_varargs
+
+
 def load_task_function(function_name: str):
     """Resolve a workspace task function **at call time**.
 
@@ -168,9 +190,10 @@ class Task(threading.Thread):
             self.manual_action_key,
             sorted(self.devices.keys()),
         )
-        
+
         faulted = False
-        
+        self.production_context.begin_task(self.task_type.value, self._sequence_key())
+
         try:
             match self.task_type:
                 case TaskType.PROD:
@@ -191,11 +214,37 @@ class Task(threading.Thread):
             self.state_change_callback(ControllerState.FAULTED)
             faulted = True
         finally:
+            # Closes any step still open on this thread's unwind path, whatever
+            # the exit route (success, fault, abort, stop).
+            self.production_context.end_task()
             self._is_finished.set()
             if not faulted:
                 # Only transition to READY if no FAULT was set during execution
                 self.state_change_callback(ControllerState.READY)
             self.logger.info(f"[{self.name}] Task finished.")
+
+    def _sequence_key(self) -> str:
+        """Key used to look up a declared step sequence for this task."""
+        if self.task_type == TaskType.MANUAL_ACTION:
+            return f"manual:{self.manual_action_key}"
+        return {
+            TaskType.PROD: "prod_cycle",
+            TaskType.HOME: "home",
+            TaskType.SHIPMENT: "shipment",
+            TaskType.CALIBRATION: "calib",
+        }.get(self.task_type, self.task_type.name.lower())
+
+    def _call_workspace(self, fn):
+        """Call workspace logic, passing ``context`` only if it can accept it.
+
+        Keeps existing one-argument ``home(devices)`` / ``shipment(devices)`` /
+        ``calib(devices)`` functions working unchanged while letting newer ones
+        opt in to step reporting by adding a second parameter.
+        """
+        if _accepts_context(fn):
+            fn(self.devices, self.production_context)
+        else:
+            fn(self.devices)
             
     def _run_home(self):
         """Execute the HOME sequence via :func:`~app_logic.home.home`.
@@ -208,7 +257,7 @@ class Task(threading.Thread):
         """
         try:
             self.logger.info(f"[{self.name}] HOME routine started.")
-            load_task_function("home")(self.devices)
+            self._call_workspace(load_task_function("home"))
             self.logger.info(f"[{self.name}] HOME routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] HOME task encountered an error: {e}")
@@ -226,7 +275,7 @@ class Task(threading.Thread):
         """
         try:        
             self.logger.info(f"[{self.name}] SHIPMENT routine started.")
-            load_task_function("shipment")(self.devices)
+            self._call_workspace(load_task_function("shipment"))
             self.logger.info(f"[{self.name}] SHIPMENT routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] SHIPMENT task encountered an error: {e}")
@@ -244,7 +293,7 @@ class Task(threading.Thread):
         """
         try:        
             self.logger.info(f"[{self.name}] CALIB routine started.")
-            load_task_function("calib")(self.devices)
+            self._call_workspace(load_task_function("calib"))
             self.logger.info(f"[{self.name}] CALIB routine completed.")
         except Exception as e:
             self.logger.warning(f"[{self.name}] CALIB task encountered an error: {e}")
@@ -272,14 +321,22 @@ class Task(threading.Thread):
         """
         try:
             prod_cycle = load_task_function("prod_cycle")
-            self._run_home()
+            # The entry and exit home sequences used to be untelemetered: the UI
+            # showed running=True with no cycle in progress for their duration.
+            with self.production_context.step("Home (entry)"):
+                self._run_home()
             while not self.stopped():
-                cycle_number = int(self.production_context.get_variable("part_count", 0)) + 1
+                # Authoritative counter. This used to read the *user variable*
+                # part_count, so a workspace cycle that does not increment it
+                # logged "cycle start #1" forever.
+                cycle_number = self.production_context.get_cycle_count() + 1
                 self.logger.info(f"[{self.name}] PROD cycle start #{cycle_number}")
                 self.production_context.mark_cycle_start()
+                self.production_context.reset_cycle_steps()
                 try:
                     prod_cycle(self.devices, self.production_context)
                     self.production_context.mark_cycle_end()
+                    self.production_context.log_cycle_step_summary(cycle_number)
                     self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:
                     self.production_context.mark_cycle_error(str(e))
@@ -292,7 +349,8 @@ class Task(threading.Thread):
             # stop() called between cycles: finish the loop cleanly
             self.production_context.apply_event("prod_stop")
             self.production_context.mark_prod_running(False)
-            self._run_home()
+            with self.production_context.step("Home (exit)"):
+                self._run_home()
         except Exception as e:
             self.production_context.mark_prod_running(False)
             self.logger.warning(f"[{self.name}] PROD task encountered an error: {e}")
@@ -317,11 +375,10 @@ class Task(threading.Thread):
             getattr(action_fn, "__name__", "<anonymous>"),
         )
 
-        params = inspect.signature(action_fn).parameters
-        if len(params) >= 2:
-            action_fn(self.devices, self.production_context)
-        else:
-            action_fn(self.devices)
+        # Wrapping in a step both reports it live and persists the duration
+        # that was previously measured here and only ever logged.
+        with self.production_context.step(f"Manual: {self.manual_action_key}"):
+            self._call_workspace(action_fn)
         elapsed_s = time.perf_counter() - start_ts
         self.logger.info(
             "[%s] Manual action '%s' completed in %.3f s.",

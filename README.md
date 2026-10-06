@@ -191,12 +191,54 @@ All user-facing task logic lives in the **`app_logic/`** folder. Each file expor
 
 | File | Function | Signature | Called by |
 |---|---|---|---|
-| `home.py` | `home()` | `home(devices: Dict[str, Device])` | HOME task, and automatically before/after the PROD loop |
-| `shipment.py` | `shipment()` | `shipment(devices: Dict[str, Device])` | SHIPMENT task |
-| `calib.py` | `calib()` | `calib(devices: Dict[str, Device])` | CALIBRATION task |
+| `home.py` | `home()` | `home(devices)` or `home(devices, context)` | HOME task, and automatically before/after the PROD loop |
+| `shipment.py` | `shipment()` | `shipment(devices)` or `shipment(devices, context)` | SHIPMENT task |
+| `calib.py` | `calib()` | `calib(devices)` or `calib(devices, context)` | CALIBRATION task |
 | `prod.py` | `prod_cycle()` | `prod_cycle(devices: Dict[str, Device], context: ProductionContext \| None = None)` | Each iteration of the PROD loop |
 
 Every function receives `devices` — a dictionary mapping device names (as defined in `config.yaml`) to their `Device` instances. `prod_cycle` additionally receives a shared `context` object for persistent params/variables across cycles.
+
+`home`, `shipment` and `calib` receive `context` **only if they declare a second parameter**. Existing one-argument functions keep working unchanged — the second argument is passed only when the signature can accept it positionally.
+
+---
+
+### Reporting sequence steps
+
+The UI shows what the cell is doing right now — in the sidebar on every tab, and in detail on the Production tab. Report steps from your task logic with the `context.step()` context manager:
+
+```python
+# app_logic/prod.py
+def prod_cycle(devices, context):
+    robot = devices["my_meca_robot"]
+
+    with context.step("Pick part from feeder"):
+        robot.api.MoveJoints(0, 0, 0, 0, 0, 0)
+        robot.api.WaitIdle()
+
+    with context.step("Inspect part"):
+        ...
+
+    with context.step("Place part in tray"):
+        ...
+```
+
+Each step is timed automatically, closed even if the body raises, and closed by the controller if the run is aborted or a device faults. Steps may nest; the innermost one is shown as the current step, and timings are tracked per full path.
+
+For a one-liner without a block, `context.set_step("Pick part")` is closed by the next `set_step()`, by `context.clear_step()`, or when the task ends. Prefer `step()` — it also records failures.
+
+**Per-step timings** (average, last, min/max, and share of cycle time) accumulate automatically, so slow steps are visible without any configuration. Declaring the expected order in `production_context.yaml` additionally gives "Step 3 of 7", a progress bar and greyed-out upcoming steps:
+
+```yaml
+sequences:
+  prod_cycle:
+    - Pick part from feeder
+    - Inspect part
+    - Place part in tray
+```
+
+A step the sequence does not contain is flagged **Off sequence** rather than reported at a wrong position. `context.declare_sequence([...])` sets the same thing at runtime when the order is computed.
+
+> Step names must be **stable identifiers, not per-part data**. `f"Pick part {serial}"` creates a new timing bucket for every part; the backend caps this at 200 distinct names and warns, but the statistics stop being meaningful.
 
 The production context configuration is stored in `production_context.yaml` (or a custom path via `production_context_file` in `config.yaml`).
 It defines:

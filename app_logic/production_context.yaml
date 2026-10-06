@@ -48,16 +48,33 @@ params:
     type: float
 
     # Value used when reset is triggered.
-    default: 1.0
+    default: 0.2
 
     # Current runtime value used by production logic.
-    value: 1.0
+    value: 0.2
 
     # If false, value update is rejected from UI/API even when not BUSY.
     editable_when_idle: true
 
-    # Human-readable purpose.
-    description: Delay applied in demo prod cycle.
+    # Human-readable purpose. This pause is deliberately NOT wrapped in a step,
+    # so it shows up as idle time on the Production tab - which is exactly how
+    # you spot dead time in a real cycle. Raise it and watch the cell report
+    # Idle between cycles.
+    description: Idle pause between cycles. Not part of any step, so it reads as idle time.
+
+  move_time_s:
+    type: float
+    default: 0.4
+    value: 0.4
+    editable_when_idle: true
+    description: Simulated duration of one robot move. Lower it to speed the demo up.
+
+  reject_every_n:
+    type: int
+    default: 5
+    value: 5
+    editable_when_idle: true
+    description: Every Nth part is treated as a reject. Set to 0 to accept every part.
 
 variables:
   # VARIABLE ENTRY FORMAT
@@ -81,4 +98,69 @@ variables:
     # If present, this list is used instead of settings.default_reset_events.
     # You can also set: reset_on: none
     reset_on: prod_start
-    description: Parts processed since production start.
+    description: Parts placed in the tray since production start.
+
+  reject_count:
+    type: int
+    default: 0
+    value: 0
+    editable_when_idle: false
+    reset_on: prod_start
+    description: Parts discarded by inspection since production start.
+
+# ============================================================
+# SEQUENCES (optional)
+# ============================================================
+#
+# Declaring the expected step order for a task adds "Step 3 of 7", a progress
+# bar, and greyed-out upcoming steps to the UI. It is entirely optional:
+# without it, steps are still recorded, timed and shown live — you just do not
+# get a position within the sequence.
+#
+# Keys are task function names (prod_cycle, home, shipment, calib) or
+# "manual:<action_key>" for a manual action. Only top-level steps are matched;
+# steps nested inside another step are timed but do not advance the position.
+#
+# Report steps from your task logic with the context manager:
+#
+#     def prod_cycle(devices, context):
+#         with context.step("Pick part from feeder"):
+#             robot.MoveJoints(...)
+#             robot.WaitIdle()
+#         with context.step("Inspect part"):
+#             ...
+#
+# home/shipment/calib receive `context` only if they declare a second
+# parameter — existing one-argument functions keep working unchanged.
+#
+# NOTE: step names must be stable identifiers, not per-part data. Using
+# f"Pick part {serial}" creates a new timing bucket per part; the backend caps
+# this at 200 distinct names and warns, but the statistics become useless.
+#
+# The declared sequence for the shipped example. "Discard rejected part" is the
+# conditional branch taken when inspection fails, so a passing cycle stops at
+# step 4 of 5 — that is expected, not an error.
+sequences:
+  prod_cycle:
+    - Request part from feeder
+    - Pick part
+    - Inspect part
+    - Place part in tray
+    - Discard rejected part
+
+  home:
+    - Open gripper
+    - Move to home position
+
+  shipment:
+    - Open gripper
+    - Move to shipment position
+
+  calib:
+    - Move to calibration pose
+    - Capture calibration image
+    - Solve and store calibration
+
+  "manual:inspect_only":
+    - Move to inspection pose
+    - Capture and evaluate image

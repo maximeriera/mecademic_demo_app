@@ -463,8 +463,20 @@ class ApplicationController:
             self.logger.warning("Aborting current task due to device fault or stop request.")
             self.production_context.apply_event("abort")
             self.production_context.mark_prod_running(False)
+            # Close the open step from THIS thread. The task thread may sit in a
+            # non-interruptible SDK call for seconds, and until it unwinds the UI
+            # would keep showing "Pick part - 48 s and counting" on a dead cell.
+            self.production_context.abandon_open_steps("aborted")
             self._current_task.abort()
             # The Task thread will handle the transition back to READY or FAULTED
+
+    def get_live_step(self) -> Dict[str, Any] | None:
+        """Current sequence step, or None when idle.
+
+        Lock-free in ProductionContext, so this is safe on the 10 Hz
+        /api/status path.
+        """
+        return self.production_context.get_live_step()
 
     def get_prod_context_snapshot(self) -> Dict[str, Any]:
         """Return a full production context snapshot for API/UI consumption."""
@@ -513,6 +525,7 @@ class ApplicationController:
                         self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state and aborting task.")
                         self.production_context.apply_event("fault")
                         self.production_context.mark_prod_running(False)
+                        self.production_context.abandon_open_steps("faulted")
                         self.set_state(ControllerState.FAULTED)
                         self._abort_current_task()
                     all_healthy = False

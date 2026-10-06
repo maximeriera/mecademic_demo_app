@@ -77,7 +77,11 @@ body {
     display: flex;
     flex-direction: row;
     width: min(100%, 1200px);
-    min-height: 80vh;
+    /* Fixed to the viewport (minus body padding) so the frame stays the same
+       size on every tab; .main-content scrolls internally instead. */
+    height: calc(100vh - 64px);
+    height: calc(100dvh - 64px);
+    min-height: 560px;
     background: var(--color-panel);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
@@ -88,9 +92,16 @@ body {
 }
 
 @media (max-width: 1024px) {
+    /* In the stacked layout the page itself scrolls; reserve the scrollbar
+       gutter so short and long tabs render at the same width. */
+    html {
+        scrollbar-gutter: stable;
+    }
     .app-container {
         flex-direction: column;
         width: min(100%, 800px);
+        height: auto;
+        min-height: 80vh;
     }
 }
 
@@ -102,6 +113,7 @@ body {
     flex-direction: column;
     padding: 24px;
     flex-shrink: 0;
+    overflow-y: auto;
 }
 
 @media (max-width: 1024px) {
@@ -110,6 +122,7 @@ body {
         border-right: none;
         border-bottom: 1px solid rgba(255,255,255,0.05);
         padding: 16px;
+        overflow-y: visible;
     }
     .sidebar-footer {
         display: none;
@@ -123,8 +136,13 @@ body {
     flex: 1;
     overflow-y: auto;
     position: relative;
-    height: 100%;
+    min-height: 0;
     scrollbar-width: none; /* Firefox */
+}
+@media (max-width: 1024px) {
+    .main-content {
+        overflow-y: visible;
+    }
 }
 .main-content::-webkit-scrollbar {
     display: none; /* Chrome, Safari, Edge */
@@ -775,7 +793,7 @@ button:active { transform: scale(0.98); }
     padding: 20px;
     border-radius: var(--radius);
     flex: 1;
-    min-height: 800px;
+    min-height: 320px;
     overflow-y: auto;
     /* Scroll long lines sideways rather than wrapping them. The log format
        carries timestamp, level, thread, logger and module:line before the
@@ -787,6 +805,9 @@ button:active { transform: scale(0.98); }
     box-shadow:
         inset 0 0 40px rgba(0,0,0,0.5),
         inset 0 0 0 1px rgba(255,255,255,0.03);
+}
+@media (max-width: 1024px) {
+    #log-output { min-height: 70vh; }
 }
 #log-output .log-info    { color: #9cdcfe; }
 #log-output .log-warning { color: var(--color-yellow); }
@@ -1625,4 +1646,178 @@ button:active { transform: scale(0.98); }
 @keyframes scale-up {
     from { opacity: 0; transform: scale(0.95); }
     to { opacity: 1; transform: scale(1); }
+}
+
+/* ===================== Sequence step tracking ===================== */
+
+/* Visually hidden but available to screen readers. Used by #step-announcer,
+   which receives step changes only (never the 10 Hz timer tick). */
+.sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* --- Sidebar live indicator --- */
+.step-indicator {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 212, 71, 0.28);
+    border-radius: var(--radius);
+    background: linear-gradient(145deg, rgba(255, 212, 71, 0.07), rgba(255, 255, 255, 0.01));
+}
+.step-indicator[hidden] { display: none !important; }
+
+.step-indicator-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.step-indicator-counter {
+    font-size: 0.62em;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+}
+.step-indicator-timer {
+    font-size: 0.72em;
+    font-family: "Consolas", monospace;
+    color: var(--color-yellow);
+    font-variant-numeric: tabular-nums;
+}
+.step-indicator-name {
+    font-size: 0.86em;
+    font-weight: 600;
+    color: var(--color-text);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    margin-bottom: 8px;
+}
+
+/* --- Progress bar, shared by the sidebar and the Production panel --- */
+.step-progress {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+.step-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--color-yellow), var(--color-accent));
+    transition: width 0.25s ease;
+}
+
+/* --- Production tab live row --- */
+.step-live-row {
+    padding: 14px 16px;
+    border: 1px solid rgba(255, 212, 71, 0.22);
+    border-radius: var(--radius);
+    background: linear-gradient(145deg, rgba(255, 212, 71, 0.06), rgba(255, 255, 255, 0.01));
+    margin-bottom: 12px;
+}
+.step-live-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+.step-live-name {
+    font-size: 1.15em;
+    font-weight: 700;
+    color: var(--color-text);
+    margin-bottom: 10px;
+    overflow-wrap: anywhere;
+}
+.step-live-path {
+    margin-top: 8px;
+    font-size: 0.72em;
+    color: var(--color-muted);
+    font-family: "Consolas", monospace;
+    overflow-wrap: anywhere;
+}
+
+/* --- Declared sequence list --- */
+.step-seq-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 4px;
+    counter-reset: step;
+}
+.step-seq-item {
+    display: grid;
+    grid-template-columns: 18px 22px 1fr;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 0.82em;
+}
+.step-seq-marker { font-size: 0.9em; text-align: center; }
+.step-seq-index {
+    font-family: "Consolas", monospace;
+    font-size: 0.85em;
+    color: var(--color-muted);
+    text-align: right;
+}
+.step-seq-name { overflow-wrap: anywhere; }
+
+.step-seq-done {
+    border-color: rgba(0, 255, 153, 0.22);
+    color: var(--color-accent-soft);
+}
+.step-seq-current {
+    border-color: rgba(255, 212, 71, 0.45);
+    background: rgba(255, 212, 71, 0.10);
+    color: var(--color-text);
+    font-weight: 600;
+    animation: step-pulse 1.8s ease-in-out infinite;
+}
+.step-seq-upcoming { color: var(--color-muted); opacity: 0.75; }
+.step-seq-failed { border-color: rgba(255, 90, 107, 0.4); color: #ff9ba5; }
+
+.step-off-sequence {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 20px;
+    font-size: 0.86em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--color-yellow);
+    background: rgba(255, 212, 71, 0.14);
+    border: 1px solid rgba(255, 212, 71, 0.3);
+}
+
+/* --- Per-step timing rows --- */
+.step-stat-nested {
+    margin-left: 16px;
+    border-left: 2px solid rgba(255, 255, 255, 0.12);
+}
+.step-stat-fail { color: #ff9ba5; font-weight: 600; }
+
+@keyframes step-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 212, 71, 0.0); }
+    50%      { box-shadow: 0 0 10px 0 rgba(255, 212, 71, 0.22); }
+}
+
+/* The current-step row pulses and the progress bar animates; neither is
+   information-bearing, so drop both when the viewer asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+    .step-seq-current { animation: none; }
+    .step-progress-fill { transition: none; }
 }
