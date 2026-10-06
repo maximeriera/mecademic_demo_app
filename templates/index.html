@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Demo Application Control</title>
+    <title>Mecademic | Demo Application Controller</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body>
@@ -124,7 +124,7 @@
                     <div class="prod-subtab-bar" role="tablist" aria-label="Production subpanels">
                         <button type="button" class="prod-subtab-btn active" role="tab" aria-selected="true" aria-controls="prod-subtab-metrics" id="prod-subtab-btn-metrics" onclick="switchProdSubTab('metrics', this)">
                             <span class="prod-subtab-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">
                                     <path d="M4 19V5"></path>
                                     <path d="M4 19h16"></path>
                                     <path d="M8 15v-4"></path>
@@ -136,7 +136,7 @@
                         </button>
                         <button type="button" class="prod-subtab-btn" role="tab" aria-selected="false" aria-controls="prod-subtab-context" id="prod-subtab-btn-context" onclick="switchProdSubTab('context', this)">
                             <span class="prod-subtab-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">
                                     <path d="M4 7h16"></path>
                                     <path d="M7 7v10"></path>
                                     <path d="M4 17h16"></path>
@@ -280,7 +280,7 @@
                     <div class="backup-restore-card">
                         <div class="backup-restore-label">Action</div>
                         <div class="btn-column">
-                            <button type="button" class="btn-clear" onclick="runRestoreAction(false)">Proceed Restore</button>
+                            <button type="button" class="btn-clear" onclick="runRestoreAction(false)">Run Restore</button>
                         </div>
                     </div>
                 </div>
@@ -301,45 +301,49 @@
             <div class="section">
                 <div class="section-title">Log Viewer</div>
                     <div class="log-toolbar">
-                        <div class="log-select" id="log-file-picker">
-                            <button
-                                type="button"
-                                id="log-file-trigger"
-                                class="log-select-trigger"
-                                aria-haspopup="listbox"
-                                aria-expanded="false"
-                                aria-controls="log-file-menu"
-                            >
-                                <span class="log-select-label">Select a log file</span>
-                            </button>
-                            <div id="log-file-menu" class="log-select-menu" role="listbox" aria-label="Log file selector"></div>
-                            <select id="log-file-select" class="log-native-select" onchange="loadSelectedLog()" tabindex="-1" aria-hidden="true">
-                                <option value="">Select a log file</option>
-                            </select>
+                        <div class="log-toolbar-row">
+                            <div class="log-select" id="log-file-picker">
+                                <button
+                                    type="button"
+                                    id="log-file-trigger"
+                                    class="log-select-trigger"
+                                    aria-haspopup="listbox"
+                                    aria-expanded="false"
+                                    aria-controls="log-file-menu"
+                                >
+                                    <span class="log-select-label">Select a log file</span>
+                                </button>
+                                <div id="log-file-menu" class="log-select-menu" role="listbox" aria-label="Log file selector"></div>
+                                <select id="log-file-select" class="log-native-select" onchange="loadSelectedLog()" tabindex="-1" aria-hidden="true">
+                                    <option value="">Select a log file</option>
+                                </select>
+                            </div>
+                            <label>
+                                <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+                            </label>
+                            <button type="button" onclick="loadSelectedLog()">Refresh</button>
                         </div>
-                        <label class="log-level-filter" for="log-level-select">
-                            Min level
-                            <select id="log-level-select" onchange="renderFilteredLog()">
-                                <option value="ALL" selected>All</option>
-                                <option value="DEBUG">Debug+</option>
-                                <option value="INFO">Info+</option>
-                                <option value="WARNING">Warning+</option>
-                                <option value="ERROR">Error+</option>
-                            </select>
-                        </label>
-                        <input
-                            type="search"
-                            id="log-search"
-                            class="log-search-input"
-                            placeholder="Filter text (e.g. req=1c4f6009, MonitorThread)"
-                            oninput="renderFilteredLog()"
-                            aria-label="Filter log lines by text"
-                        >
-                        <label>
-                            <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
-                        </label>
-                        <button type="button" onclick="loadSelectedLog()">Refresh</button>
-                        <span id="log-match-count" class="log-match-count"></span>
+                        <div class="log-toolbar-row">
+                            <label class="log-level-filter" for="log-level-select">
+                                Min level
+                                <select id="log-level-select" onchange="renderFilteredLog()">
+                                    <option value="ALL" selected>All</option>
+                                    <option value="DEBUG">Debug+</option>
+                                    <option value="INFO">Info+</option>
+                                    <option value="WARNING">Warning+</option>
+                                    <option value="ERROR">Error+</option>
+                                </select>
+                            </label>
+                            <input
+                                type="search"
+                                id="log-search"
+                                class="log-search-input"
+                                placeholder="Filter text (e.g. req=1c4f6009, MonitorThread)"
+                                oninput="renderFilteredLog()"
+                                aria-label="Filter log lines by text"
+                            >
+                            <span id="log-match-count" class="log-match-count"></span>
+                        </div>
                     </div>
                     <div id="log-output" role="log" aria-live="polite">Select a log file above.</div>
 
