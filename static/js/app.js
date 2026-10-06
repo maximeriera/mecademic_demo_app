@@ -52,11 +52,7 @@ function updateRobotStatus() {
         .then(data => {
             latestControllerStatus = data.status;
             patchLiveStep(data.step || null);
-            stateDisplays().forEach((el) => {
-                const compact = el.classList.contains('status-box-compact');
-                el.textContent = data.status;
-                el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state ' + data.status.toUpperCase();
-            });
+            stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
             updateManualActionAvailability(data.status);
         })
         .catch(() => {
@@ -64,13 +60,36 @@ function updateRobotStatus() {
             // Without this the indicator freezes on a stale step while the
             // status box reads COMMUNICATION ERROR.
             patchLiveStep(null);
-            stateDisplays().forEach((el) => {
-                const compact = el.classList.contains('status-box-compact');
-                el.textContent = 'COMMUNICATION ERROR';
-                el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state FAULTED';
-            });
+            stateDisplays().forEach((el) => renderStatusBox(el, 'COMMUNICATION ERROR', null, 'FAULTED'));
             updateManualActionAvailability('FAULTED');
         });
+}
+
+// State plus, while a task runs, its name ("Busy" / "Production"). Layout is
+// CSS's job: a second line in the large box, "Busy · Production" on one line
+// in the compact sidebar box. Runs at 10 Hz, so the children are only rebuilt
+// when the text changes; className is rewritten every time, as before.
+function renderStatusBox(el, status, task, stateClass = status) {
+    const compact = el.classList.contains('status-box-compact');
+    el.className = 'status-box ' + (compact ? 'status-box-compact ' : '') + 'js-robot-state ' + String(stateClass).toUpperCase();
+
+    const renderKey = `${status}|${task || ''}`;
+    if (el.dataset.renderKey === renderKey) return;
+    el.dataset.renderKey = renderKey;
+
+    const state = document.createElement('span');
+    state.className = 'status-state';
+    state.textContent = status;
+    el.replaceChildren(state);
+    if (task) {
+        const taskEl = document.createElement('span');
+        taskEl.className = 'status-task';
+        taskEl.textContent = task;
+        el.appendChild(taskEl);
+        el.title = `${status} · ${task}`;
+    } else {
+        el.removeAttribute('title');
+    }
 }
 
 function setMessage(text) { messageLog.textContent = text || 'No recent command activity.'; }
@@ -560,12 +579,12 @@ const STEP_LIVE_IDS = {
 };
 
 // Live indicators (sidebar, Control tab). Each is an element with this id plus
-// -name / -timer / -counter / -fill children, so one patch serves both. The
-// sidebar one is compact: it names only the top-level step (no "› sub-step"),
-// timed from when that step began, so it stays on one line.
+// -name / -timer / -counter / -fill children, so one patch serves both. Both
+// are compact: they name only the top-level step (no "› sub-step"), timed from
+// when that step began. The Production panel keeps the full path.
 const STEP_INDICATORS = [
     { id: 'step-indicator', compact: true },
-    { id: 'control-step-indicator', compact: false },
+    { id: 'control-step-indicator', compact: true },
 ];
 
 let lastAnnouncedStep = null;

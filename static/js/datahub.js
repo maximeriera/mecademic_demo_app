@@ -15,9 +15,38 @@
  * state.cycleStart       t of the latest cycle_start, or null
  * state.latest(name)     last value of a channel, or undefined
  * state.from(name, t0)   samples with t >= t0, e.g. state.from('sensor', state.cycleStart)
+ *
+ * DataHubClient.align(ref, other) mirrors DataHub.align in Python: pairs each
+ * ref value with `other` (numbers or numeric arrays such as [x, y]) linearly
+ * interpolated at the same t → [[refValue, otherValue], ...].
  */
 (function (global) {
     'use strict';
+
+    function lerp(a, b, f) {
+        return Array.isArray(a) ? a.map((x, i) => x + f * (b[i] - x)) : a + f * (b - a);
+    }
+
+    function align(ref, other) {
+        const pairs = [];
+        const n = other.length;
+        if (!ref.length || !n) return pairs;
+        const first = other[0][0];
+        const last = other[n - 1][0];
+        let j = 0;
+        for (const [t, value] of ref) {
+            if (t < first || t > last) continue;
+            while (j + 1 < n && other[j + 1][0] < t) j++;
+            const [ta, va] = other[j];
+            if (j + 1 < n && other[j + 1][0] > ta) {
+                const [tb, vb] = other[j + 1];
+                pairs.push([value, lerp(va, vb, (t - ta) / (tb - ta))]);
+            } else {
+                pairs.push([value, va]);
+            }
+        }
+        return pairs;
+    }
 
     function poll(options) {
         const intervalMs = options.intervalMs || 250;
@@ -115,5 +144,5 @@
         };
     }
 
-    global.DataHubClient = { poll };
+    global.DataHubClient = { poll, align };
 })(window);

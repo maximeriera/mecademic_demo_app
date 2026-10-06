@@ -75,6 +75,7 @@ except Exception as e:
         def get_manual_actions(self): return []
         def clear_faults(self): pass
         def get_live_step(self): return None
+        def get_current_task_label(self): return None
         def get_prod_snapshot(self):
             return {'state': ControllerState.OFF.value, 'metrics': {}, 'steps': {}}
         def get_context_snapshot(self):
@@ -116,6 +117,7 @@ _POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/metrics', '/api/
 _last_logged_state = None
 _last_logged_health = None
 _step_read_failed = False   # log a live-step read failure once, not 10x/second
+_task_read_failed = False   # same, for the running task's name
 _state_log_lock = threading.Lock()
 
 
@@ -229,7 +231,18 @@ def get_status():
         if not _step_read_failed:
             _step_read_failed = True
             logger.error("Live step read failed; step info suppressed: %s", e, exc_info=True)
-    return jsonify({'status': current_state, 'step': step})
+    # Same defensive pattern for the running task's name (shown in the status box).
+    global _task_read_failed
+    task = None
+    try:
+        task_getter = getattr(APPLICATION, 'get_current_task_label', None)
+        if task_getter is not None:
+            task = task_getter()
+    except Exception as e:
+        if not _task_read_failed:
+            _task_read_failed = True
+            logger.error("Current task read failed; task name suppressed: %s", e, exc_info=True)
+    return jsonify({'status': current_state, 'step': step, 'task': task})
 
 @app.route('/api/task/<task_name>', methods=['POST'])
 def handle_task(task_name):

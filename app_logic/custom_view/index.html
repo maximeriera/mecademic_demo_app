@@ -3,99 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Profile Inspection | Custom View</title>
+    <title>Surface Inspection | Custom View</title>
     <!-- Brand font, colour tokens and background from the standard app. -->
     <link rel="stylesheet" href="/static/css/app.css">
     <style>
         body {
             justify-content: flex-start;
-            padding: 24px 16px;
+            padding: 0 16px 16px;
         }
-        .view {
-            width: min(100%, 1200px);
-            display: grid;
-            gap: 16px;
+
+        /* Everything but the events fits exactly one browser window: the 3D
+           plots take whatever height the other rows leave. Events sit below. */
+        .screen {
+            width: min(100%, 1800px);
+            height: 100vh;
+            height: 100dvh;
+            min-height: 640px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 10px 0 12px;
         }
+        .screen .view-topbar {
+            width: 100%;
+            margin-bottom: 0;
+            padding-bottom: 10px;
+        }
+
         .view-header {
             display: flex;
             flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
+            align-items: baseline;
+            gap: 4px 14px;
         }
         .view-header h1 {
             margin: 0;
-            font-size: 1.25em;
+            font-size: 1.15em;
             color: var(--color-accent);
             letter-spacing: 0.01em;
         }
         .view-sub {
             color: var(--color-muted);
-            font-size: 0.85em;
-            margin-top: 4px;
+            font-size: 0.8em;
         }
-        .badges {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .badge {
-            min-width: 150px;
-            padding: 10px 14px;
-            border-radius: var(--radius-control);
-            border: 1px solid var(--color-border);
-            background: var(--color-panel);
-        }
-        .badge-label {
-            font-size: 0.7em;
+        .result-label,
+        .card-title,
+        .stats dt {
+            font-size: 0.72em;
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
-            color: var(--color-muted);
         }
-        .badge-value {
-            font-size: 1.35em;
+
+        /* Live readout + the two inspection results, in one row. */
+        .results-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) repeat(2, clamp(170px, 15vw, 280px));
+            gap: 10px;
+        }
+        /* Results: tinted the way .READY / .FAULTED tint the status box, so
+           OK / NG reads from across the stand. */
+        .card.result {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 4px;
+            border-width: 2px;
+            transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .result-label { color: var(--color-muted); }
+        .result-value {
+            font-size: 2.6em;
             font-weight: 800;
-            margin-top: 2px;
-        }
-        .badge-detail {
-            font-size: 0.8em;
+            line-height: 1;
+            letter-spacing: 0.04em;
             color: var(--color-muted);
         }
-        .badge.ok { border-color: var(--color-accent-2); }
-        .badge.ok .badge-value { color: var(--color-accent); }
-        .badge.ng { border-color: var(--color-red); }
-        .badge.ng .badge-value { color: var(--color-red); }
+        .result-detail {
+            font-size: 0.78em;
+            color: var(--color-muted);
+            white-space: pre-line;
+            font-variant-numeric: tabular-nums;
+        }
+        .result.ok {
+            background: rgba(93, 239, 191, 0.12);
+            border-color: var(--color-accent-2);
+            box-shadow: 0 0 16px rgba(93, 239, 191, 0.12);
+        }
+        .result.ok .result-value { color: var(--color-accent); }
+        .result.ng {
+            background: rgba(255, 90, 107, 0.16);
+            border-color: var(--color-red);
+            box-shadow: 0 0 18px rgba(255, 90, 107, 0.22);
+        }
+        .result.ng .result-value { color: var(--color-red); }
         .banner {
-            padding: 10px 14px;
+            padding: 8px 14px;
             border: 1px solid var(--color-red);
             border-radius: var(--radius-control);
             color: var(--color-red);
             background: rgba(255, 90, 107, 0.08);
             font-size: 0.9em;
         }
-        .grid {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            gap: 16px;
-        }
-        @media (max-width: 900px) {
-            .grid { grid-template-columns: minmax(0, 1fr); }
-        }
         .card {
             background: var(--color-panel);
             border: 1px solid var(--color-border);
             border-radius: var(--radius);
-            padding: 14px 16px 16px;
+            padding: 10px 14px 12px;
             min-width: 0;
         }
         .card-title {
-            font-size: 0.75em;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
             color: var(--color-accent-soft);
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
         .card-title span {
             color: var(--color-muted);
@@ -106,9 +125,92 @@
         canvas {
             display: block;
             width: 100%;
-            height: 220px;
         }
-        canvas.short { height: 150px; }
+
+        /* Live height readout */
+        .live {
+            display: grid;
+            grid-template-columns: minmax(210px, auto) minmax(190px, auto) minmax(0, 1fr);
+            gap: 28px;
+            align-items: center;
+        }
+        .height-value {
+            font-size: 2.8em;
+            font-weight: 800;
+            line-height: 1;
+            color: var(--color-accent);
+            font-variant-numeric: tabular-nums;
+            transition: color 0.15s ease;
+        }
+        .height-value .unit {
+            font-size: 0.4em;
+            font-weight: 600;
+            color: var(--color-muted);
+            margin-left: 6px;
+        }
+        .live.out .height-value { color: var(--color-red); }
+        .height-delta {
+            margin-top: 6px;
+            font-size: 0.8em;
+            color: var(--color-muted);
+            font-variant-numeric: tabular-nums;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: auto auto;
+            gap: 3px 18px;
+            margin: 0;
+            font-size: 0.95em;
+            font-variant-numeric: tabular-nums;
+        }
+        .stats dt { color: var(--color-muted); align-self: center; }
+        .stats dd {
+            margin: 0;
+            text-align: right;
+            font-weight: 700;
+        }
+        #chart-spark { height: 72px; }
+
+        /* 3D panels: fill the height left over */
+        .grid {
+            flex: 1;
+            min-height: 260px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            grid-template-rows: minmax(0, 1fr);
+            gap: 10px;
+        }
+        .grid .card {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .plot3d {
+            flex: 1 1 0;
+            min-height: 0;
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.78em;
+            color: var(--color-muted);
+            font-variant-numeric: tabular-nums;
+        }
+        /* Same stops as heightColor() in view.js. */
+        .colorbar {
+            width: 220px;
+            height: 10px;
+            border-radius: 2px;
+            background: linear-gradient(90deg,
+                rgb(59, 184, 255) 0%, rgb(93, 239, 191) 50%,
+                rgb(255, 212, 71) 80%, rgb(255, 90, 107) 100%);
+        }
+        .legend-note { margin-left: auto; }
+
+        .events-card { width: min(100%, 1800px); }
         .events {
             list-style: none;
             margin: 0;
@@ -126,52 +228,97 @@
         .events li:last-child { border-bottom: none; }
         .events .t { color: var(--color-muted); }
         .empty { color: var(--color-muted); font-size: 0.9em; }
+
+        /* Mid-size: the results take the trace's room; it is the least essential. */
+        @media (max-width: 1150px) {
+            .live { grid-template-columns: minmax(200px, auto) minmax(0, 1fr); }
+            .live .spark { display: none; }
+        }
+
+        /* Too narrow to fit one screen: stack and scroll normally. */
+        @media (max-width: 900px) {
+            .screen { height: auto; min-height: 0; }
+            .results-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+            .results-row .live { grid-column: 1 / -1; }
+            .live { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+            .live .spark { display: block; }
+            .grid { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+            .plot3d { flex: none; height: 320px; }
+        }
     </style>
 </head>
 <body>
-    <main class="view">
+    <div class="screen">
+        <!-- Default top bar (logo, system status + task, current step),
+             mounted here by /static/js/view-header.js. -->
+        <div id="view-topbar"></div>
+
         <header class="view-header">
-            <div>
-                <h1>Profile inspection</h1>
-                <div class="view-sub" id="view-status">Connecting…</div>
-            </div>
-            <div class="badges">
-                <div class="badge" id="badge-profile">
-                    <div class="badge-label">Height profile</div>
-                    <div class="badge-value">—</div>
-                    <div class="badge-detail">no cycle yet</div>
-                </div>
-                <div class="badge" id="badge-camera">
-                    <div class="badge-label">Camera inspection</div>
-                    <div class="badge-value">—</div>
-                    <div class="badge-detail">no cycle yet</div>
-                </div>
-            </div>
+            <h1>Surface inspection</h1>
+            <div class="view-sub" id="view-status">Connecting…</div>
         </header>
 
         <div class="banner" id="setup-error" hidden></div>
 
-        <div class="grid">
-            <section class="card">
-                <div class="card-title">Robot X <span>— current cycle, mm</span></div>
-                <canvas id="chart-x" class="short"></canvas>
-                <div class="card-title" style="margin-top: 14px;">Height sensor <span>— current cycle, mm</span></div>
-                <canvas id="chart-height" class="short"></canvas>
+        <div class="results-row">
+            <section class="card live" id="live-card">
+                <div>
+                    <div class="card-title">Height <span>— live</span></div>
+                    <div class="height-value"><span id="height-now">—</span><span class="unit">mm</span></div>
+                    <div class="height-delta" id="height-delta">Waiting for the sensor…</div>
+                </div>
+                <dl class="stats">
+                    <dt>Robot X</dt><dd id="pos-x">—</dd>
+                    <dt>Robot Y</dt><dd id="pos-y">—</dd>
+                    <dt>Cycle min</dt><dd id="cycle-min">—</dd>
+                    <dt>Cycle max</dt><dd id="cycle-max">—</dd>
+                </dl>
+                <div class="spark">
+                    <div class="card-title">Last 10 s <span>— height, mm</span></div>
+                    <canvas id="chart-spark"></canvas>
+                </div>
             </section>
 
-            <section class="card">
-                <div class="card-title">Height vs robot X <span id="profile-caption">— waiting for a complete cycle</span></div>
-                <canvas id="chart-profile"></canvas>
+            <section class="card result" id="result-surface">
+                <div class="result-label">Surface inspection</div>
+                <div class="result-value">—</div>
+                <div class="result-detail">no cycle yet</div>
+            </section>
+            <section class="card result" id="result-camera">
+                <div class="result-label">Camera inspection</div>
+                <div class="result-value">—</div>
+                <div class="result-detail">no cycle yet</div>
             </section>
         </div>
 
-        <section class="card">
-            <div class="card-title">Events <span>— latest first</span></div>
-            <ul class="events" id="events"><li class="empty">No events yet.</li></ul>
-        </section>
-    </main>
+        <div class="grid">
+            <section class="card">
+                <div class="card-title">Live scan <span id="live-caption">— waiting for a cycle</span></div>
+                <canvas id="plot-live" class="plot3d"></canvas>
+            </section>
+            <section class="card">
+                <div class="card-title">Last surface <span id="surface-caption">— waiting for a complete cycle</span></div>
+                <canvas id="plot-surface" class="plot3d"></canvas>
+            </section>
+        </div>
 
+        <div class="legend">
+            <span id="legend-low">—</span>
+            <div class="colorbar" aria-hidden="true"></div>
+            <span id="legend-high">—</span>
+            <span id="legend-tol"></span>
+            <span class="legend-note">Drag a plot to rotate.</span>
+        </div>
+    </div>
+
+    <section class="card events-card">
+        <div class="card-title">Events <span>— latest first</span></div>
+        <ul class="events" id="events"><li class="empty">No events yet.</li></ul>
+    </section>
+
+    <script src="/static/js/view-header.js"></script>
     <script src="/static/js/datahub.js"></script>
+    <script src="plot3d.js"></script>
     <script src="view.js"></script>
 </body>
 </html>

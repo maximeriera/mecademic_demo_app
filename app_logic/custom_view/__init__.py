@@ -5,10 +5,12 @@ calls :func:`setup` at every Initialize, then starts the hub: one sampler thread
 per source, plus one worker running the analysis callbacks. Delete the folder
 and the standard app runs exactly as before.
 
-This example measures a part's height profile *as a function of robot X*:
-two independent sources (robot X, height sensor) on the hub's common clock,
-joined at the end of every cycle by :func:`analyse_cycle`. The page
-(``index.html`` / ``view.js`` here) only reads what the hub holds.
+This example inspects a part's surface: the robot rasters the scan area while a
+height sensor reads the part under it. Two independent sources (robot X/Y,
+height) share the hub's common clock; the page pairs them live into a 3D point
+cloud, and :func:`analyse_cycle` grids each finished cycle into a surface and
+judges it. The page (``index.html`` / ``view.js`` / ``plot3d.js`` here) only
+reads what the hub holds.
 
 Rules for sources
 -----------------
@@ -26,10 +28,16 @@ Rules for sources
 
 from devices.SimulatedDevice import SimulatedDevice
 
-from .sim import NOMINAL_HEIGHT_MM, SimulatedScan
+from .sim import SimulatedScan
 
-#: Largest height deviation from nominal, anywhere on the profile, that passes.
+#: Scan area in robot coordinates, and the expected part height.
+SCAN_X_MM = (150.0, 250.0)
+SCAN_Y_MM = (-40.0, 40.0)
+NOMINAL_HEIGHT_MM = 12.0
+#: Largest deviation from nominal, anywhere on the gridded surface, that passes.
 TOLERANCE_MM = 0.6
+#: Surface grid nodes along X and Y (Y matches the 9 scan lines of the sim).
+GRID_NODES = (21, 9)
 
 
 def setup(hub, devices):
@@ -39,42 +47,74 @@ def setup(hub, devices):
     if isinstance(robot, SimulatedDevice):
         # A SimulatedDevice's api returns None (and logs every call), so it
         # cannot feed a source: synthesize the scan instead.
-        scan = SimulatedScan(hub)
-        hub.add_source("robot_x", scan.robot_x, rate_hz=50)
+        scan = SimulatedScan(hub, SCAN_X_MM, SCAN_Y_MM, NOMINAL_HEIGHT_MM)
+        hub.add_source("robot_xy", scan.robot_xy, rate_hz=50)
         hub.add_source("sensor", scan.sensor, rate_hz=50)
     else:
         # Cached real-time target pose: thread-safe, no I/O. The robot's
         # monitoring runs at ~60 Hz by default, so sampling faster only
         # duplicates values.
         hub.add_source(
-            "robot_x",
-            lambda: robot.api.GetRtTargetCartPos(include_timestamp=True).data[0],
+            "robot_xy",
+            lambda: robot.api.GetRtTargetCartPos(include_timestamp=True).data[:2],
             rate_hz=50,
         )
         # Plug in the real height sensor here, owned by this source, e.g.:
         #   sensor = devices["height_sensor"]
         #   hub.add_source("sensor", lambda: sensor.api.get_measurements(0)[0].value, rate_hz=50)
 
+    # Fixed plot axes and the pass/fail criterion, for the page.
+    hub.publish("scan_config", {
+        "x": SCAN_X_MM,
+        "y": SCAN_Y_MM,
+        "nominal": NOMINAL_HEIGHT_MM,
+        "tolerance": TOLERANCE_MM,
+    })
     hub.on("cycle_end", analyse_cycle)
 
 
 def analyse_cycle(hub, event):
-    """Join height against robot X over the cycle that just ended, then judge it."""
+    """Grid the heights measured over the cycle that just ended, then judge the surface."""
     start_t = event.get("start_t")
     if start_t is None:
         return
-    x = hub.window("robot_x", start_t, event["t"])
     height = hub.window("sensor", start_t, event["t"])
-    profile = hub.align(x, height)
-    if not profile:
+    xy = hub.window("robot_xy", start_t, event["t"])
+    points = [(x, y, h) for h, (x, y) in hub.align(height, xy)]
+    surface = _grid(points)
+    nodes = [z for row in surface["z"] for z in row if z is not None]
+    if not nodes:
         return
 
-    deviation = max(abs(h - NOMINAL_HEIGHT_MM) for _, h in profile)
-    hub.publish("profile", {
-        "cycle": event["data"].get("cycle"),
-        "nominal": NOMINAL_HEIGHT_MM,
-        "tolerance": TOLERANCE_MM,
-        "points": [[round(px, 2), round(h, 3)] for px, h in profile],
-    })
-    hub.publish("profile_deviation", round(deviation, 3))
-    hub.publish("profile_ok", deviation <= TOLERANCE_MM)
+    deviation = max(abs(z - NOMINAL_HEIGHT_MM) for z in nodes)
+    hub.publish("surface", {"cycle": event["data"].get("cycle"), **surface})
+    hub.publish("surface_deviation", round(deviation, 3))
+    hub.publish("surface_ok", deviation <= TOLERANCE_MM)
+
+
+def _grid(points):
+    """Average heights onto the nearest grid node.
+
+    Gaps along a row (sparse sampling on a fast scan) are interpolated between
+    measured nodes; rows or ends never reached stay ``None``.
+    """
+    nx, ny = GRID_NODES
+    (x0, x1), (y0, y1) = SCAN_X_MM, SCAN_Y_MM
+    sums = [[0.0] * nx for _ in range(ny)]
+    counts = [[0] * nx for _ in range(ny)]
+    for x, y, h in points:
+        i = min(nx - 1, max(0, round((x - x0) / (x1 - x0) * (nx - 1))))
+        j = min(ny - 1, max(0, round((y - y0) / (y1 - y0) * (ny - 1))))
+        sums[j][i] += h
+        counts[j][i] += 1
+    z = [[sums[j][i] / counts[j][i] if counts[j][i] else None for i in range(nx)] for j in range(ny)]
+    for row in z:
+        known = [i for i, v in enumerate(row) if v is not None]
+        for a, b in zip(known, known[1:]):
+            for i in range(a + 1, b):
+                row[i] = row[a] + (row[b] - row[a]) * (i - a) / (b - a)
+    return {
+        "x": [round(x0 + i * (x1 - x0) / (nx - 1), 2) for i in range(nx)],
+        "y": [round(y0 + j * (y1 - y0) / (ny - 1), 2) for j in range(ny)],
+        "z": [[None if v is None else round(v, 3) for v in row] for row in z],
+    }

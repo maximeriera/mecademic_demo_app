@@ -448,6 +448,39 @@ button, input, select, textarea {
     padding: 8px;
 }
 
+/* Running task under the state (see renderStatusBox), styled like the small
+   uppercase labels used across the UI and tinted by the state colour. */
+.status-state,
+.status-task {
+    display: block;
+}
+.status-task {
+    margin-top: 4px;
+    font-size: 0.5em;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.85;
+}
+/* The sidebar box stays one line so the sidebar never changes height:
+   "Busy · Production", truncated if long (the full text is in the tooltip). */
+.status-box-compact {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.status-box-compact .status-state,
+.status-box-compact .status-task {
+    display: inline;
+}
+.status-box-compact .status-task {
+    margin-top: 0;
+    font-size: 0.72em;
+}
+.status-box-compact .status-task::before {
+    content: " · ";
+}
+
 /* --- Message Log --- */
 .message-log {
     margin-top: 12px;
@@ -556,6 +589,25 @@ button:active { transform: scale(0.98); }
 }
 #control-step-indicator .step-progress {
     margin-top: auto;
+}
+
+/* ...and the reverse: when the left column is the taller one (two-line status
+   box, long step name), the ops cards stretch to match, buttons centred. */
+.control-main {
+    display: flex;
+    flex-direction: column;
+}
+.control-main > .section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+.control-main .ops-grid {
+    flex: 1;
+}
+.control-main .ops-card .btn-column {
+    flex: 1;
+    justify-content: center;
 }
 
 /* Side by side only once the frame has reached its 1200px max width: below
@@ -1794,6 +1846,60 @@ button:active { transform: scale(0.98); }
     overflow: hidden;
     text-overflow: ellipsis;
     margin-bottom: 8px;
+}
+
+/* --- Custom view top bar ---
+   Default header of a workspace custom view (/view/), mounted by
+   static/js/view-header.js. Reuses .status-box and .step-indicator so it
+   reads exactly like the sidebar of the controller. */
+.view-topbar {
+    width: min(100%, 1280px);
+    display: grid;
+    grid-template-columns: minmax(150px, 210px) minmax(200px, 260px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: end;
+    padding: 4px 0 16px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--color-accent-2);
+}
+.view-topbar-logo {
+    display: block;
+    align-self: center;
+}
+.view-topbar-logo img {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+.view-topbar .status-box,
+.view-topbar .step-indicator {
+    min-height: 66px;
+}
+.view-topbar .status-box {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 10px 14px;
+    font-size: 1.1em;
+}
+.view-topbar .step-indicator {
+    padding: 10px 14px;
+}
+.view-topbar .step-indicator-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 8px;
+}
+@media (max-width: 900px) {
+    .view-topbar {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .view-topbar-logo {
+        grid-column: 1 / -1;
+        justify-self: center;
+        width: min(100%, 200px);
+    }
 }
 
 /* --- Progress bar, shared by the sidebar and the Production panel --- */

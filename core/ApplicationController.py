@@ -586,6 +586,22 @@ class ApplicationController:
             self._current_task.abort()
             # The Task thread will handle the transition back to READY or FAULTED
 
+    def get_current_task_label(self) -> str | None:
+        """Display name of the running task ("Production", "Manual: Inspect Part"), or None.
+
+        Read on the 10 Hz /api/status path. One attribute read and no lock: the
+        monitor thread may clear ``_current_task`` at any moment, so it is read
+        once into a local.
+        """
+        task = self._current_task
+        if task is None or not task.is_alive():
+            return None
+        if task.task_type == TaskType.MANUAL_ACTION:
+            label = next((a["label"] for a in self._manual_actions
+                          if a["key"] == task.manual_action_key), None)
+            return f"Manual: {label or task.manual_action_key or 'action'}"
+        return task.task_type.value
+
     def get_live_step(self) -> Dict[str, Any] | None:
         """Current sequence step, or None when idle.
 

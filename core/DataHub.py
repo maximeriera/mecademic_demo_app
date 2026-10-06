@@ -34,6 +34,15 @@ EVENTS_CHANNEL = "events"
 Sample = Tuple[float, Any]
 
 
+def _lerp(a: Any, b: Any, frac: float) -> Any:
+    """Interpolate numbers, or numeric sequences component-wise (returns a tuple)."""
+    try:
+        fa, fb = float(a), float(b)
+    except TypeError:
+        return tuple(float(x) + frac * (float(y) - float(x)) for x, y in zip(a, b))
+    return fa + frac * (fb - fa)
+
+
 class _Source:
     __slots__ = ("name", "read", "rate_hz", "errors", "last_error", "_last_logged")
 
@@ -159,14 +168,16 @@ class DataHub:
             ]
 
     @staticmethod
-    def align(ref: List[Sample], other: List[Sample]) -> List[Tuple[Any, float]]:
+    def align(ref: List[Sample], other: List[Sample]) -> List[Tuple[Any, Any]]:
         """Pair each ``ref`` value with ``other`` linearly interpolated at the same ``t``.
 
-        Both inputs are time-ordered sample lists (as returned by :meth:`window`);
-        ``other`` must be numeric. ``ref`` samples outside ``other``'s time span
-        are dropped. Typical use: ``align(robot_x, sensor)`` → ``[(x, sensor), ...]``.
+        Both inputs are time-ordered sample lists (as returned by :meth:`window`).
+        ``other`` values are numbers or equal-length numeric sequences such as an
+        ``[x, y]`` pose, interpolated component-wise. ``ref`` samples outside
+        ``other``'s time span are dropped. Typical use:
+        ``align(height, robot_xy)`` → ``[(height, (x, y)), ...]``.
         """
-        pairs: List[Tuple[Any, float]] = []
+        pairs: List[Tuple[Any, Any]] = []
         n = len(other)
         if not ref or n == 0:
             return pairs
@@ -180,10 +191,9 @@ class DataHub:
             t_a, v_a = other[j]
             if j + 1 < n and other[j + 1][0] > t_a:
                 t_b, v_b = other[j + 1]
-                frac = (t - t_a) / (t_b - t_a)
-                pairs.append((ref_value, float(v_a) + frac * (float(v_b) - float(v_a))))
+                pairs.append((ref_value, _lerp(v_a, v_b, (t - t_a) / (t_b - t_a))))
             else:
-                pairs.append((ref_value, float(v_a)))
+                pairs.append((ref_value, _lerp(v_a, v_a, 0.0)))
         return pairs
 
     # --- Workspace registration (from custom_view.setup) ---------------------
