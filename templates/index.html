@@ -62,15 +62,22 @@
                     <div class="section">
                         <div class="section-title">System Status</div>
                         <div id="robot-state" class="status-box js-robot-state">Loading...</div>
-                        <div id="message-log" class="message-log">No recent command activity.</div>
                     </div>
 
+                    <!-- Same markup and id suffixes as the sidebar #step-indicator;
+                         patchStepIndicators() updates both. Not .js-robot-state,
+                         for the same reason as the sidebar one. -->
                     <div class="section">
-                        <div class="section-title">System Control</div>
-                        <div class="btn-column">
-                            <button type="button" class="btn-init" onclick="sendInitialize()">INITIALIZE</button>
-                            <button type="button" class="btn-clear" onclick="sendClearFaults()">CLEAR FAULTS</button>
-                            <button type="button" class="btn-shutdown" onclick="sendShutdown()">SHUTDOWN</button>
+                        <div class="section-title">Current Step</div>
+                        <div id="control-step-indicator" class="step-indicator step-indicator-idle" aria-hidden="true">
+                            <div class="step-indicator-meta">
+                                <span id="control-step-indicator-counter" class="step-indicator-counter">Not running</span>
+                                <span id="control-step-indicator-timer" class="step-indicator-timer">—</span>
+                            </div>
+                            <div id="control-step-indicator-name" class="step-indicator-name">Idle</div>
+                            <div class="step-progress">
+                                <div id="control-step-indicator-fill" class="step-progress-fill"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -79,6 +86,16 @@
                     <div class="section">
                         <div class="section-title">Operations & Tasks</div>
                         <div class="ops-grid">
+                            <div class="ops-card">
+                                <div class="ops-card-label">System Control</div>
+                                <div class="btn-column">
+                                    <!-- Neutral like Manual Tasks; .btn-cue-* lights a button up
+                                         only when the status box says it is the next action. -->
+                                    <button type="button" class="btn-task btn-cue-off" onclick="sendInitialize()">INITIALIZE</button>
+                                    <button type="button" class="btn-task btn-cue-faulted" onclick="sendClearFaults()">CLEAR FAULTS</button>
+                                    <button type="button" class="btn-task" onclick="sendShutdown()">SHUTDOWN</button>
+                                </div>
+                            </div>
                             <div class="ops-card">
                                 <div class="ops-card-label">Manual Tasks</div>
                                 <div class="btn-column">
@@ -97,12 +114,14 @@
                             </div>
                         </div>
                     </div>
-
-                    <div class="section">
-                        <div class="section-title">Device Network</div>
-                        <div id="robot-info-container">Loading device info...</div>
-                    </div>
                 </div>
+            </div>
+
+            <div id="message-log" class="message-log">No recent command activity.</div>
+
+            <div class="section">
+                <div class="section-title">Device Network</div>
+                <div id="robot-info-container">Loading device info...</div>
             </div>
         </div>
 
@@ -164,6 +183,7 @@
                                 <div class="prod-toolbar">
                                     <button type="button" class="btn-task" onclick="refreshProdContext()">Refresh</button>
                                     <button type="button" class="btn-task" onclick="exportProdRunHistory()">Export Runs</button>
+                                    <button type="button" class="btn-task" id="prod-details-toggle" aria-expanded="false" aria-controls="prod-subtab-metrics" onclick="toggleProdDetails()">Show Details</button>
                                 </div>
                             </div>
                         </div>
@@ -194,21 +214,21 @@
 
         <!-- ===== MANUAL TAB ===== -->
         <div id="tab-manual" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-manual" hidden>
+            <!-- Safety first: ABORT sits above the actions it interrupts. -->
             <div class="section">
-                <div class="section-title">Manual Runtime Actions</div>
-                <p class="manual-subtitle">Run the built-in Home, Shipment and Calibration tasks, or project-specific robot/device subroutines such as inspect-only or line-scan routines.</p>
-                <div id="manual-state-hint" class="manual-state-hint">Manual actions require controller state READY.</div>
-                <div id="manual-actions-container">
-                    <p class="empty-state">Loading manual actions...</p>
+                <div class="section-title">Manual Safety Control</div>
+                <div class="manual-safety-row">
+                    <button type="button" class="btn-abort" onclick="sendManualAbort()">ABORT</button>
+                    <div id="manual-action-log" class="message-log">No recent manual action activity.</div>
                 </div>
             </div>
 
             <div class="section">
-                <div class="section-title">Manual Safety Control</div>
-                <div class="prod-control-row">
-                    <button type="button" class="btn-abort" onclick="sendManualAbort()">ABORT</button>
+                <div class="section-title">Manual Runtime Actions</div>
+                <div id="manual-state-hint" class="manual-state-hint">Locked until READY</div>
+                <div id="manual-actions-container">
+                    <p class="empty-state">Loading manual actions...</p>
                 </div>
-                <div id="manual-action-log" class="message-log">No recent manual action activity.</div>
             </div>
         </div>
 

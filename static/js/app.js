@@ -281,11 +281,6 @@ function renderManualActions(loadError = null) {
         title.textContent = action.label || action.key || 'Unnamed action';
         card.appendChild(title);
 
-        const key = document.createElement('div');
-        key.className = 'manual-action-key';
-        key.textContent = action.key || '';
-        card.appendChild(key);
-
         if (action.description) {
             const description = document.createElement('div');
             description.className = 'manual-action-description';
@@ -328,10 +323,10 @@ function updateManualActionAvailability(status) {
 
     if (hint) {
         if (canRun) {
-            hint.textContent = 'Controller READY. Manual actions can run.';
+            hint.textContent = 'Ready to run';
             hint.className = 'manual-state-hint manual-state-ready';
         } else {
-            hint.textContent = `Controller ${status}. Manual actions are blocked until READY.`;
+            hint.textContent = `Locked until READY (${status})`;
             hint.className = 'manual-state-hint manual-state-blocked';
         }
     }
@@ -523,6 +518,19 @@ function renderRecentRuns(history) {
     return `<ul class="prod-metric-list">${rows}</ul>`;
 }
 
+// Step timings and recent cycle/run history (.prod-detail) start hidden. The
+// open state is a class on the static Metrics subpanel rather than on the
+// containers renderProdMetrics/renderProdSteps rebuild at 1 Hz, so it survives
+// every re-render without being tracked here.
+function toggleProdDetails() {
+    const panel = document.getElementById('prod-subtab-metrics');
+    const button = document.getElementById('prod-details-toggle');
+    if (!panel || !button) return;
+    const open = panel.classList.toggle('prod-details-open');
+    button.setAttribute('aria-expanded', String(open));
+    button.textContent = open ? 'Hide Details' : 'Show Details';
+}
+
 function renderProdMetrics(data) {
     const metrics = data.metrics || {};
     const recentCycles = metrics.cycle_history || [];
@@ -543,11 +551,11 @@ function renderProdMetrics(data) {
 
     metricsContainer.innerHTML = `
         <div class="prod-metrics-grid">${cards}</div>
-        <div class="prod-metric-history">
+        <div class="prod-metric-history prod-detail">
             <div class="prod-metric-history-title">Recent Cycles</div>
             ${renderRecentCycles(recentCycles)}
         </div>
-        <div class="prod-metric-history">
+        <div class="prod-metric-history prod-detail">
             <div class="prod-metric-history-title">Recent Runs</div>
             ${renderRecentRuns(recentRuns)}
         </div>
@@ -562,18 +570,17 @@ function renderProdMetrics(data) {
  * innerHTML at 10 Hz would destroy focus and fight isProdUserInteracting().
  * Both writers must agree on these ids, so they live in one place. */
 const STEP_LIVE_IDS = {
-    name: 'step-indicator-name',
-    timer: 'step-indicator-timer',
-    counter: 'step-indicator-counter',
-    fill: 'step-indicator-fill',
     panelName: 'prod-step-name',
     panelElapsed: 'prod-step-elapsed',
     panelCounter: 'prod-step-counter',
     panelFill: 'prod-step-fill',
-    cardName: 'prod-step-card-name',
     cardElapsed: 'prod-step-card-elapsed',
     cardPosition: 'prod-step-card-position',
 };
+
+// Compact live indicators (sidebar, Control tab). Each is an element with this
+// id plus -name / -timer / -counter / -fill children, so one patch serves both.
+const STEP_INDICATOR_IDS = ['step-indicator', 'control-step-indicator'];
 
 let lastAnnouncedStep = null;
 
@@ -587,28 +594,40 @@ function announceStep(text) {
     if (el) el.textContent = text;
 }
 
-function patchLiveStep(step) {
-    const indicator = document.getElementById('step-indicator');
-
-    if (!step) {
-        // Switch to an idle state rather than unmounting. The sidebar must not
-        // change shape between running and idle: an element that appears and
-        // disappears moves everything below it and makes the operator hunt for
-        // the information.
+function patchStepIndicators(active, name, timer, counter, pct) {
+    for (const base of STEP_INDICATOR_IDS) {
+        const indicator = document.getElementById(base);
         if (indicator) {
-            indicator.classList.add('step-indicator-idle');
-            indicator.classList.remove('step-indicator-active');
+            indicator.classList.toggle('step-indicator-idle', !active);
+            indicator.classList.toggle('step-indicator-active', active);
         }
-        setTextById(STEP_LIVE_IDS.name, 'Idle');
-        setTextById(STEP_LIVE_IDS.timer, '—');
-        setTextById(STEP_LIVE_IDS.counter, 'Not running');
-        const fill = document.getElementById(STEP_LIVE_IDS.fill);
-        if (fill) fill.style.width = '0%';
+        setTextById(`${base}-name`, name);
+        setTextById(`${base}-timer`, timer);
+        setTextById(`${base}-counter`, counter);
+        const fill = document.getElementById(`${base}-fill`);
+        if (fill) fill.style.width = pct;
+    }
+}
+
+// "Pick part › Close gripper": the innermost step alone loses its context, so
+// a sub-step is shown after its parent(s) on the same line.
+function stepLabel(step) {
+    return Array.isArray(step.path) && step.path.length > 1
+        ? step.path.join(' › ')
+        : step.name;
+}
+
+function patchLiveStep(step) {
+    if (!step) {
+        // Switch to an idle state rather than unmounting. The indicators must
+        // not change shape between running and idle: an element that appears
+        // and disappears moves everything below it and makes the operator hunt
+        // for the information.
+        patchStepIndicators(false, 'Idle', '—', 'Not running', '0%');
 
         setTextById(STEP_LIVE_IDS.panelName, 'Idle');
         setTextById(STEP_LIVE_IDS.panelElapsed, '—');
         setTextById(STEP_LIVE_IDS.panelCounter, 'Not running');
-        setTextById(STEP_LIVE_IDS.cardName, 'Idle');
         setTextById(STEP_LIVE_IDS.cardElapsed, '—');
         setTextById(STEP_LIVE_IDS.cardPosition, '—');
         patchSequenceHighlight(null);
@@ -621,6 +640,7 @@ function patchLiveStep(step) {
         return;
     }
 
+    const label = stepLabel(step);
     const elapsed = formatDurationSeconds(step.elapsed_s);
     const hasPosition = step.total && step.index !== null && step.index !== undefined;
     const counter = hasPosition
@@ -628,18 +648,11 @@ function patchLiveStep(step) {
         : `Step ${step.depth + 1}`;
     const pct = `${Math.round((step.progress ?? 0) * 100)}%`;
 
-    if (indicator) {
-        indicator.classList.remove('step-indicator-idle');
-        indicator.classList.add('step-indicator-active');
-    }
-    setTextById(STEP_LIVE_IDS.name, step.name);
-    setTextById(STEP_LIVE_IDS.timer, elapsed);
-    setTextById(STEP_LIVE_IDS.counter, step.off_sequence ? 'Off sequence' : counter);
-    const fill = document.getElementById(STEP_LIVE_IDS.fill);
-    if (fill) fill.style.width = pct;
+    patchStepIndicators(true, label, elapsed,
+        step.off_sequence ? 'Off sequence' : counter, pct);
 
     // Mirror into the Production panel when it is rendered.
-    setTextById(STEP_LIVE_IDS.panelName, step.name);
+    setTextById(STEP_LIVE_IDS.panelName, label);
     setTextById(STEP_LIVE_IDS.panelElapsed, elapsed);
     setTextById(STEP_LIVE_IDS.panelCounter, step.off_sequence ? 'Off sequence' : counter);
     const panelFill = document.getElementById(STEP_LIVE_IDS.panelFill);
@@ -647,7 +660,6 @@ function patchLiveStep(step) {
 
     // The cards duplicate the live row, so they must move on the same tick -
     // otherwise the 1 Hz card and the 10 Hz row show different steps at once.
-    setTextById(STEP_LIVE_IDS.cardName, step.name);
     setTextById(STEP_LIVE_IDS.cardElapsed, elapsed);
     setTextById(STEP_LIVE_IDS.cardPosition,
         hasPosition ? `${step.index} / ${step.total}` : `Step ${step.depth + 1}`);
@@ -656,9 +668,9 @@ function patchLiveStep(step) {
 
     // Announce only on an actual step change - a live region that updates
     // 10x/sec would make a screen reader unusable.
-    if (step.name !== lastAnnouncedStep) {
-        announceStep(counter ? `${step.name}, ${counter}` : step.name);
-        lastAnnouncedStep = step.name;
+    if (label !== lastAnnouncedStep) {
+        announceStep(counter ? `${label}, ${counter}` : label);
+        lastAnnouncedStep = label;
     }
 }
 
@@ -751,10 +763,6 @@ function renderProdSteps(data) {
     const metrics = data.metrics || {};
 
     const cards = [
-        renderMetricCard('Current Step',
-            live ? live.name : 'Idle',
-            live ? 'prod-metric-on' : 'prod-metric-off',
-            STEP_LIVE_IDS.cardName),
         renderMetricCard('Step Elapsed', formatDurationSeconds(live ? live.elapsed_s : null),
             '', STEP_LIVE_IDS.cardElapsed),
         renderMetricCard('Sequence Position',
@@ -777,12 +785,10 @@ function renderProdSteps(data) {
                 <span id="${STEP_LIVE_IDS.panelCounter}" class="step-indicator-counter"></span>
                 <span id="${STEP_LIVE_IDS.panelElapsed}" class="step-indicator-timer">—</span>
             </div>
-            <div id="${STEP_LIVE_IDS.panelName}" class="step-live-name">${escapeHtml(live ? live.name : 'Idle')}</div>
+            <div id="${STEP_LIVE_IDS.panelName}" class="step-live-name">${escapeHtml(live ? stepLabel(live) : 'Idle')}</div>
             <div class="step-progress">
                 <div id="${STEP_LIVE_IDS.panelFill}" class="step-progress-fill"></div>
             </div>
-            ${live && live.path && live.path.length > 1
-                ? `<div class="step-live-path">${escapeHtml(live.path.join('  ›  '))}</div>` : ''}
         </div>
     `;
 
@@ -790,7 +796,7 @@ function renderProdSteps(data) {
         ${liveRow}
         <div class="prod-metrics-grid">${cards}</div>
         ${renderStepSequence(steps.sequence, live)}
-        <div class="prod-metric-history">
+        <div class="prod-metric-history prod-detail">
             <div class="prod-metric-history-title">Step Timings${steps.stats_truncated ? ' (truncated)' : ''}</div>
             ${renderStepStats(steps.stats)}
         </div>

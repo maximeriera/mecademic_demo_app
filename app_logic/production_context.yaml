@@ -64,8 +64,8 @@ params:
 
   move_time_s:
     type: float
-    default: 0.4
-    value: 0.4
+    default: 2
+    value: 2
     editable_when_idle: true
     description: Simulated duration of one robot move. Lower it to speed the demo up.
 
