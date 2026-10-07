@@ -1,7 +1,8 @@
 /*
  * view-header.js — default top bar for a workspace custom view (/view/):
- * Mecademic logo, system status (state + running task) and the current step,
- * read from /api/status and shown the way the controller's sidebar shows them.
+ * Mecademic logo, system status (state + running task), the current step,
+ * read from /api/status and shown the way the controller's sidebar shows them,
+ * and a button back to the controller in the top right corner.
  *
  *   <link rel="stylesheet" href="/static/css/app.css">
  *   <script src="/static/js/view-header.js"></script>
@@ -33,7 +34,8 @@
                 <div class="step-indicator-name" data-role="name">Idle</div>
                 <div class="step-progress"><div class="step-progress-fill" data-role="fill"></div></div>
             </div>
-        </div>`;
+        </div>
+        <a class="view-topbar-back" href="/" title="Back to the controller">&larr; Control</a>`;
 
     function formatDuration(value) {
         const seconds = Number(value);

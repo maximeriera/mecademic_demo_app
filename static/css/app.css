@@ -1855,7 +1855,7 @@ button:active { transform: scale(0.98); }
 .view-topbar {
     width: min(100%, 1280px);
     display: grid;
-    grid-template-columns: minmax(150px, 210px) minmax(200px, 260px) minmax(0, 1fr);
+    grid-template-columns: minmax(150px, 210px) minmax(200px, 260px) minmax(0, 1fr) auto;
     gap: 20px;
     align-items: end;
     padding: 4px 0 16px;
@@ -1891,14 +1891,40 @@ button:active { transform: scale(0.98); }
     text-overflow: ellipsis;
     margin-bottom: 8px;
 }
+/* Back to the controller, top right: the counterpart of the sidebar's
+   .custom-view-link, and styled the same way. */
+.view-topbar-back {
+    align-self: start;
+    padding: 11px 16px;
+    border: 1px solid var(--color-accent-2);
+    border-radius: var(--radius-control);
+    color: var(--color-accent);
+    font-size: 0.85em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.2s ease;
+}
+.view-topbar-back:hover {
+    background: rgba(255,255,255,0.06);
+}
 @media (max-width: 900px) {
     .view-topbar {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     }
+    /* The logo and the back button share the first row. */
     .view-topbar-logo {
-        grid-column: 1 / -1;
-        justify-self: center;
-        width: min(100%, 200px);
+        grid-column: 1;
+        justify-self: start;
+        width: min(100%, 180px);
+    }
+    .view-topbar-back {
+        grid-row: 1;
+        grid-column: 2;
+        justify-self: end;
+        align-self: center;
     }
 }
 
