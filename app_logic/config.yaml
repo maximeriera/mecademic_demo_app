@@ -68,6 +68,19 @@
 #   camera_index: 0              # optional, default: 0
 #   autostart_stream: false      # optional, default: false
 #
+# --- Thorlabs PM-series Power Meter (ThorlabsPowerMeter) ---
+#   PM100A/D/USB, PM101-103, PM16x, PM400, PM5020, ... over USB (or TCPIP).
+#   type: "thorlabs_pm"          # alias: "thorlabs_power_meter"
+#   resource: "USB0::0x1313::0x8078::P0012345::INSTR"  # optional — omit to auto-detect
+#                                #   the only meter attached (fails if there are several)
+#   backend: "@py"               # optional — PyVISA backend; omit to use the VISA
+#                                #   runtime if installed, else pyvisa-py
+#   timeout_ms: 5000             # optional — raise it for averaging above ~1500
+#   wavelength: 1064             # optional, nm — set at every Initialize
+#   averaging: 10                # optional — samples per reading (~3 ms each on PM100x)
+#   power_unit: "W"              # optional — "W" or "DBM"; the meter keeps its last
+#                                #   unit across power cycles
+#
 # --- Simulated Device (SimulatedDevice) — no hardware required ---
 #   Stands in for ANY device type above so the app can be developed/tested
 #   with no robot, feeder, or I/O hardware in the loop. Its `.api` accepts

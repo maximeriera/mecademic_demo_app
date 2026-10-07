@@ -249,6 +249,7 @@ class ApplicationController:
         Supported ``type`` values (case-insensitive):
         ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``,
         ``brainboxes_ed_digital``, ``zaber``, ``gige_camera``, ``lmi``,
+        ``thorlabs_pm`` (alias: ``thorlabs_power_meter``),
         ``simulated`` (aliases: ``dummy``, ``fake``).
         Unknown types are skipped with a warning.
         """
@@ -342,6 +343,20 @@ class ApplicationController:
                     cti_path=cti_path,
                     camera_index=device_info.get('camera_index', 0),
                     autostart_stream=device_info.get('autostart_stream', False),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
+            elif device_type in ('thorlabs_pm', 'thorlabs_power_meter'):
+                from devices.ThorlabsPowerMeter import ThorlabsPowerMeter
+                self.logger.info(f"Creating Thorlabs power meter API for device: {device_name}")
+                device = ThorlabsPowerMeter(
+                    resource=device_info.get('resource'),
+                    backend=device_info.get('backend'),
+                    timeout_ms=device_info.get('timeout_ms', 5000),
+                    wavelength=device_info.get('wavelength'),
+                    averaging=device_info.get('averaging'),
+                    power_unit=device_info.get('power_unit'),
                     name=device_name,
                 )
                 self.devices[device_name] = device

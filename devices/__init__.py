@@ -12,6 +12,7 @@ __all__ = [
 	"Device",
 	"IoLogikE1212",
 	"LMISensor",
+	"ThorlabsPowerMeter",
 	"ZaberAxis",
 	"SimulatedDevice",
 ]
@@ -50,6 +51,10 @@ def __getattr__(name):
 		from .LMISensor import LMISensor
 
 		return LMISensor
+	if name == "ThorlabsPowerMeter":
+		from .ThorlabsPowerMeter import ThorlabsPowerMeter
+
+		return ThorlabsPowerMeter
 	if name == "ZaberAxis":
 		from .OLD_ZaberAxis import ZaberAxis
 

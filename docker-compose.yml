@@ -103,6 +103,12 @@ services:
     #
     # and set the matching `port:` in app_logic/config.yaml.
     #
+    # For USB instruments (Thorlabs power meters), pass the USB bus through.
+    # Linux hosts only — Docker Desktop on macOS and Windows cannot forward USB:
+    #
+    #   devices:
+    #     - "/dev/bus/usb:/dev/bus/usb"
+    #
     # NOTE: pmclib (planar motor) cannot import in this image — pythonnet needs
     # a .NET/mono runtime that python:*-slim does not carry. Every other driver
     # works. Add mono to the Dockerfile if you need planar motor support in a

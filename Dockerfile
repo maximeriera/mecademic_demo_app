@@ -8,6 +8,12 @@ ENV MECADEMIC_DEMO_ROOT=/webapp
 
 WORKDIR /webapp
 
+# libusb: pyusb's backend, which pyvisa-py needs to reach USB instruments
+# (Thorlabs power meters).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libusb-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 COPY ressources/ ./ressources/
 RUN pip install --no-cache-dir -r requirements.txt
