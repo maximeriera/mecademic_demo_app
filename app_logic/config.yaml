@@ -219,6 +219,10 @@ devices:
       model: "SimulatedGigECamera"
       serial_number: "SIM-CAM-0001"
 
+  # --- Power meter (optional) ---
+  thorlabs_power_meter:
+    type: "thorlabs_pm" 
+
   # Uncomment to exercise the fault-handling path: this device randomly reports
   # faulted, which drives the controller to FAULTED and aborts the running task.
   # flaky_io:
