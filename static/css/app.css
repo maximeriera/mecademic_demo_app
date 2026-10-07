@@ -1872,7 +1872,8 @@ button:active { transform: scale(0.98); }
     height: auto;
 }
 .view-topbar .status-box,
-.view-topbar .step-indicator {
+.view-topbar .step-indicator,
+.view-topbar-back {
     min-height: 66px;
 }
 .view-topbar .status-box {
@@ -1892,10 +1893,15 @@ button:active { transform: scale(0.98); }
     margin-bottom: 8px;
 }
 /* Back to the controller, top right: the counterpart of the sidebar's
-   .custom-view-link, and styled the same way. */
+   .custom-view-link, and styled the same way. Bottom-aligned like the blocks
+   and as tall as their boxes (min-height above), so it lines up with the
+   System Status box. */
 .view-topbar-back {
-    align-self: start;
-    padding: 11px 16px;
+    align-self: end;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 16px;
     border: 1px solid var(--color-accent-2);
     border-radius: var(--radius-control);
     color: var(--color-accent);
