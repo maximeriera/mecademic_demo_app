@@ -1,51 +1,32 @@
-// Custom view page: reads the hub through DataHubClient, draws with Plot3D
-// (plot3d.js) and a small 2D chart. No chart library on purpose (no CDN on a
+// Fiber alignment view: live power against the threshold, and the power read
+// at each robot X/Y during the latest alignment. Reads the hub through
+// DataHubClient, the threshold and the cell state from /api/context, and draws
+// the graph with Plot3D (plot3d.js). No chart library on purpose (no CDN on a
 // show floor); vendor one into this folder if a demo needs more.
 (function () {
     'use strict';
 
-    const SPARK_WINDOW_S = 10;
-    const IDLE_WINDOW_S = 10;
+    const THRESHOLD_PARAM = 'power_threshold_mw';
+    const CONTEXT_POLL_MS = 1000;
+    // A power reading older than this is stale: the hub stopped sampling.
+    const STALE_S = 2;
     const EVENTS_SHOWN = 8;
 
     const $ = id => document.getElementById(id);
     const css = getComputedStyle(document.documentElement);
     const token = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
-    const COLORS = {
-        power: token('--color-accent', '#5DEFBF'),
-        band: 'rgba(0, 155, 114, 0.18)',
-        grid: 'rgba(255, 255, 255, 0.07)',
-        label: token('--color-muted', '#9aa39f'),
-    };
+    const ABOVE = token('--color-accent', '#5DEFBF');
+    // Points below the threshold run from blue (no light) to amber (almost
+    // there). Keep in sync with .colorbar in index.html.
+    const LOW = [59, 184, 255];
+    const HIGH = [255, 212, 71];
 
-    // Diverging map centred on the mean power; ±1.5 × tolerance saturates.
-    // Keep the stops in sync with .colorbar in index.html.
-    const STOPS = [
-        [-1, [59, 184, 255]],
-        [0, [93, 239, 191]],
-        [0.6, [255, 212, 71]],
-        [1, [255, 90, 107]],
-    ];
-    let config = null;
+    const isNum = v => typeof v === 'number' && Number.isFinite(v);
 
-    // `value` and `ref` in the same unit. Relative to `ref`, so one scale
-    // serves a µW lamp and a W laser alike.
-    function powerColor(value, ref) {
-        if (!config || !(ref > 0)) return COLORS.power;
-        const t = Math.max(-1, Math.min(1, (value - ref) / (1.5 * config.tolerance * ref)));
-        let k = 0;
-        while (k < STOPS.length - 2 && t > STOPS[k + 1][0]) k++;
-        const [ta, ca] = STOPS[k];
-        const [tb, cb] = STOPS[k + 1];
-        const f = (t - ta) / (tb - ta);
-        const c = ca.map((v, i) => Math.round(v + f * (cb[i] - v)));
-        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-    }
+    // --- Power units ----------------------------------------------------------------
 
-    // --- Power units ------------------------------------------------------------
-
-    // The hub carries watts; the page shows them with an SI prefix picked from
-    // the level being looked at.
+    // The hub and the alignment carry watts; the page shows them with an SI
+    // prefix picked from the value.
     const UNITS = [
         { scale: 1, name: 'W' },
         { scale: 1e-3, name: 'mW' },
@@ -60,212 +41,171 @@
         return v.toFixed(a >= 100 ? 1 : a >= 10 ? 2 : 3);
     }
 
-    const pct = fraction => `${(fraction * 100).toFixed(1)} %`;
-    const mean = values => values.reduce((sum, v) => sum + v, 0) / values.length;
-
-    // The data's range, widened to at least ±1.5 × tolerance around `ref` so
-    // a steady signal does not blow its noise up to full height.
-    function zAxis(values, ref) {
-        const span = ref > 0 ? [ref * (1 - 1.5 * config.tolerance), ref * (1 + 1.5 * config.tolerance)] : [];
-        const all = values.concat(span);
-        if (!all.length) return [0, 1];
-        let lo = Math.min(...all);
-        let hi = Math.max(...all);
-        if (!(hi > lo)) {
-            const pad = Math.abs(lo) || 1;
-            lo -= pad;
-            hi += pad;
-        }
-        return [lo, hi];
+    function withUnit(watts) {
+        const unit = unitFor(watts);
+        return `${fmt(watts, unit)} ${unit.name}`;
     }
 
-    // --- 3D panels --------------------------------------------------------------
+    const signed = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`;
+
+    // --- Threshold and cell state, from /api/context -----------------------------------
+
+    let thresholdW = null;  // null until known (no context file, or no such param)
+    let cell = {};          // variable name → value
+
+    function refreshContext() {
+        fetch('/api/context')
+            .then(r => r.json())
+            .then(ctx => {
+                const param = ctx.enabled && ctx.params ? ctx.params[THRESHOLD_PARAM] : null;
+                thresholdW = param && isNum(param.value) ? param.value * 1e-3 : null;
+                cell = {};
+                Object.entries(ctx.variables || {}).forEach(([name, entry]) => { cell[name] = entry.value; });
+                renderCell();
+            })
+            .catch(() => { /* the hub poll reports a lost connection */ });
+    }
+
+    function renderCell() {
+        const held = cell.held_fiber;
+        $('held-fiber').textContent = held === undefined ? '—' : held ? `#${held}` : 'none';
+        $('next-fiber').textContent = cell.next_fiber === undefined ? '—' : `#${cell.next_fiber}`;
+        $('aligned-count').textContent = cell.aligned_count ?? '—';
+        $('failed-count').textContent = cell.failed_count ?? '—';
+        const last = cell.last_align_power_mw;
+        $('last-power').textContent = isNum(last) && last > 0 ? withUnit(last * 1e-3) : '—';
+    }
+
+    // --- Live power -----------------------------------------------------------------------
+
+    function renderPower(state) {
+        const samples = state.channels.power;
+        const last = samples.length ? samples[samples.length - 1] : null;
+        const fresh = last && state.now !== null && state.now - last[0] <= STALE_S;
+        const watts = fresh && isNum(last[1]) ? last[1] : null;
+        const known = watts !== null && thresholdW !== null;
+
+        if (watts !== null) {
+            const unit = unitFor(watts);
+            $('power-now').textContent = fmt(watts, unit);
+            $('power-unit').textContent = unit.name;
+        } else {
+            $('power-now').textContent = '—';
+            $('power-unit').textContent = '';
+        }
+        $('threshold').textContent = thresholdW !== null ? withUnit(thresholdW) : 'not set';
+        $('margin').textContent = known && watts > 0 && thresholdW > 0
+            ? `(${signed(10 * Math.log10(watts / thresholdW))} dB)`
+            : '';
+
+        const card = $('power-card');
+        card.classList.toggle('above', known && watts >= thresholdW);
+        card.classList.toggle('below', known && watts < thresholdW);
+        $('power-state').textContent = watts === null ? 'Waiting for the power meter…'
+            : thresholdW === null ? `No threshold: add ${THRESHOLD_PARAM} to context.yaml`
+            : watts >= thresholdW ? 'Above threshold' : 'Below threshold';
+    }
+
+    // --- Alignment graph ------------------------------------------------------------------
 
     const camera = Plot3D.camera();
-    const labels = unit => ({ x: 'X (mm)', y: 'Y (mm)', z: `Power (${unit.name})` });
-    const livePlot = Plot3D.create($('plot-live'), camera, { labels: labels(UNITS[1]) });
-    const mapPlot = Plot3D.create($('plot-map'), camera, { labels: labels(UNITS[1]) });
-    // Each panel colours around its own mean, in its own display unit.
-    let liveRef = null;
-    let mapRef = null;
-    livePlot.setColor(z => powerColor(z, liveRef));
-    mapPlot.setColor(z => powerColor(z, mapRef));
-    mapPlot.setMessage('Waiting for a complete cycle…');
-    Plot3D.animate([livePlot, mapPlot], camera);
+    const plot = Plot3D.create($('plot'), camera, { labels: { x: 'X (mm)', y: 'Y (mm)', z: 'Power (mW)' } });
+    // The drawn alignment's threshold, in the graph's display unit.
+    let plotThreshold = null;
+    plot.setColor(z => {
+        if (!(plotThreshold > 0) || z >= plotThreshold) return ABOVE;
+        const f = Math.max(0, Math.min(1, z / plotThreshold));
+        const c = LOW.map((v, i) => Math.round(v + f * (HIGH[i] - v)));
+        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    });
+    plot.setMessage('Waiting for an alignment…');
+    Plot3D.animate([plot], camera);
 
-    function applyConfig(next) {
-        if (config && config.tolerance === next.tolerance
-            && String(config.x) === String(next.x) && String(config.y) === String(next.y)) return;
-        config = next;
-        const sat = 1.5 * config.tolerance;
-        $('legend-low').textContent = `≤ −${pct(sat)}`;
-        $('legend-high').textContent = `≥ +${pct(sat)}`;
-        $('legend-tol').textContent = `· vs the mean; within ± ${pct(config.tolerance)} passes`;
-    }
-
-    // The scan to show live: the cycle in progress, else the last finished
-    // one (frozen), else the last few seconds before any cycle ran.
-    function scanWindow(state) {
+    // The alignment to draw: the one running (its samples since align_start),
+    // else the latest one, frozen. Its align_result summary is kept by the hub
+    // and by this page however old it is, so the graph survives a page reload.
+    function latestAlignment(state) {
         const events = state.events;
-        let start = null;
+        let start = -1;
         for (let i = events.length - 1; i >= 0; i--) {
-            if (events[i].name === 'cycle_start') { start = events[i]; break; }
+            if (events[i].name === 'align_start') { start = i; break; }
         }
-        if (!start) return { t0: state.now - IDLE_WINDOW_S, t1: null, label: '— idle, no cycle yet' };
-        const end = events.find(e => (e.name === 'cycle_end' || e.name === 'cycle_error') && e.t >= start.t);
-        const cycle = start.data && start.data.cycle;
-        return end
-            ? { t0: start.t, t1: end.t, label: `— cycle #${cycle} (finished)` }
-            : { t0: start.t, t1: null, label: `— cycle #${cycle}, scanning…` };
-    }
-
-    // What the live readout and the live plot share: the scan's samples, their
-    // mean (the reference) and the unit to show them in.
-    function liveScan(state) {
-        const win = scanWindow(state);
-        const samples = state.from('power', win.t0).filter(s => win.t1 === null || s[0] <= win.t1);
-        const ref = samples.length ? mean(samples.map(s => s[1])) : null;
-        const latest = state.latest('power');
-        return { win, samples, ref, unit: unitFor(ref !== null ? ref : latest || 0) };
-    }
-
-    function renderLiveScan(state, live) {
-        const { win, samples, ref, unit } = live;
-        const xy = state.from('robot_xy', win.t0 - 0.2);
-        const points = DataHubClient.align(samples, xy).map(([p, q]) => [q[0], q[1], p / unit.scale]);
-        liveRef = ref > 0 ? ref / unit.scale : null;
-        livePlot.setAxes({ x: config.x, y: config.y, z: zAxis(points.map(p => p[2]), liveRef) });
-        livePlot.setLabels(labels(unit));
-        livePlot.setPoints(points);
-        $('live-caption').textContent = win.label;
-    }
-
-    function renderMap(state) {
-        const map = state.latest('power_map');
-        if (!map) return;
-        const unit = unitFor(map.mean);
-        const z = map.z.map(row => row.map(v => (v === null ? null : v / unit.scale)));
-        mapRef = map.mean > 0 ? map.mean / unit.scale : null;
-        mapPlot.setAxes({ x: config.x, y: config.y, z: zAxis(z.flat().filter(v => v !== null), mapRef) });
-        mapPlot.setLabels(labels(unit));
-        mapPlot.setSurface({ x: map.x, y: map.y, z });
-        const deviation = state.latest('power_map_deviation');
-        $('map-caption').textContent = `— cycle #${map.cycle} · mean ${fmt(map.mean, unit)} ${unit.name}` +
-            (typeof deviation === 'number' ? ` · max deviation ${pct(deviation)}` : ' · no signal');
-    }
-
-    // --- Live power readout -------------------------------------------------------
-
-    function drawSpark(canvas, points, band) {
-        const dpr = window.devicePixelRatio || 1;
-        const w = canvas.clientWidth;
-        const h = canvas.clientHeight;
-        if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-            canvas.width = Math.round(w * dpr);
-            canvas.height = Math.round(h * dpr);
+        const results = state.channels.align_result;
+        const lastResult = results.length ? results[results.length - 1] : null;
+        if (start < 0) {
+            // Ran before the history this page holds: only the summary is left.
+            return lastResult ? Object.assign({ status: 'done' }, lastResult[1]) : null;
         }
-        const ctx = canvas.getContext('2d');
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, w, h);
-        if (!points.length) return;
-
-        const pad = { l: 44, r: 6, t: 6, b: 18 };
-        const plotW = w - pad.l - pad.r;
-        const plotH = h - pad.t - pad.b;
-        const values = points.map(p => p[1]).concat(band ? [band.y0, band.y1] : []);
-        let y0 = Math.min(...values);
-        let y1 = Math.max(...values);
-        const margin = Math.max((y1 - y0) * 0.1, 0.05);
-        y0 -= margin;
-        y1 += margin;
-        const sx = x => pad.l + ((x + SPARK_WINDOW_S) / SPARK_WINDOW_S) * plotW;
-        const sy = y => pad.t + (1 - (y - y0) / (y1 - y0)) * plotH;
-
-        ctx.font = '11px Archivo, sans-serif';
-        ctx.fillStyle = COLORS.label;
-        ctx.strokeStyle = COLORS.grid;
-        ctx.lineWidth = 1;
-        const ticks = Plot3D.niceTicks(y0, y1, 3);
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        ticks.values.forEach(v => {
-            const y = Math.round(sy(v)) + 0.5;
-            ctx.beginPath();
-            ctx.moveTo(pad.l, y);
-            ctx.lineTo(w - pad.r, y);
-            ctx.stroke();
-            ctx.fillText(v.toFixed(Plot3D.decimalsFor(ticks.step)), pad.l - 6, y);
-        });
-        ctx.textBaseline = 'top';
-        [-10, -5, 0].forEach(s => {
-            ctx.textAlign = s ? 'center' : 'right';
-            ctx.fillText(s ? `${s} s` : 'now', sx(s), pad.t + plotH + 4);
-        });
-
-        if (band) {
-            ctx.fillStyle = COLORS.band;
-            ctx.fillRect(pad.l, sy(band.y1), plotW, sy(band.y0) - sy(band.y1));
-        }
-        ctx.strokeStyle = COLORS.power;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        points.forEach(([x, y], i) => (i ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y))));
-        ctx.stroke();
+        const begin = events[start];
+        const end = events.slice(start + 1).find(e => e.name === 'align_end');
+        const points = state.channels.align_sample
+            .filter(([t]) => t >= begin.t && (!end || t <= end.t))
+            .map(([, point]) => point);
+        const run = Object.assign({}, begin.data, { points });
+        if (!end) return Object.assign(run, { status: 'running' });
+        if (end.data.error) return Object.assign(run, { status: 'error', error: end.data.error });
+        // align_result is published right after align_end: until it arrives,
+        // the end event's own data stands in for it.
+        const summary = lastResult && lastResult[0] >= end.t ? lastResult[1] : end.data;
+        return Object.assign(run, summary, { points, status: 'done' });
     }
 
-    function renderLivePower(state, live) {
-        const watts = state.latest('power');
-        if (watts === undefined || state.now === null) return;
-        const { samples, ref, unit } = live;
-        $('power-now').textContent = fmt(watts, unit);
-        $('power-unit').textContent = unit.name;
+    function renderAlignment(state) {
+        const run = latestAlignment(state);
+        if (!run || !Array.isArray(run.x) || !Array.isArray(run.y)) return;
+        const points = (run.points || []).filter(p => Array.isArray(p) && isNum(p[2]));
+        const values = points.map(p => p[2]);
+        const threshold = isNum(run.threshold_w) ? run.threshold_w : null;
+        const top = Math.max(threshold || 0, ...values) || 1e-3;
+        const bottom = Math.min(0, ...values);
+        const unit = unitFor(top);
 
-        if (ref > 0) {
-            const delta = (watts - ref) / ref;
-            $('power-delta').textContent =
-                `${delta >= 0 ? '+' : '−'}${pct(Math.abs(delta))} vs mean ${fmt(ref, unit)} ${unit.name}`;
-            $('live-card').classList.toggle('out', Math.abs(delta) > config.tolerance);
+        plotThreshold = threshold !== null ? threshold / unit.scale : null;
+        plot.setLabels({ x: 'X (mm)', y: 'Y (mm)', z: `Power (${unit.name})` });
+        plot.setAxes({ x: run.x, y: run.y, z: [bottom / unit.scale, (top / unit.scale) * 1.1] });
+        plot.setPoints(points.map(([x, y, w]) => [x, y, w / unit.scale]));
+        plot.setMessage(run.status === 'running' ? 'Alignment started, waiting for the first reading…' : 'No reading recorded.');
+        renderCaption(run, values);
+    }
+
+    function renderCaption(run, values) {
+        const fiber = run.fiber ? `fiber #${run.fiber}` : 'no fiber held';
+        let text;
+        let cls = '';
+        if (run.status === 'running') {
+            const best = values.length ? ` · best ${withUnit(Math.max(...values))}` : '';
+            text = `— ${fiber} · aligning… ${values.length} reading(s)${best}`;
+        } else if (run.status === 'error') {
+            text = `— ${fiber} · interrupted: ${run.error}`;
+            cls = 'ng';
         } else {
-            $('power-delta').textContent = 'No signal — mean power is zero or below';
-            $('live-card').classList.remove('out');
+            // Overrange reads +inf, which arrives here as null.
+            const power = isNum(run.power_w) ? withUnit(run.power_w) : (run.passed ? 'overrange' : 'no valid reading');
+            // The threshold this alignment was judged against: the live one may have changed since.
+            const limit = isNum(run.threshold_w) ? withUnit(run.threshold_w) : 'threshold';
+            text = `— ${fiber} · ${run.passed ? '✓' : '✗'} ${power} ${run.passed ? '≥' : '<'} ${limit}`;
+            if (isNum(run.reads) && isNum(run.duration_s)) text += ` · ${run.reads} readings in ${run.duration_s.toFixed(1)} s`;
+            if (run.timed_out) text += ' · timed out';
+            cls = run.passed ? 'ok' : 'ng';
         }
-
-        const xy = state.latest('robot_xy');
-        if (xy) {
-            $('pos-x').textContent = `${xy[0].toFixed(1)} mm`;
-            $('pos-y').textContent = `${xy[1].toFixed(1)} mm`;
-        }
-
-        if (samples.length) {
-            const values = samples.map(s => s[1]);
-            $('cycle-min').textContent = `${fmt(Math.min(...values), unit)} ${unit.name}`;
-            $('cycle-max').textContent = `${fmt(Math.max(...values), unit)} ${unit.name}`;
-        }
-
-        const recent = state.from('power', state.now - SPARK_WINDOW_S)
-            .map(([t, v]) => [t - state.now, v / unit.scale]);
-        $('spark-unit').textContent = `— power, ${unit.name}`;
-        drawSpark($('chart-spark'), recent, ref > 0
-            ? { y0: ref * (1 - config.tolerance) / unit.scale, y1: ref * (1 + config.tolerance) / unit.scale }
-            : null);
+        const caption = $('align-caption');
+        caption.textContent = text;
+        caption.className = cls;
     }
 
-    // --- Results & events ------------------------------------------------------------
-
-    function setResult(id, channel, state, detail) {
-        const tile = $(id);
-        const samples = state.channels[channel] || [];
-        if (!samples.length) return;
-        const passed = samples[samples.length - 1][1];
-        const ng = samples.filter(s => s[1] === false).length;
-        tile.classList.toggle('ok', passed === true);
-        tile.classList.toggle('ng', passed === false);
-        tile.querySelector('.result-value').textContent = passed ? 'OK' : 'NG';
-        tile.querySelector('.result-detail').textContent =
-            (detail ? detail + '\n' : '') + `${ng} NG / ${samples.length} recent`;
-    }
+    // --- Events -----------------------------------------------------------------------------
 
     let epochMs = null;
+
+    function describe(event) {
+        const data = event.data || {};
+        let text = event.name;
+        if (data.cycle !== undefined) text += ` #${data.cycle}`;
+        if (data.fiber !== undefined) text += data.fiber ? ` · fiber #${data.fiber}` : ' · no fiber';
+        if (data.error) text += ` — ${data.error}`;
+        else if (data.passed !== undefined) text += data.passed ? ' · passed' : ' · below threshold';
+        return text;
+    }
 
     function renderEvents(state) {
         const events = state.events.slice(-EVENTS_SHOWN).reverse();
@@ -273,10 +213,7 @@
         $('events').replaceChildren(...events.map(e => {
             const li = document.createElement('li');
             const name = document.createElement('span');
-            const data = e.data || {};
-            name.textContent = e.name +
-                (data.cycle !== undefined ? ` #${data.cycle}` : '') +
-                (data.error ? ` — ${data.error}` : '');
+            name.textContent = describe(e);
             const time = document.createElement('span');
             time.className = 't';
             time.textContent = epochMs === null
@@ -288,22 +225,12 @@
     }
 
     function render(state) {
-        const next = state.latest('scan_config');
-        if (next) applyConfig(next);
-        if (config) {
-            const live = liveScan(state);
-            renderLivePower(state, live);
-            renderLiveScan(state, live);
-            renderMap(state);
-        }
-        const deviation = state.latest('power_map_deviation');
-        setResult('result-power', 'power_map_ok', state,
-            typeof deviation === 'number' ? `max deviation ${pct(deviation)}` : 'no signal');
-        setResult('result-camera', 'inspection_passed', state);
+        renderPower(state);
+        renderAlignment(state);
         renderEvents(state);
     }
 
-    // --- Hub status -------------------------------------------------------------------
+    // --- Hub status ---------------------------------------------------------------------------
 
     function refreshManifest() {
         fetch('/api/data')
@@ -323,11 +250,13 @@
 
     refreshManifest();
     setInterval(refreshManifest, 5000);
+    refreshContext();
+    setInterval(refreshContext, CONTEXT_POLL_MS);
 
     DataHubClient.poll({
-        channels: ['robot_xy', 'power', 'scan_config', 'power_map', 'power_map_ok', 'power_map_deviation', 'inspection_passed'],
+        channels: ['power', 'align_sample', 'align_result'],
         intervalMs: 100,
-        historyS: 120,
+        historyS: 1800,
         onData: render,
         onError: () => { $('view-status').textContent = 'Connection lost — retrying…'; },
     });

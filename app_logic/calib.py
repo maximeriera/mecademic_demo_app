@@ -1,40 +1,23 @@
-"""CALIBRATION task — hand-eye calibration sequence.
+"""CALIBRATION task: nothing to calibrate in this demo yet.
 
-A three-step example showing a task whose steps are worth watching
-individually: the capture and the solve have very different durations, which
-the per-step timings on the Production tab make obvious.
+Candidates, if the demo needs one:
+
+* zero the power meter (``cell.power_meter(devices).zero()``) with no fiber in
+  front of the fixed one, so that only the dark offset is nulled;
+* re-teach ``poses.ALIGN_START`` from the position of a successful alignment.
 """
 
-import time
 from typing import Dict
 
 from core import AppContext
 from devices import Device
 
+try:
+    from .fiber_alignment import cell
+except ImportError:  # pragma: no cover - depends on how the workspace is loaded
+    from fiber_alignment import cell
 
-def calib(devices: Dict[str, Device], context: AppContext | None = None):
-    """Move to the calibration pose, capture, then solve and store."""
-    robot = devices["my_meca_robot"]
-    camera = devices["inspection_camera"]
 
-    if context is None:
-        robot.api.MovePose(150, 0, 250, 0, 90, 0)
-        robot.api.WaitIdle()
-        camera.api.TriggerAcquisition()
-        return
-
-    move_time_s = context.get_param("move_time_s", 0.4)
-
-    with context.step("Move to calibration pose"):
-        robot.api.MovePose(150, 0, 250, 0, 90, 0)
-        robot.api.WaitIdle()
-        time.sleep(move_time_s)
-
-    with context.step("Capture calibration image"):
-        camera.api.TriggerAcquisition()
-        camera.api.WaitForFrame()
-        time.sleep(move_time_s / 2)
-
-    with context.step("Solve and store calibration"):
-        camera.api.SolveHandEye()
-        time.sleep(move_time_s * 2)
+def calib(devices: Dict[str, Device], context: AppContext):
+    """No-op for now: logs that there is nothing to calibrate."""
+    devices[cell.ROBOT].logger.info("CALIBRATION: nothing to calibrate in the fiber alignment demo.")

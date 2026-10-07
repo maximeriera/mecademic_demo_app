@@ -1,103 +1,90 @@
-"""Manual runtime actions — subroutines exposed as buttons on the Manual tab.
+"""Manual actions: one button per process step, on the Manual tab.
+
+Each button runs the exact function production uses (fiber_alignment/process.py),
+so the process can be tested one step at a time, in order:
+
+    Pick Fiber → Move to Alignment Start → Run Alignment → Retract → Place Fiber
+
+Pick Fiber and Full Cycle use the fiber set by the ``manual_fiber`` param
+(Variables tab). Place Fiber always returns the held fiber to its own slot. A
+step asked for in the wrong state (e.g. Place Fiber with nothing held) faults
+the cell, before anything moves, with a message saying what to do.
 
 Any callable registered in :func:`get_manual_actions` becomes a button, and
-must also be listed under ``manual_actions:`` in ``config.yaml`` (the key there
-is the key here). A manual action runs as an exclusive task, exactly like
-HOME or PROD, so the controller must be READY to start one.
-
-Signatures
-----------
-A manual action may take ``(devices)`` or ``(devices, context)``. The second
-argument is passed only when the signature can accept it, so one-argument
-actions keep working unchanged.
+must also be listed under ``manual_actions:`` in config.yaml (same key). A
+manual action runs as an exclusive task, like HOME or PROD, so the controller
+must be READY to start one.
 """
 
 from __future__ import annotations
 
-import time
 from typing import Dict
 
 from core import AppContext
 from devices import Device
 
-
-def inspect_part(devices: Dict[str, Device], context: AppContext | None = None) -> bool:
-    """Inspect the part currently held, and report whether it passed.
-
-    Called two ways, which is the point of putting it here:
-    * from :func:`~app_logic.prod.prod_cycle`, as part of a full cycle
-    * on its own from the Manual tab, via :func:`inspect_only`
-
-    Returns
-    -------
-    bool
-        ``True`` if the part passed inspection.
-    """
-    camera = devices["inspection_camera"]
-    move_time_s = context.get_param("move_time_s", 0.4) if context else 0.4
-
-    camera.api.TriggerAcquisition()
-    camera.api.WaitForFrame()
-    time.sleep(move_time_s / 2)
-
-    # A real cell would evaluate the captured frame here. The demo instead
-    # rejects every Nth part so the reject branch, the reject_count variable
-    # and the conditional step are all exercised without any hardware.
-    if context is None:
-        return True
-
-    reject_every_n = int(context.get_param("reject_every_n", 5))
-    if reject_every_n <= 0:
-        return True
-
-    part_number = (
-        int(context.get_variable("part_count", 0))
-        + int(context.get_variable("reject_count", 0))
-        + 1
-    )
-    return part_number % reject_every_n != 0
+try:
+    from .fiber_alignment import gripper, process
+except ImportError:  # pragma: no cover - depends on how the workspace is loaded
+    from fiber_alignment import gripper, process
 
 
-def inspect_only(devices: Dict[str, Device], context: AppContext | None = None):
-    """Manual action: run the inspection routine on its own.
-
-    Reports its own steps, so the Manual tab shows progress the same way the
-    production loop does.
-    """
-    robot = devices["my_meca_robot"]
-    move_time_s = context.get_param("move_time_s", 0.4) if context else 0.4
-
-    with context.step("Move to inspection pose"):
-        robot.api.MovePose(150, 0, 200, 0, 90, 0)
-        robot.api.WaitIdle()
-        time.sleep(move_time_s)
-
-    with context.step("Capture and evaluate image"):
-        passed = inspect_part(devices, context=context)
-
-    robot.logger.info(f"[inspect_only] inspection {'passed' if passed else 'failed'}")
+def pick_fiber(devices: Dict[str, Device], context: AppContext):
+    """Take the ``manual_fiber`` fiber from its slot."""
+    process.pick_fiber(devices, context, context.get_param("manual_fiber", 1))
 
 
-def open_gripper(devices: Dict[str, Device], context: AppContext | None = None):
-    """Manual action: release whatever the gripper is holding.
+def move_to_alignment(devices: Dict[str, Device], context: AppContext):
+    process.move_to_alignment_start(devices, context)
 
-    The smallest useful example: one device, one step, no parameters.
-    """
-    robot = devices["my_meca_robot"]
 
+def align_fiber(devices: Dict[str, Device], context: AppContext):
+    process.align_fiber(devices, context)
+
+
+def retract_fiber(devices: Dict[str, Device], context: AppContext):
+    process.retract_from_alignment(devices, context)
+
+
+def place_fiber(devices: Dict[str, Device], context: AppContext):
+    process.place_fiber(devices, context)
+
+
+def full_cycle(devices: Dict[str, Device], context: AppContext):
+    """Pick, align, retract and place the ``manual_fiber`` fiber once, outside the PROD loop."""
+    process.run_cycle(devices, context, context.get_param("manual_fiber", 1))
+
+
+def open_gripper(devices: Dict[str, Device], context: AppContext):
+    """Open the gripper wherever the robot is. A held fiber is released on the spot."""
     with context.step("Open gripper"):
-        robot.api.GripperOpen()
-        robot.api.WaitIdle()
-        time.sleep(0.2)
+        gripper.open_gripper(devices)
+    context.set_variable("held_fiber", 0)
+
+
+def close_gripper(devices: Dict[str, Device], context: AppContext):
+    """Close the gripper.
+
+    ``held_fiber`` is left unchanged: the cell cannot know what, if anything,
+    is now held. Set it in the Variables tab if needed.
+    """
+    with context.step("Close gripper"):
+        gripper.close_gripper(devices)
 
 
 def get_manual_actions():
-    """Return the manual actions exposed on the Manual tab.
+    """Return the manual actions shown on the Manual tab.
 
     Keys must match the ``key:`` entries under ``manual_actions:`` in
-    ``config.yaml``; the controller refuses to start if one is missing.
+    config.yaml. The controller refuses to start if one is missing.
     """
     return {
-        "inspect_only": inspect_only,
+        "pick_fiber": pick_fiber,
+        "move_to_alignment": move_to_alignment,
+        "align_fiber": align_fiber,
+        "retract_fiber": retract_fiber,
+        "place_fiber": place_fiber,
+        "full_cycle": full_cycle,
         "open_gripper": open_gripper,
+        "close_gripper": close_gripper,
     }

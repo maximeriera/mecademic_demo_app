@@ -109,32 +109,71 @@
 # returns the default, the Variables tab explains how to add one, and step
 # tracking and production metrics are unaffected.
 #
-# context_file: "context.yaml"
+context_file: "context.yaml"
+
 
 # ============================================================
-# DEFAULT EXAMPLE CELL — simulated devices, no hardware needed
+# FIBER ALIGNMENT CELL
 # ============================================================
-# Everything below runs out of the box: all three devices are
-# `type: "simulated"`, so INITIALIZE connects instantly and the PROD loop runs
-# a full pick / inspect / place cycle with no robot, feeder, or camera present.
+# A Mecademic robot takes one of N fibers (connected to a light source) from
+# its rack, brings it in front of a fixed fiber connected to the power meter,
+# aligns it until the power reaches a threshold, backs out and puts it back
+# where it was. README.md in this folder maps the files and lists what is left
+# to fill in (poses, gripper driver, alignment algorithm).
 #
-# To drive real hardware, change a device's `type` and add its connection
-# fields (see the reference list above). The task logic in app_logic/*.py does
-# not need to change: a SimulatedDevice's `.api` accepts any method call, so
-# `robot.api.MovePose(...)` is the same line either way.
+# The device names below are also declared in fiber_alignment/cell.py: rename
+# one here, rename it there.
 
 manual_actions:
-  - key: "inspect_only"
-    label: "Inspect Part"
-    description: "Run the inspection subroutine on its own, without a full pick/place cycle."
-    confirm_title: "Confirm Inspection"
-    confirm_message: "Run the inspection routine now? Ensure the cell is clear before starting."
+  # One button per process step, in process order, then the helpers. Each runs
+  # the same function as production (fiber_alignment/process.py).
+  - key: "pick_fiber"
+    label: "Pick Fiber"
+    description: "Take the fiber selected by the manual_fiber param (Variables tab) and lift it above its slot."
+    confirm_title: "Confirm Pick"
+    confirm_message: "Pick the fiber set in manual_fiber? The gripper must be empty."
+
+  - key: "move_to_alignment"
+    label: "Move to Alignment Start"
+    description: "Bring the held fiber in front of the fixed fiber, at the alignment start pose."
+    confirm_title: "Confirm Move to Alignment"
+    confirm_message: "Move the held fiber to the alignment start? Check that the area around the fixed fiber is clear."
+
+  - key: "align_fiber"
+    label: "Run Alignment"
+    description: "Run the alignment algorithm from the current position. The custom view graph updates live."
+    confirm_title: "Confirm Alignment"
+    confirm_message: "Run the alignment from the current position?"
+
+  - key: "retract_fiber"
+    label: "Retract"
+    description: "Back the fiber away from the fixed fiber, to the alignment approach pose."
+    confirm_title: "Confirm Retract"
+    confirm_message: "Retract the fiber from the alignment station?"
+
+  - key: "place_fiber"
+    label: "Place Fiber"
+    description: "Put the held fiber back into the slot it was picked from."
+    confirm_title: "Confirm Place"
+    confirm_message: "Put the held fiber back into its slot?"
+
+  - key: "full_cycle"
+    label: "Full Cycle"
+    description: "Pick, align, retract and place the manual_fiber fiber once, without the PROD loop."
+    confirm_title: "Confirm Full Cycle"
+    confirm_message: "Run one full cycle on the fiber set in manual_fiber? Ensure the cell is clear before starting."
 
   - key: "open_gripper"
     label: "Open Gripper"
-    description: "Release whatever the gripper is currently holding."
-    confirm_title: "Confirm Gripper Release"
-    confirm_message: "Open the gripper? Any held part will be released immediately."
+    description: "Open the gripper wherever the robot is. Clears held_fiber: a held fiber is released on the spot."
+    confirm_title: "Confirm Gripper Open"
+    confirm_message: "Open the gripper? Any held fiber is released immediately, wherever the robot is."
+
+  - key: "close_gripper"
+    label: "Close Gripper"
+    description: "Close the gripper. Does not change held_fiber."
+    confirm_title: "Confirm Gripper Close"
+    confirm_message: "Close the gripper?"
 
 # ============================================================
 # SEQUENCES (optional)
@@ -165,62 +204,43 @@ manual_actions:
 # f"Pick part {serial}" creates a new timing bucket per part; the backend caps
 # this at 200 distinct names and warns, but the statistics become useless.
 #
-# The declared sequence for the shipped example. "Discard rejected part" is the
-# conditional branch taken when inspection fails, so a passing cycle stops at
-# step 4 of 5 — that is expected, not an error.
+# The step names below are reported by fiber_alignment/process.py. "Retract
+# from alignment" is conditional in home and shipment: it only runs when the
+# robot was left at the alignment station, so they usually show step 2 of 2.
 sequences:
   prod_cycle:
-    - Request part from feeder
-    - Pick part
-    - Inspect part
-    - Place part in tray
-    - Discard rejected part
+    - Pick fiber
+    - Move to alignment start
+    - Align fiber
+    - Retract from alignment
+    - Place fiber
 
   home:
-    - Open gripper
+    - Retract from alignment
     - Move to home position
 
   shipment:
-    - Open gripper
+    - Retract from alignment
     - Move to shipment position
-
-  calib:
-    - Move to calibration pose
-    - Capture calibration image
-    - Solve and store calibration
-
-  "manual:inspect_only":
-    - Move to inspection pose
-    - Capture and evaluate image
 
 devices:
 
   # --- Robot ---
-  my_meca_robot:
-    type: "simulated"          # change to "mecademic" + ip_address for real hardware
-    connect_delay: 0.3         # pretend the connection takes a moment
-    info:
-      model: "SimulatedMeca500"
-      serial_number: "SIM-ROBOT-0001"
+  meca_robot:
+    type: "mecademic"
+    ip_address: "192.168.0.100"      # TODO: the robot's IP address
 
-  # --- Part feeder ---
-  part_feeder:
-    type: "simulated"          # change to "asyril" + ip_address/recipe for real hardware
-    connect_delay: 0.2
+  # --- Gripper: placeholder until its driver exists (see fiber_alignment/gripper.py) ---
+  fiber_gripper:
+    type: "simulated"
     info:
-      model: "SimulatedAsyrilEyePlus"
-      serial_number: "SIM-FEEDER-0001"
+      model: "PlaceholderGripper"
+      serial_number: "SIM-GRIPPER-0001"
 
-  # --- Inspection camera ---
-  inspection_camera:
-    type: "simulated"          # change to "gige_camera" + cti_path for real hardware
-    connect_delay: 0.2
-    info:
-      model: "SimulatedGigECamera"
-      serial_number: "SIM-CAM-0001"
-
-  # Uncomment to exercise the fault-handling path: this device randomly reports
-  # faulted, which drives the controller to FAULTED and aborts the running task.
-  # flaky_io:
-  #   type: "simulated"
-  #   fail_rate: 0.02
+  # --- Power meter, connected to the fixed fiber ---
+  power_meter:
+    type: "thorlabs_pm"
+    # resource: "USB0::0x1313::0x8078::P0000000::INSTR"  # omit to auto-detect the only meter attached
+    # wavelength: 1550               # TODO: the source's wavelength, nm (else the meter keeps its last one)
+    averaging: 10                    # ~30 ms per reading on a PM100x
+    power_unit: "W"                  # required: the alignment and the custom view work in watts

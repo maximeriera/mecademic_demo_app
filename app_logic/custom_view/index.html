@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Power Map | Custom View</title>
+    <title>Fiber Alignment | Custom View</title>
     <!-- Brand font, colour tokens and background from the standard app. -->
     <link rel="stylesheet" href="/static/css/app.css">
     <style>
@@ -12,8 +12,8 @@
             padding: 0 16px 16px;
         }
 
-        /* Everything but the events fits exactly one browser window: the 3D
-           plots take whatever height the other rows leave. Events sit below. */
+        /* Everything but the events fits exactly one browser window: the graph
+           takes whatever height the other rows leave. Events sit below. */
         .screen {
             width: min(100%, 1800px);
             height: 100vh;
@@ -46,57 +46,14 @@
             color: var(--color-muted);
             font-size: 0.8em;
         }
-        .result-label,
         .card-title,
+        .power-state,
         .stats dt {
             font-size: 0.72em;
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
         }
-
-        /* Live readout + the two inspection results, in one row. */
-        .results-row {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) repeat(2, clamp(170px, 15vw, 280px));
-            gap: 10px;
-        }
-        /* Results: tinted the way .READY / .FAULTED tint the status box, so
-           OK / NG reads from across the stand. */
-        .card.result {
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            gap: 4px;
-            border-width: 2px;
-            transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
-        }
-        .result-label { color: var(--color-muted); }
-        .result-value {
-            font-size: 2.6em;
-            font-weight: 800;
-            line-height: 1;
-            letter-spacing: 0.04em;
-            color: var(--color-muted);
-        }
-        .result-detail {
-            font-size: 0.78em;
-            color: var(--color-muted);
-            white-space: pre-line;
-            font-variant-numeric: tabular-nums;
-        }
-        .result.ok {
-            background: rgba(93, 239, 191, 0.12);
-            border-color: var(--color-accent-2);
-            box-shadow: 0 0 16px rgba(93, 239, 191, 0.12);
-        }
-        .result.ok .result-value { color: var(--color-accent); }
-        .result.ng {
-            background: rgba(255, 90, 107, 0.16);
-            border-color: var(--color-red);
-            box-shadow: 0 0 18px rgba(255, 90, 107, 0.22);
-        }
-        .result.ng .result-value { color: var(--color-red); }
         .banner {
             padding: 8px 14px;
             border: 1px solid var(--color-red);
@@ -127,18 +84,38 @@
             width: 100%;
         }
 
-        /* Live power readout */
-        .live {
+        /* Live power + cell state, in one row. */
+        .top-row {
             display: grid;
-            grid-template-columns: minmax(210px, auto) minmax(190px, auto) minmax(0, 1fr);
-            gap: 28px;
-            align-items: center;
+            grid-template-columns: minmax(0, 1fr) clamp(220px, 22vw, 340px);
+            gap: 10px;
+        }
+
+        /* Live power: the whole tile turns green at or above the threshold and
+           red below it, so the state reads from across the stand. */
+        .power-card {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 6px;
+            border-width: 2px;
+            transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .power-card.above {
+            background: rgba(93, 239, 191, 0.22);
+            border-color: var(--color-accent);
+            box-shadow: 0 0 18px rgba(93, 239, 191, 0.2);
+        }
+        .power-card.below {
+            background: rgba(255, 90, 107, 0.28);
+            border-color: var(--color-red);
+            box-shadow: 0 0 18px rgba(255, 90, 107, 0.25);
         }
         .power-value {
-            font-size: 2.8em;
+            font-size: 3.4em;
             font-weight: 800;
             line-height: 1;
-            color: var(--color-accent);
+            color: var(--color-text);
             font-variant-numeric: tabular-nums;
             transition: color 0.15s ease;
         }
@@ -146,19 +123,24 @@
             font-size: 0.4em;
             font-weight: 600;
             color: var(--color-muted);
-            margin-left: 6px;
+            margin-left: 8px;
         }
-        .live.out .power-value { color: var(--color-red); }
-        .power-delta {
-            margin-top: 6px;
-            font-size: 0.8em;
+        .power-card.above .power-value { color: var(--color-accent); }
+        .power-card.below .power-value { color: var(--color-red); }
+        .power-threshold {
+            font-size: 1.05em;
             color: var(--color-muted);
             font-variant-numeric: tabular-nums;
         }
+        .power-threshold strong { color: var(--color-text); }
+        .power-state { color: var(--color-muted); }
+        .power-card.above .power-state { color: var(--color-accent); }
+        .power-card.below .power-state { color: var(--color-red); }
+
         .stats {
             display: grid;
             grid-template-columns: auto auto;
-            gap: 3px 18px;
+            gap: 4px 18px;
             margin: 0;
             font-size: 0.95em;
             font-variant-numeric: tabular-nums;
@@ -169,44 +151,42 @@
             text-align: right;
             font-weight: 700;
         }
-        #chart-spark { height: 72px; }
 
-        /* 3D panels: fill the height left over */
-        .grid {
+        /* Alignment graph: fills the height left over. */
+        .graph-card {
             flex: 1;
             min-height: 260px;
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            grid-template-rows: minmax(0, 1fr);
-            gap: 10px;
-        }
-        .grid .card {
             display: flex;
             flex-direction: column;
-            min-height: 0;
         }
         .plot3d {
             flex: 1 1 0;
             min-height: 0;
         }
+        #align-caption.ok { color: var(--color-accent); }
+        #align-caption.ng { color: var(--color-red); }
 
         .legend {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 10px;
+            margin-top: 6px;
             font-size: 0.78em;
             color: var(--color-muted);
-            font-variant-numeric: tabular-nums;
         }
-        /* Same stops as powerColor() in view.js. */
+        /* Below the threshold. Same stops as LOW / HIGH in view.js. */
         .colorbar {
-            width: 220px;
+            width: 160px;
             height: 10px;
             border-radius: 2px;
-            background: linear-gradient(90deg,
-                rgb(59, 184, 255) 0%, rgb(93, 239, 191) 50%,
-                rgb(255, 212, 71) 80%, rgb(255, 90, 107) 100%);
+            background: linear-gradient(90deg, rgb(59, 184, 255), rgb(255, 212, 71));
+        }
+        .chip {
+            width: 14px;
+            height: 10px;
+            border-radius: 2px;
+            background: var(--color-accent);
         }
         .legend-note { margin-left: auto; }
 
@@ -229,21 +209,14 @@
         .events .t { color: var(--color-muted); }
         .empty { color: var(--color-muted); font-size: 0.9em; }
 
-        /* Mid-size: the results take the trace's room; it is the least essential. */
-        @media (max-width: 1150px) {
-            .live { grid-template-columns: minmax(200px, auto) minmax(0, 1fr); }
-            .live .spark { display: none; }
-        }
-
         /* Too narrow to fit one screen: stack and scroll normally. */
         @media (max-width: 900px) {
             .screen { height: auto; min-height: 0; }
-            .results-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-            .results-row .live { grid-column: 1 / -1; }
-            .live { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-            .live .spark { display: block; }
-            .grid { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
-            .plot3d { flex: none; height: 320px; }
+            .top-row { grid-template-columns: minmax(0, 1fr); }
+            .power-value { font-size: 2.6em; }
+            .graph-card { flex: none; }
+            .plot3d { flex: none; height: 360px; }
+            .legend-note { margin-left: 0; }
         }
     </style>
 </head>
@@ -254,61 +227,44 @@
         <div id="view-topbar"></div>
 
         <header class="view-header">
-            <h1>Power map</h1>
+            <h1>Fiber alignment</h1>
             <div class="view-sub" id="view-status">Connecting…</div>
         </header>
 
         <div class="banner" id="setup-error" hidden></div>
 
-        <div class="results-row">
-            <section class="card live" id="live-card">
-                <div>
-                    <div class="card-title">Power <span>— live</span></div>
-                    <div class="power-value"><span id="power-now">—</span><span class="unit" id="power-unit"></span></div>
-                    <div class="power-delta" id="power-delta">Waiting for the power meter…</div>
-                </div>
+        <div class="top-row">
+            <section class="card power-card" id="power-card">
+                <div class="card-title">Power <span>— live</span></div>
+                <div class="power-value"><span id="power-now">—</span><span class="unit" id="power-unit"></span></div>
+                <div class="power-threshold">Threshold <strong id="threshold">—</strong> <span id="margin"></span></div>
+                <div class="power-state" id="power-state">Waiting for the power meter…</div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Cell</div>
                 <dl class="stats">
-                    <dt>Robot X</dt><dd id="pos-x">—</dd>
-                    <dt>Robot Y</dt><dd id="pos-y">—</dd>
-                    <dt>Cycle min</dt><dd id="cycle-min">—</dd>
-                    <dt>Cycle max</dt><dd id="cycle-max">—</dd>
+                    <dt>Held fiber</dt><dd id="held-fiber">—</dd>
+                    <dt>Next fiber</dt><dd id="next-fiber">—</dd>
+                    <dt>Aligned</dt><dd id="aligned-count">—</dd>
+                    <dt>Failed</dt><dd id="failed-count">—</dd>
+                    <dt>Last alignment</dt><dd id="last-power">—</dd>
                 </dl>
-                <div class="spark">
-                    <div class="card-title">Last 10 s <span id="spark-unit">— power</span></div>
-                    <canvas id="chart-spark"></canvas>
-                </div>
-            </section>
-
-            <section class="card result" id="result-power">
-                <div class="result-label">Power uniformity</div>
-                <div class="result-value">—</div>
-                <div class="result-detail">no cycle yet</div>
-            </section>
-            <section class="card result" id="result-camera">
-                <div class="result-label">Camera inspection</div>
-                <div class="result-value">—</div>
-                <div class="result-detail">no cycle yet</div>
             </section>
         </div>
 
-        <div class="grid">
-            <section class="card">
-                <div class="card-title">Live scan <span id="live-caption">— waiting for a cycle</span></div>
-                <canvas id="plot-live" class="plot3d"></canvas>
-            </section>
-            <section class="card">
-                <div class="card-title">Last power map <span id="map-caption">— waiting for a complete cycle</span></div>
-                <canvas id="plot-map" class="plot3d"></canvas>
-            </section>
-        </div>
-
-        <div class="legend">
-            <span id="legend-low">—</span>
-            <div class="colorbar" aria-hidden="true"></div>
-            <span id="legend-high">—</span>
-            <span id="legend-tol"></span>
-            <span class="legend-note">Drag a plot to rotate.</span>
-        </div>
+        <section class="card graph-card">
+            <div class="card-title">Alignment <span id="align-caption">— waiting for an alignment</span></div>
+            <canvas id="plot" class="plot3d"></canvas>
+            <div class="legend">
+                <span>0</span>
+                <div class="colorbar" aria-hidden="true"></div>
+                <span>threshold</span>
+                <span class="chip" aria-hidden="true"></span>
+                <span>at or above</span>
+                <span class="legend-note">Power at each robot X/Y, recorded during the alignment step only. Drag to rotate.</span>
+            </div>
+        </section>
     </div>
 
     <section class="card events-card">

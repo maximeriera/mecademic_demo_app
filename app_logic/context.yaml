@@ -38,42 +38,116 @@ params:
   #   persist: false                # true = keep the value across restarts
   #   description: <free text>      # shown in the Variables tab
 
-  cycle_wait_s:
+  # --- Alignment (read by fiber_alignment/alignment.py) -----------------------
+  power_threshold_mw:
     type: float
-    default: 0.2
+    # TODO: set from the peak power measured on the real setup.
+    default: 0.5
     editable_when_idle: true
-    # This pause is deliberately NOT wrapped in a step, so it shows up as idle
-    # time on the Production tab - which is exactly how you spot dead time in
-    # a real cycle. Raise it and watch the gap between cycles grow.
-    description: Idle pause between cycles. Not part of any step, so it reads as idle time.
+    description: Alignment passes when the power meter reads at least this (mW). Shown on the custom view.
 
-  move_time_s:
+  align_step_um:
     type: float
-    default: 2
+    default: 5.0
     editable_when_idle: true
-    description: Simulated duration of one robot move. Lower it to speed the demo up.
+    description: Search step of the alignment algorithm (µm).
 
-  reject_every_n:
+  align_range_um:
+    type: float
+    default: 100.0
+    editable_when_idle: true
+    description: How far from the alignment start the search may go, in X and in Y (µm). Also sizes the graph.
+
+  align_timeout_s:
+    type: float
+    default: 60.0
+    editable_when_idle: true
+    description: The alignment gives up after this long and is judged at the best position found.
+
+  align_settle_s:
+    type: float
+    default: 0.05
+    editable_when_idle: true
+    description: Pause after each alignment move, before reading the power (s).
+
+  # --- Motion (applied at the start of every step) ------------------------------
+  joint_vel_pct:
+    type: float
+    default: 20.0
+    editable_when_idle: true
+    description: Speed of free moves (MovePose, MoveJoints), % of the robot's maximum joint speed.
+
+  lin_vel_mm_s:
+    type: float
+    default: 10.0
+    editable_when_idle: true
+    description: Speed of straight moves near the fibers (onto a slot, into and out of the alignment station), mm/s.
+
+  # --- Manual tab ----------------------------------------------------------------
+  manual_fiber:
     type: int
-    default: 5
+    default: 1
     editable_when_idle: true
-    description: Every Nth part is treated as a reject. Set to 0 to accept every part.
+    description: Fiber slot (1..N) used by the Pick Fiber and Full Cycle manual actions.
+
+  # --- Demo pacing -----------------------------------------------------------------
+  cycle_pause_s:
+    type: float
+    default: 1.0
+    editable_when_idle: true
+    # Deliberately not wrapped in a step: it reads as idle time on the
+    # Production tab, which is how dead time shows up in a real cycle.
+    description: Pause between production cycles (s). Not part of any step, so it reads as idle time.
 
 variables:
-  part_count:
+  # The cell's state. Written by fiber_alignment/process.py; editable while
+  # idle so the operator can correct them after a manual intervention (e.g. a
+  # fiber taken out of the gripper by hand). Persisted: a restart keeps them.
+  next_fiber:
     type: int
-    default: 0
-    # Written by prod_cycle; read-only from the UI.
-    editable_when_idle: false
-    reset_on: prod_start
-    # Survives an app restart mid-run; still reset when a new run starts.
+    default: 1
+    editable_when_idle: true
+    reset_on: none
     persist: true
-    description: Parts placed in the tray since production start.
+    description: Fiber slot the next production cycle processes. Advances 1 → N → 1 after each complete cycle.
 
-  reject_count:
+  held_fiber:
+    type: int
+    default: 0
+    editable_when_idle: true
+    reset_on: none
+    persist: true
+    description: Fiber slot whose fiber is in the gripper, 0 = none. Place Fiber puts it back into that slot.
+
+  at_alignment:
+    type: bool
+    default: false
+    editable_when_idle: true
+    reset_on: none
+    persist: true
+    description: True while the robot is at the alignment station. HOME and SHIPMENT retract first.
+
+  # Results.
+  last_align_power_mw:
+    type: float
+    default: 0.0
+    editable_when_idle: false
+    reset_on: none
+    persist: false
+    description: Power measured at the end of the last alignment (mW).
+
+  aligned_count:
     type: int
     default: 0
     editable_when_idle: false
     reset_on: prod_start
     persist: true
-    description: Parts discarded by inspection since production start.
+    description: Fibers that reached the threshold since production start.
+
+  failed_count:
+    type: int
+    default: 0
+    editable_when_idle: false
+    reset_on: prod_start
+    persist: true
+    description: Fibers that did not reach the threshold since production start. They are still put back.
