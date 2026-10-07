@@ -19,6 +19,11 @@ pyFirmata2==2.5.1        # Arduino I/O boards (Firmata protocol)
 pyserial==3.5            # serial transport for pyFirmata2
 zaber_motion==9.1.0      # Zaber linear axes
 
+# --- Thorlabs power meters (SCPI over USBTMC) ---
+pyvisa==1.16.2
+pyvisa-py==0.8.1         # pure-Python VISA backend, used when no VISA runtime is installed
+pyusb==1.3.1             # USB transport for pyvisa-py; needs the libusb system library
+
 # --- GigE Vision camera ---
 harvesters==1.4.3        # GenTL / GenICam image acquisition
 numpy==2.3.5             # frame buffers

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Surface Inspection | Custom View</title>
+    <title>Power Map | Custom View</title>
     <!-- Brand font, colour tokens and background from the standard app. -->
     <link rel="stylesheet" href="/static/css/app.css">
     <style>
@@ -127,14 +127,14 @@
             width: 100%;
         }
 
-        /* Live height readout */
+        /* Live power readout */
         .live {
             display: grid;
             grid-template-columns: minmax(210px, auto) minmax(190px, auto) minmax(0, 1fr);
             gap: 28px;
             align-items: center;
         }
-        .height-value {
+        .power-value {
             font-size: 2.8em;
             font-weight: 800;
             line-height: 1;
@@ -142,14 +142,14 @@
             font-variant-numeric: tabular-nums;
             transition: color 0.15s ease;
         }
-        .height-value .unit {
+        .power-value .unit {
             font-size: 0.4em;
             font-weight: 600;
             color: var(--color-muted);
             margin-left: 6px;
         }
-        .live.out .height-value { color: var(--color-red); }
-        .height-delta {
+        .live.out .power-value { color: var(--color-red); }
+        .power-delta {
             margin-top: 6px;
             font-size: 0.8em;
             color: var(--color-muted);
@@ -199,7 +199,7 @@
             color: var(--color-muted);
             font-variant-numeric: tabular-nums;
         }
-        /* Same stops as heightColor() in view.js. */
+        /* Same stops as powerColor() in view.js. */
         .colorbar {
             width: 220px;
             height: 10px;
@@ -254,7 +254,7 @@
         <div id="view-topbar"></div>
 
         <header class="view-header">
-            <h1>Surface inspection</h1>
+            <h1>Power map</h1>
             <div class="view-sub" id="view-status">Connecting…</div>
         </header>
 
@@ -263,9 +263,9 @@
         <div class="results-row">
             <section class="card live" id="live-card">
                 <div>
-                    <div class="card-title">Height <span>— live</span></div>
-                    <div class="height-value"><span id="height-now">—</span><span class="unit">mm</span></div>
-                    <div class="height-delta" id="height-delta">Waiting for the sensor…</div>
+                    <div class="card-title">Power <span>— live</span></div>
+                    <div class="power-value"><span id="power-now">—</span><span class="unit" id="power-unit"></span></div>
+                    <div class="power-delta" id="power-delta">Waiting for the power meter…</div>
                 </div>
                 <dl class="stats">
                     <dt>Robot X</dt><dd id="pos-x">—</dd>
@@ -274,13 +274,13 @@
                     <dt>Cycle max</dt><dd id="cycle-max">—</dd>
                 </dl>
                 <div class="spark">
-                    <div class="card-title">Last 10 s <span>— height, mm</span></div>
+                    <div class="card-title">Last 10 s <span id="spark-unit">— power</span></div>
                     <canvas id="chart-spark"></canvas>
                 </div>
             </section>
 
-            <section class="card result" id="result-surface">
-                <div class="result-label">Surface inspection</div>
+            <section class="card result" id="result-power">
+                <div class="result-label">Power uniformity</div>
                 <div class="result-value">—</div>
                 <div class="result-detail">no cycle yet</div>
             </section>
@@ -297,8 +297,8 @@
                 <canvas id="plot-live" class="plot3d"></canvas>
             </section>
             <section class="card">
-                <div class="card-title">Last surface <span id="surface-caption">— waiting for a complete cycle</span></div>
-                <canvas id="plot-surface" class="plot3d"></canvas>
+                <div class="card-title">Last power map <span id="map-caption">— waiting for a complete cycle</span></div>
+                <canvas id="plot-map" class="plot3d"></canvas>
             </section>
         </div>
 

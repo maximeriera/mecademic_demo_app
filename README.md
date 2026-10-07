@@ -57,7 +57,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
 |---|---|
 | **Multi-device architecture** | Abstract `Device` base class with per-device rotating log files |
 | **Mecademic robot support** | Wraps [mecademicpy](https://github.com/Mecademic/mecademicpy) — connection, homing, motion, fault detection, and clearing |
-| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 remote I/O, LMI Gocator 3D sensor |
+| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 remote I/O, LMI Gocator 3D sensor, Thorlabs PM-series power meters |
 | **Web UI** | Real-time status badges, manual/auto task controls, device cards, integrated log viewer |
 | **REST API** | Full endpoint set for status, task management, initialization, shutdown, and fault clearing |
 | **Thread-safe state machine** | `ControllerState` (OFF → INITIALIZING → READY → BUSY → FAULTED) with lock-protected transitions |
@@ -127,6 +127,7 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 | `planarmotor` | `PlanarMotor` | Planar motor system |
 | `iologik` | `IoLogikE1212` | Moxa ioLogik E1212 remote I/O (Modbus TCP) |
 | `lmi` | `LMISensor` | LMI Gocator 3D sensor (Ethernet ASCII) |
+| `thorlabs_pm` | `ThorlabsPowerMeter` | Thorlabs PM-series power meter (SCPI via PyVISA, USB or TCPIP) |
 
 ---
 
@@ -463,6 +464,7 @@ devices/
     ArduinoBoard.py           # Arduino I/O via Firmata
     IoLogikE1212.py           # Moxa ioLogik E1212 remote I/O (Modbus TCP)
     LMISensor.py              # LMI Gocator 3D sensor (Ethernet ASCII)
+    ThorlabsPowerMeter.py     # Thorlabs PM-series power meter (SCPI via PyVISA)
     api/                      # Low-level device protocol implementations
 
 app_logic/

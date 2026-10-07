@@ -3,6 +3,7 @@
 //   const camera = Plot3D.camera();                    // share it to rotate panels together
 //   const plot = Plot3D.create(canvas, camera, {labels: {x: 'X', y: 'Y', z: 'Z'}});
 //   plot.setAxes({x: [x0, x1], y: [y0, y1], z: [z0, z1]});
+//   plot.setLabels({x: 'X', y: 'Y', z: 'Z'});         // e.g. when the z unit changes
 //   plot.setColor(z => 'rgb(...)');
 //   plot.setPoints([[x, y, z], ...]);                  // scan path + points, last one marked
 //   plot.setSurface({x: [...], y: [...], z: [[...]]}); // mesh on grid nodes, null = hole
@@ -65,7 +66,7 @@
     }
 
     function create(canvas, cam, options) {
-        const labels = (options && options.labels) || { x: 'X', y: 'Y', z: 'Z' };
+        let labels = (options && options.labels) || { x: 'X', y: 'Y', z: 'Z' };
         const style = Object.assign({
             text: '#9aa39f',
             grid: 'rgba(255, 255, 255, 0.08)',
@@ -103,7 +104,7 @@
             }
 
             // Half-extents of the drawn box: X fixed, Y keeps the real aspect,
-            // Z exaggerated so millimetre-scale height changes are visible.
+            // Z flattened to half the floor, whatever the z range is.
             const aspect = (axes.y[1] - axes.y[0]) / (axes.x[1] - axes.x[0]);
             const box = { x: 1, y: Math.max(0.3, Math.min(1.5, aspect)), z: 0.5 };
             const cosY = Math.cos(cam.yaw), sinY = Math.sin(cam.yaw);
@@ -247,6 +248,7 @@
 
         return {
             setAxes(value) { axes = value; },
+            setLabels(value) { labels = value; },
             setColor(fn) { color = fn; },
             setPoints(value) { points = value || []; },
             setSurface(value) { surface = value || null; },

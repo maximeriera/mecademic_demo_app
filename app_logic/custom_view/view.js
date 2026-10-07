@@ -12,13 +12,13 @@
     const css = getComputedStyle(document.documentElement);
     const token = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
     const COLORS = {
-        height: token('--color-accent', '#5DEFBF'),
+        power: token('--color-accent', '#5DEFBF'),
         band: 'rgba(0, 155, 114, 0.18)',
         grid: 'rgba(255, 255, 255, 0.07)',
         label: token('--color-muted', '#9aa39f'),
     };
 
-    // Diverging map centred on nominal; ±1.5 × tolerance saturates.
+    // Diverging map centred on the mean power; ±1.5 × tolerance saturates.
     // Keep the stops in sync with .colorbar in index.html.
     const STOPS = [
         [-1, [59, 184, 255]],
@@ -28,9 +28,11 @@
     ];
     let config = null;
 
-    function heightColor(z) {
-        if (!config) return COLORS.height;
-        const t = Math.max(-1, Math.min(1, (z - config.nominal) / (1.5 * config.tolerance)));
+    // `value` and `ref` in the same unit. Relative to `ref`, so one scale
+    // serves a µW lamp and a W laser alike.
+    function powerColor(value, ref) {
+        if (!config || !(ref > 0)) return COLORS.power;
+        const t = Math.max(-1, Math.min(1, (value - ref) / (1.5 * config.tolerance * ref)));
         let k = 0;
         while (k < STOPS.length - 2 && t > STOPS[k + 1][0]) k++;
         const [ta, ca] = STOPS[k];
@@ -40,29 +42,65 @@
         return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
     }
 
+    // --- Power units ------------------------------------------------------------
+
+    // The hub carries watts; the page shows them with an SI prefix picked from
+    // the level being looked at.
+    const UNITS = [
+        { scale: 1, name: 'W' },
+        { scale: 1e-3, name: 'mW' },
+        { scale: 1e-6, name: 'µW' },
+        { scale: 1e-9, name: 'nW' },
+    ];
+    const unitFor = watts => UNITS.find(u => Math.abs(watts) >= u.scale) || UNITS[UNITS.length - 1];
+
+    function fmt(watts, unit) {
+        const v = watts / unit.scale;
+        const a = Math.abs(v);
+        return v.toFixed(a >= 100 ? 1 : a >= 10 ? 2 : 3);
+    }
+
+    const pct = fraction => `${(fraction * 100).toFixed(1)} %`;
+    const mean = values => values.reduce((sum, v) => sum + v, 0) / values.length;
+
+    // The data's range, widened to at least ±1.5 × tolerance around `ref` so
+    // a steady signal does not blow its noise up to full height.
+    function zAxis(values, ref) {
+        const span = ref > 0 ? [ref * (1 - 1.5 * config.tolerance), ref * (1 + 1.5 * config.tolerance)] : [];
+        const all = values.concat(span);
+        if (!all.length) return [0, 1];
+        let lo = Math.min(...all);
+        let hi = Math.max(...all);
+        if (!(hi > lo)) {
+            const pad = Math.abs(lo) || 1;
+            lo -= pad;
+            hi += pad;
+        }
+        return [lo, hi];
+    }
+
     // --- 3D panels --------------------------------------------------------------
 
     const camera = Plot3D.camera();
-    const labels = { x: 'X (mm)', y: 'Y (mm)', z: 'Height (mm)' };
-    const livePlot = Plot3D.create($('plot-live'), camera, { labels });
-    const surfacePlot = Plot3D.create($('plot-surface'), camera, { labels });
-    livePlot.setColor(heightColor);
-    surfacePlot.setColor(heightColor);
-    surfacePlot.setMessage('Waiting for a complete cycle…');
-    Plot3D.animate([livePlot, surfacePlot], camera);
+    const labels = unit => ({ x: 'X (mm)', y: 'Y (mm)', z: `Power (${unit.name})` });
+    const livePlot = Plot3D.create($('plot-live'), camera, { labels: labels(UNITS[1]) });
+    const mapPlot = Plot3D.create($('plot-map'), camera, { labels: labels(UNITS[1]) });
+    // Each panel colours around its own mean, in its own display unit.
+    let liveRef = null;
+    let mapRef = null;
+    livePlot.setColor(z => powerColor(z, liveRef));
+    mapPlot.setColor(z => powerColor(z, mapRef));
+    mapPlot.setMessage('Waiting for a complete cycle…');
+    Plot3D.animate([livePlot, mapPlot], camera);
 
     function applyConfig(next) {
-        if (config && config.nominal === next.nominal && config.tolerance === next.tolerance
+        if (config && config.tolerance === next.tolerance
             && String(config.x) === String(next.x) && String(config.y) === String(next.y)) return;
         config = next;
-        const span = 3 * config.tolerance;
-        const axes = { x: config.x, y: config.y, z: [config.nominal - span, config.nominal + span] };
-        livePlot.setAxes(axes);
-        surfacePlot.setAxes(axes);
         const sat = 1.5 * config.tolerance;
-        $('legend-low').textContent = `≤ ${(config.nominal - sat).toFixed(2)} mm`;
-        $('legend-high').textContent = `≥ ${(config.nominal + sat).toFixed(2)} mm`;
-        $('legend-tol').textContent = `· nominal ${config.nominal.toFixed(2)} ± ${config.tolerance.toFixed(2)} mm`;
+        $('legend-low').textContent = `≤ −${pct(sat)}`;
+        $('legend-high').textContent = `≥ +${pct(sat)}`;
+        $('legend-tol').textContent = `· vs the mean; within ± ${pct(config.tolerance)} passes`;
     }
 
     // The scan to show live: the cycle in progress, else the last finished
@@ -81,26 +119,42 @@
             : { t0: start.t, t1: null, label: `— cycle #${cycle}, scanning…` };
     }
 
-    function renderLiveScan(state) {
+    // What the live readout and the live plot share: the scan's samples, their
+    // mean (the reference) and the unit to show them in.
+    function liveScan(state) {
         const win = scanWindow(state);
-        const inWindow = s => win.t1 === null || s[0] <= win.t1;
-        const heights = state.from('sensor', win.t0).filter(inWindow);
+        const samples = state.from('power', win.t0).filter(s => win.t1 === null || s[0] <= win.t1);
+        const ref = samples.length ? mean(samples.map(s => s[1])) : null;
+        const latest = state.latest('power');
+        return { win, samples, ref, unit: unitFor(ref !== null ? ref : latest || 0) };
+    }
+
+    function renderLiveScan(state, live) {
+        const { win, samples, ref, unit } = live;
         const xy = state.from('robot_xy', win.t0 - 0.2);
-        const points = DataHubClient.align(heights, xy).map(([h, p]) => [p[0], p[1], h]);
+        const points = DataHubClient.align(samples, xy).map(([p, q]) => [q[0], q[1], p / unit.scale]);
+        liveRef = ref > 0 ? ref / unit.scale : null;
+        livePlot.setAxes({ x: config.x, y: config.y, z: zAxis(points.map(p => p[2]), liveRef) });
+        livePlot.setLabels(labels(unit));
         livePlot.setPoints(points);
         $('live-caption').textContent = win.label;
     }
 
-    function renderSurface(state) {
-        const surface = state.latest('surface');
-        if (!surface) return;
-        surfacePlot.setSurface(surface);
-        const deviation = state.latest('surface_deviation');
-        $('surface-caption').textContent = `— cycle #${surface.cycle}` +
-            (deviation !== undefined ? `, max deviation ${deviation.toFixed(2)} mm` : '');
+    function renderMap(state) {
+        const map = state.latest('power_map');
+        if (!map) return;
+        const unit = unitFor(map.mean);
+        const z = map.z.map(row => row.map(v => (v === null ? null : v / unit.scale)));
+        mapRef = map.mean > 0 ? map.mean / unit.scale : null;
+        mapPlot.setAxes({ x: config.x, y: config.y, z: zAxis(z.flat().filter(v => v !== null), mapRef) });
+        mapPlot.setLabels(labels(unit));
+        mapPlot.setSurface({ x: map.x, y: map.y, z });
+        const deviation = state.latest('power_map_deviation');
+        $('map-caption').textContent = `— cycle #${map.cycle} · mean ${fmt(map.mean, unit)} ${unit.name}` +
+            (typeof deviation === 'number' ? ` · max deviation ${pct(deviation)}` : ' · no signal');
     }
 
-    // --- Live height readout ------------------------------------------------------
+    // --- Live power readout -------------------------------------------------------
 
     function drawSpark(canvas, points, band) {
         const dpr = window.devicePixelRatio || 1;
@@ -152,23 +206,28 @@
             ctx.fillStyle = COLORS.band;
             ctx.fillRect(pad.l, sy(band.y1), plotW, sy(band.y0) - sy(band.y1));
         }
-        ctx.strokeStyle = COLORS.height;
+        ctx.strokeStyle = COLORS.power;
         ctx.lineWidth = 1.6;
         ctx.beginPath();
         points.forEach(([x, y], i) => (i ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y))));
         ctx.stroke();
     }
 
-    function renderLiveHeight(state) {
-        const height = state.latest('sensor');
-        if (height === undefined || state.now === null) return;
-        $('height-now').textContent = height.toFixed(2);
+    function renderLivePower(state, live) {
+        const watts = state.latest('power');
+        if (watts === undefined || state.now === null) return;
+        const { samples, ref, unit } = live;
+        $('power-now').textContent = fmt(watts, unit);
+        $('power-unit').textContent = unit.name;
 
-        if (config) {
-            const delta = height - config.nominal;
-            $('height-delta').textContent =
-                `${delta >= 0 ? '+' : '−'}${Math.abs(delta).toFixed(2)} mm vs nominal ${config.nominal.toFixed(2)}`;
+        if (ref > 0) {
+            const delta = (watts - ref) / ref;
+            $('power-delta').textContent =
+                `${delta >= 0 ? '+' : '−'}${pct(Math.abs(delta))} vs mean ${fmt(ref, unit)} ${unit.name}`;
             $('live-card').classList.toggle('out', Math.abs(delta) > config.tolerance);
+        } else {
+            $('power-delta').textContent = 'No signal — mean power is zero or below';
+            $('live-card').classList.remove('out');
         }
 
         const xy = state.latest('robot_xy');
@@ -177,16 +236,18 @@
             $('pos-y').textContent = `${xy[1].toFixed(1)} mm`;
         }
 
-        const win = scanWindow(state);
-        const cycle = state.from('sensor', win.t0).filter(s => win.t1 === null || s[0] <= win.t1).map(s => s[1]);
-        if (cycle.length) {
-            $('cycle-min').textContent = `${Math.min(...cycle).toFixed(2)} mm`;
-            $('cycle-max').textContent = `${Math.max(...cycle).toFixed(2)} mm`;
+        if (samples.length) {
+            const values = samples.map(s => s[1]);
+            $('cycle-min').textContent = `${fmt(Math.min(...values), unit)} ${unit.name}`;
+            $('cycle-max').textContent = `${fmt(Math.max(...values), unit)} ${unit.name}`;
         }
 
-        const recent = state.from('sensor', state.now - SPARK_WINDOW_S).map(([t, v]) => [t - state.now, v]);
-        drawSpark($('chart-spark'), recent,
-            config ? { y0: config.nominal - config.tolerance, y1: config.nominal + config.tolerance } : null);
+        const recent = state.from('power', state.now - SPARK_WINDOW_S)
+            .map(([t, v]) => [t - state.now, v / unit.scale]);
+        $('spark-unit').textContent = `— power, ${unit.name}`;
+        drawSpark($('chart-spark'), recent, ref > 0
+            ? { y0: ref * (1 - config.tolerance) / unit.scale, y1: ref * (1 + config.tolerance) / unit.scale }
+            : null);
     }
 
     // --- Results & events ------------------------------------------------------------
@@ -229,12 +290,15 @@
     function render(state) {
         const next = state.latest('scan_config');
         if (next) applyConfig(next);
-        renderLiveHeight(state);
-        renderLiveScan(state);
-        renderSurface(state);
-        const deviation = state.latest('surface_deviation');
-        setResult('result-surface', 'surface_ok', state,
-            deviation !== undefined ? `max deviation ${deviation.toFixed(2)} mm` : '');
+        if (config) {
+            const live = liveScan(state);
+            renderLivePower(state, live);
+            renderLiveScan(state, live);
+            renderMap(state);
+        }
+        const deviation = state.latest('power_map_deviation');
+        setResult('result-power', 'power_map_ok', state,
+            typeof deviation === 'number' ? `max deviation ${pct(deviation)}` : 'no signal');
         setResult('result-camera', 'inspection_passed', state);
         renderEvents(state);
     }
@@ -261,7 +325,7 @@
     setInterval(refreshManifest, 5000);
 
     DataHubClient.poll({
-        channels: ['robot_xy', 'sensor', 'scan_config', 'surface', 'surface_ok', 'surface_deviation', 'inspection_passed'],
+        channels: ['robot_xy', 'power', 'scan_config', 'power_map', 'power_map_ok', 'power_map_deviation', 'inspection_passed'],
         intervalMs: 100,
         historyS: 120,
         onData: render,
