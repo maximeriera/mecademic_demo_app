@@ -112,13 +112,11 @@
 # context_file: "context.yaml"
 
 # ============================================================
-# DEFAULT EXAMPLE CELL — simulated devices plus one real power meter
+# DEFAULT EXAMPLE CELL — simulated devices, no hardware needed
 # ============================================================
-# The robot, feeder and camera are `type: "simulated"`, so they connect
-# instantly and the PROD loop runs a full pick / inspect / place cycle with none
-# of them present. The Thorlabs power meter is real: INITIALIZE fails without
-# one attached. Remove it to run with no hardware at all; the cell still runs,
-# and the custom view (/view/) reports that its power meter is missing.
+# Everything below runs out of the box: all three devices are
+# `type: "simulated"`, so INITIALIZE connects instantly and the PROD loop runs
+# a full pick / inspect / place cycle with no robot, feeder, or camera present.
 #
 # To drive real hardware, change a device's `type` and add its connection
 # fields (see the reference list above). The task logic in app_logic/*.py does
@@ -220,12 +218,6 @@ devices:
     info:
       model: "SimulatedGigECamera"
       serial_number: "SIM-CAM-0001"
-
-  # --- Power meter (real hardware: the custom view reads it live) ---
-  thorlabs_power_meter:
-    type: "thorlabs_pm"
-    power_unit: "W"            # the custom view averages readings: needs watts, not dBm
-    averaging: 10              # ~30 ms per reading, keeps up with the view's 20 Hz sampling
 
   # Uncomment to exercise the fault-handling path: this device randomly reports
   # faulted, which drives the controller to FAULTED and aborts the running task.
