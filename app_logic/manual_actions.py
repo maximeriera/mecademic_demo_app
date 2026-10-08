@@ -58,7 +58,7 @@ def full_cycle(devices: Dict[str, Device], context: AppContext):
 def open_gripper(devices: Dict[str, Device], context: AppContext):
     """Open the gripper wherever the robot is. A held fiber is released on the spot."""
     with context.step("Open gripper"):
-        gripper.open_gripper(devices)
+        gripper.open_gripper(devices, context)
     context.set_variable("held_fiber", 0)
 
 
@@ -69,7 +69,7 @@ def close_gripper(devices: Dict[str, Device], context: AppContext):
     is now held. Set it in the Variables tab if needed.
     """
     with context.step("Close gripper"):
-        gripper.close_gripper(devices)
+        gripper.close_gripper(devices, context)
 
 
 def get_manual_actions():

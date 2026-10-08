@@ -29,7 +29,7 @@ A fiber that does not reach the threshold is still put back and counted in
 | `manual_actions.py` | One Manual tab button per step, plus gripper open/close and a full cycle |
 | `fiber_alignment/poses.py` | **Data**: fiber slots, alignment station, home/shipment, tool frame |
 | `fiber_alignment/cell.py` | Device names, `ProcessError`, robot setup (frame, speeds) |
-| `fiber_alignment/gripper.py` | Placeholder gripper, until its driver exists |
+| `fiber_alignment/gripper.py` | SmarAct gripper: open/close are moves of its MCS2 jaw channel |
 | `fiber_alignment/process.py` | The five steps, shared by PROD and the Manual tab |
 | `fiber_alignment/alignment.py` | Contract with the alignment algorithm: moves, readings, timeout, verdict |
 | `fiber_alignment/algorithm.py` | The algorithm: **placeholder** spiral search, to be replaced |
@@ -40,7 +40,7 @@ A fiber that does not reach the threshold is still put back and counted in
 - [ ] Teach every pose in `fiber_alignment/poses.py` (and `TOOL_TRF`), then set `POSES_TAUGHT = True`. Until then, every robot move is refused.
 - [ ] `config.yaml`: the robot's IP address, and the power meter's `wavelength` (the source's).
 - [ ] `context.yaml`: `power_threshold_mw`, from the peak power measured on the setup.
-- [ ] Gripper: when its driver exists, set its `type` in `config.yaml` and replace the two calls in `fiber_alignment/gripper.py`.
+- [ ] Gripper (SmarAct MCS2 at 192.168.0.20): check its jaw channel and `velocity_mm_s` in `config.yaml`, then teach `gripper_open_mm` / `gripper_closed_mm` (Variables tab). The closed position is where the jaws hold the fiber, not beyond it.
 - [ ] Alignment: plug the colleague's algorithm into `fiber_alignment/algorithm.py`. Its docstring gives the contract.
 
 ## Testing step by step

@@ -136,7 +136,7 @@ context_file: "context.yaml"
 # its rack, brings it in front of a fixed fiber connected to the power meter,
 # aligns it until the power reaches a threshold, backs out and puts it back
 # where it was. README.md in this folder maps the files and lists what is left
-# to fill in (poses, gripper driver, alignment algorithm).
+# to fill in (poses, gripper positions, alignment algorithm).
 #
 # The device names below are also declared in fiber_alignment/cell.py: rename
 # one here, rename it there.
@@ -247,12 +247,17 @@ devices:
     type: "mecademic"
     ip_address: "192.168.0.100"      # TODO: the robot's IP address
 
-  # --- Gripper: placeholder until its driver exists (see fiber_alignment/gripper.py) ---
+  # --- Gripper: SmarAct jaw on an MCS2 controller (see fiber_alignment/gripper.py) ---
+  # The open and closed jaw positions are the gripper_open_mm / gripper_closed_mm
+  # params in context.yaml (Variables tab).
   fiber_gripper:
-    type: "simulated"
-    info:
-      model: "PlaceholderGripper"
-      serial_number: "SIM-GRIPPER-0001"
+    type: "smaract_mcs2"
+    ip_address: "192.168.0.20"
+    channels: [0]                    # TODO: check — the jaw's channel (the first one listed is used)
+    # Referencing moves the jaw across its travel. "if_needed" only does it when
+    # the controller lost its reference (power cycle): hold no fiber then.
+    reference: "if_needed"
+    velocity_mm_s: 1.0               # TODO: tune — slow enough not to snap the fiber
 
   # --- Power meter, connected to the fixed fiber ---
   power_meter:

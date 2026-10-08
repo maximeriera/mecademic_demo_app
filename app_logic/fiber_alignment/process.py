@@ -39,13 +39,13 @@ def pick_fiber(devices: Dict[str, Device], context: AppContext, number: int) -> 
         slot = poses.fiber_slot(number)
         robot = prepare_robot(devices, context)
 
-        gripper.open_gripper(devices)
+        gripper.open_gripper(devices, context)
         robot.MovePose(*slot.approach)
         robot.WaitIdle()
         robot.MoveLin(*slot.pick)
         robot.WaitIdle()
         with context.step("Close gripper"):
-            gripper.close_gripper(devices)
+            gripper.close_gripper(devices, context)
         context.set_variable("held_fiber", slot.number)
         robot.MoveLin(*slot.approach)
         robot.WaitIdle()
@@ -120,7 +120,7 @@ def place_fiber(devices: Dict[str, Device], context: AppContext) -> None:
         robot.MoveLin(*slot.pick)
         robot.WaitIdle()
         with context.step("Open gripper"):
-            gripper.open_gripper(devices)
+            gripper.open_gripper(devices, context)
         context.set_variable("held_fiber", 0)
         robot.MoveLin(*slot.approach)
         robot.WaitIdle()
