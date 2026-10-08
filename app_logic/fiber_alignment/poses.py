@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from typing import Iterator, Tuple
 
 #: Flip to True once every pose below has been taught on the real cell.
-POSES_TAUGHT = False
+POSES_TAUGHT = True
 
 
 @dataclass(frozen=True)

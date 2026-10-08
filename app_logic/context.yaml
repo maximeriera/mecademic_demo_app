@@ -42,7 +42,7 @@ params:
   power_threshold_mw:
     type: float
     # TODO: set from the peak power measured on the real setup.
-    default: 0.5
+    default: 0.9
     editable_when_idle: true
     description: Alignment passes when the power meter reads at least this (mW). Shown on the custom view.
 
