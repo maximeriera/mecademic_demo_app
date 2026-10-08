@@ -83,8 +83,8 @@ services:
     # Talking to real hardware
     # ---------------------------------------------------------------------
     # The default bridge network above reaches routable device IPs (Mecademic,
-    # Asyril, ioLogik, Brainboxes, LMI) just fine, and works on Docker Desktop
-    # for macOS and Windows.
+    # Asyril, ioLogik, Brainboxes, LMI, SmarAct MCS2) just fine, and works on
+    # Docker Desktop for macOS and Windows.
     #
     # It does NOT pass UDP broadcast/multicast, which GigE Vision discovery
     # (GVCP) and the planar motor's auto_search_and_connect_to_pmc() rely on.
