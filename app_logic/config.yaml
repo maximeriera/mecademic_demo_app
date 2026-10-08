@@ -236,6 +236,14 @@ devices:
       model: "SimulatedGigECamera"
       serial_number: "SIM-CAM-0001"
 
+  # --- Linear stage (real hardware, for testing) ---
+  # INITIALIZE fails if the controller is not reachable at this address.
+  linear_stage:
+    type: "smaract_mcs2"
+    ip_address: "192.168.1.200"
+    channels: [0]
+    reference: "if_needed"       # moves the stage to find its reference mark if needed
+
   # Uncomment to exercise the fault-handling path: this device randomly reports
   # faulted, which drives the controller to FAULTED and aborts the running task.
   # flaky_io:
