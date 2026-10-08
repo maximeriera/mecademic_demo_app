@@ -250,6 +250,7 @@ class ApplicationController:
         ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``,
         ``brainboxes_ed_digital``, ``zaber``, ``gige_camera``, ``lmi``,
         ``thorlabs_pm`` (alias: ``thorlabs_power_meter``),
+        ``smaract_mcs2`` (aliases: ``mcs2``, ``smaract``),
         ``simulated`` (aliases: ``dummy``, ``fake``).
         Unknown types are skipped with a warning.
         """
@@ -357,6 +358,23 @@ class ApplicationController:
                     wavelength=device_info.get('wavelength'),
                     averaging=device_info.get('averaging'),
                     power_unit=device_info.get('power_unit'),
+                    name=device_name,
+                )
+                self.devices[device_name] = device
+
+            elif device_type in ('smaract_mcs2', 'mcs2', 'smaract'):
+                from devices.SmarActMCS2 import SmarActMCS2
+                self.logger.info(f"Creating SmarAct MCS2 API for device: {device_name}")
+                device = SmarActMCS2(
+                    ip_address=device_info.get('ip_address', ''),
+                    port=device_info.get('port', 55551),
+                    timeout=device_info.get('timeout', 5.0),
+                    channels=device_info.get('channels'),
+                    reference=device_info.get('reference', 'if_needed'),
+                    reference_reverse=device_info.get('reference_reverse', False),
+                    reference_timeout_s=device_info.get('reference_timeout_s', 120.0),
+                    velocity_mm_s=device_info.get('velocity_mm_s'),
+                    acceleration_mm_s2=device_info.get('acceleration_mm_s2'),
                     name=device_name,
                 )
                 self.devices[device_name] = device

@@ -81,6 +81,23 @@
 #   power_unit: "W"              # optional — "W" or "DBM"; the meter keeps its last
 #                                #   unit across power cycles
 #
+# --- SmarAct MCS2 Positioner Controller (SmarActMCS2) ---
+#   Linear stages on an MCS2, over its Ethernet ASCII interface. One device per
+#   controller; task code picks the channel: stage.api.move_to_mm(0, 12.5), then
+#   stage.api.wait(0) (raises on ABORT or if the move failed).
+#   type: "smaract_mcs2"         # aliases: "mcs2", "smaract"
+#   ip_address: "192.168.1.200"
+#   port: 55551                  # optional, default: 55551
+#   timeout: 5.0                 # optional, seconds — per reply
+#   channels: [0]                # optional — channels used; default: all. Each must
+#                                #   have a sensor
+#   reference: "if_needed"       # optional — at Initialize: "if_needed" (only channels
+#                                #   not referenced yet), "always", or "never"
+#   reference_reverse: false     # optional — start the reference search in reverse
+#   reference_timeout_s: 120     # optional — per channel
+#   velocity_mm_s: 5.0           # optional — set at every Initialize
+#   acceleration_mm_s2: 50.0     # optional — set at every Initialize
+#
 # --- Simulated Device (SimulatedDevice) — no hardware required ---
 #   Stands in for ANY device type above so the app can be developed/tested
 #   with no robot, feeder, or I/O hardware in the loop. Its `.api` accepts
