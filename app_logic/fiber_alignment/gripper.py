@@ -26,11 +26,11 @@ GRIPPER_TIMEOUT_S = 10.0
 
 
 def open_gripper(devices: Dict[str, Device], context: AppContext) -> None:
-    _move_jaw(devices, context.get_param("gripper_open_mm", 1.0))
+    _move_jaw(devices, context.get_param("gripper_open_mm", 0.0))
 
 
 def close_gripper(devices: Dict[str, Device], context: AppContext) -> None:
-    _move_jaw(devices, context.get_param("gripper_closed_mm", 0.0))
+    _move_jaw(devices, context.get_param("gripper_closed_mm", 1.0))
 
 
 def _move_jaw(devices: Dict[str, Device], position_mm: float) -> None:

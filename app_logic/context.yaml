@@ -88,14 +88,14 @@ params:
   gripper_open_mm:
     type: float
     # TODO: teach on the gripper.
-    default: 1.0
+    default: 0.0
     editable_when_idle: true
     description: Jaw position with the gripper open (mm, SmarAct channel position).
 
   gripper_closed_mm:
     type: float
     # TODO: teach on the gripper, with a fiber in the jaws.
-    default: 0.0
+    default: 1.0
     editable_when_idle: true
     description: Jaw position that holds the fiber (mm). Not beyond it, or the jaw stalls and the move fails.
 
