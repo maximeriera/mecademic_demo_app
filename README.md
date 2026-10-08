@@ -57,7 +57,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
 |---|---|
 | **Multi-device architecture** | Abstract `Device` base class with per-device rotating log files |
 | **Mecademic robot support** | Wraps [mecademicpy](https://github.com/Mecademic/mecademicpy) — connection, homing, motion, fault detection, and clearing |
-| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 remote I/O, LMI Gocator 3D sensor, Thorlabs PM-series power meters |
+| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 remote I/O, LMI Gocator 3D sensor, Thorlabs PM-series power meters, SmarAct MCS2 linear stages |
 | **Web UI** | Real-time status badges, manual/auto task controls, device cards, integrated log viewer |
 | **REST API** | Full endpoint set for status, task management, initialization, shutdown, and fault clearing |
 | **Thread-safe state machine** | `ControllerState` (OFF → INITIALIZING → READY → BUSY → FAULTED) with lock-protected transitions |
@@ -128,6 +128,7 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 | `iologik` | `IoLogikE1212` | Moxa ioLogik E1212 remote I/O (Modbus TCP) |
 | `lmi` | `LMISensor` | LMI Gocator 3D sensor (Ethernet ASCII) |
 | `thorlabs_pm` | `ThorlabsPowerMeter` | Thorlabs PM-series power meter (SCPI via PyVISA, USB or TCPIP) |
+| `smaract_mcs2` | `SmarActMCS2` | SmarAct MCS2 positioner controller and its linear stages (Ethernet ASCII) |
 
 ---
 
@@ -465,6 +466,7 @@ devices/
     IoLogikE1212.py           # Moxa ioLogik E1212 remote I/O (Modbus TCP)
     LMISensor.py              # LMI Gocator 3D sensor (Ethernet ASCII)
     ThorlabsPowerMeter.py     # Thorlabs PM-series power meter (SCPI via PyVISA)
+    SmarActMCS2.py            # SmarAct MCS2 linear stages (Ethernet ASCII)
     api/                      # Low-level device protocol implementations
 
 app_logic/
