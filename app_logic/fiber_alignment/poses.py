@@ -61,7 +61,7 @@ class FiberSlot:
 
 #: Tool reference frame (SetTrf), ideally with the TCP at the tip of the held
 #: fiber. Teach every pose below with this same TRF.
-TOOL_TRF = Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)  # TODO teach
+TOOL_TRF = Pose(0.0, 10.70, 9.0, 0.0, 0.0, 0.0)  # TODO teach
 
 # --- Joint positions -----------------------------------------------------------
 
