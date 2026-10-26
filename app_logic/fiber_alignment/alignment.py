@@ -342,7 +342,8 @@ class AlignmentIO:
 
     def _query_pose(self, command: str) -> Pose6:
         try:
-            value = getattr(self._robot, command)(synchronous_update=True)
+            # value = getattr(self._robot, command)(synchronous_update=True)
+            value = self._robot.GetRtCartPos()
         except Exception as e:
             raise AlignmentError(f"{command} failed ({type(e).__name__}: {e}). Robot: {self._robot_state()}") from e
         return self._pose_from(value)
