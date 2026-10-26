@@ -218,6 +218,7 @@ class AlignmentIO:
             stopped = False
             moved_from, moved_at = None, time.monotonic()
             while not done.is_set():
+                self._check()
                 # mecademicpy never "sets" a checkpoint the robot discarded
                 # (motion cleared, robot in error or not activated): without
                 # this, the loop would wait for it until the timeout.
@@ -225,7 +226,6 @@ class AlignmentIO:
                     done.check_interrupted()
                 except Exception as e:
                     raise AlignmentError(f"The robot dropped the scan ({e}). Robot: {self._robot_state()}") from e
-                self._check()
                 sample = self._read(kind)
                 scanned.append(sample)
                 if moved_from is None or _moved(sample.pose, moved_from):
