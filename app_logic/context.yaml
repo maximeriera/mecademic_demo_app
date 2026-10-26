@@ -46,29 +46,60 @@ params:
     editable_when_idle: true
     description: Alignment passes when the power meter reads at least this (mW). Shown on the custom view.
 
-  align_step_um:
-    type: float
-    default: 5.0
-    editable_when_idle: true
-    description: Search step of the alignment algorithm (µm).
-
   align_range_um:
     type: float
-    default: 100.0
+    # The axial search reaches 2 × 0.5 mm from where it starts, after the
+    # spirals may already have moved the fiber by up to 0.5 mm.
+    default: 2000.0
     editable_when_idle: true
-    description: How far from the alignment start the search may go, in X and in Y (µm). Also sizes the graph.
+    description: How far each of X, Y, Z may go from the alignment start (µm). A pose beyond it is refused before it is sent.
+
+  align_range_deg:
+    type: float
+    # Angular spiral up to 3°, then axial scans up to 2 × 2°.
+    default: 8.0
+    editable_when_idle: true
+    description: How far each of alpha, beta, gamma may turn from the alignment start (°). A pose beyond it is refused before it is sent.
 
   align_timeout_s:
     type: float
-    default: 60.0
+    default: 300.0
     editable_when_idle: true
-    description: The alignment gives up after this long and is judged at the best position found.
+    description: The alignment gives up after this long and is judged at the best pose found.
 
   align_settle_s:
     type: float
     default: 0.05
     editable_when_idle: true
-    description: Pause after each alignment move, before reading the power (s).
+    description: Pause after each point-to-point alignment move (s).
+
+  # Thresholds of the algorithm's phases (fiber_alignment/algorithm.py).
+  # TODO: copy them from the robot variables set by the colleague's
+  # fiber_variables program (his script works in W; these are in mW).
+  spiral_cart_threshold_mw:
+    type: float
+    default: 0.1
+    editable_when_idle: true
+    description: Cartesian spiral stops once past this (mW) and the power stops rising.
+
+  spiral_ang_threshold_mw:
+    type: float
+    default: 0.2
+    editable_when_idle: true
+    description: Angular spiral stops once past this (mW) and the power stops rising.
+
+  axial_threshold_mw:
+    type: float
+    # His script logs "Above 0.25 mW cutoff" when it is reached.
+    default: 0.25
+    editable_when_idle: true
+    description: Axial search runs only below this after the spirals, and stops once it is reached (mW).
+
+  gradient_threshold_mw:
+    type: float
+    default: 0.5
+    editable_when_idle: true
+    description: Gradient circles shrink (radius and step × 0.8) when a circle ends above this (mW).
 
   # --- Motion (applied at the start of every step) ------------------------------
   joint_vel_pct:

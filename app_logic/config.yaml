@@ -146,31 +146,31 @@ manual_actions:
   # the same function as production (fiber_alignment/process.py).
   - key: "pick_fiber"
     label: "Pick Fiber"
-    description: "Take the fiber selected by the manual_fiber param (Variables tab) and lift it above its slot."
+    description: "Take the fiber selected by the manual_fiber param (Variables tab): robot program fiber<N>_in, close the gripper, fiber<N>_out."
     confirm_title: "Confirm Pick"
     confirm_message: "Pick the fiber set in manual_fiber? The gripper must be empty."
 
   - key: "move_to_alignment"
     label: "Move to Alignment Start"
-    description: "Bring the held fiber in front of the fixed fiber, at the alignment start pose."
+    description: "Bring the held fiber in front of the fixed fiber: robot program align_start."
     confirm_title: "Confirm Move to Alignment"
     confirm_message: "Move the held fiber to the alignment start? Check that the area around the fixed fiber is clear."
 
   - key: "align_fiber"
     label: "Run Alignment"
-    description: "Run the alignment algorithm from the current position. The custom view graph updates live."
+    description: "Run the alignment algorithm from the current pose (spirals, axial search, gradient circles). The custom view graph updates live."
     confirm_title: "Confirm Alignment"
-    confirm_message: "Run the alignment from the current position?"
+    confirm_message: "Run the alignment from the current pose?"
 
   - key: "retract_fiber"
     label: "Retract"
-    description: "Back the fiber away from the fixed fiber, to the alignment approach pose."
+    description: "Back the fiber out of the alignment station: robot program align_retract."
     confirm_title: "Confirm Retract"
     confirm_message: "Retract the fiber from the alignment station?"
 
   - key: "place_fiber"
     label: "Place Fiber"
-    description: "Put the held fiber back into the slot it was picked from."
+    description: "Put the held fiber back into its own slot: robot program fiber<N>_in, open the gripper, fiber<N>_out."
     confirm_title: "Confirm Place"
     confirm_message: "Put the held fiber back into its slot?"
 
@@ -263,6 +263,6 @@ devices:
   power_meter:
     type: "thorlabs_pm"
     # resource: "USB0::0x1313::0x8078::P0000000::INSTR"  # omit to auto-detect the only meter attached
-    # wavelength: 1550               # TODO: the source's wavelength, nm (else the meter keeps its last one)
+    wavelength: 1557                 # nm, from the colleague's alignment script — check against the source
     averaging: 10                    # ~30 ms per reading on a PM100x
     power_unit: "W"                  # required: the alignment and the custom view work in watts

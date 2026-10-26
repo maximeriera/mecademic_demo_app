@@ -4,7 +4,7 @@ Candidates, if the demo needs one:
 
 * zero the power meter (``cell.power_meter(devices).zero()``) with no fiber in
   front of the fixed one, so that only the dark offset is nulled;
-* re-teach ``poses.ALIGN_START`` from the position of a successful alignment.
+* re-teach the ``align_start`` robot program from the pose of a successful alignment.
 """
 
 from typing import Dict

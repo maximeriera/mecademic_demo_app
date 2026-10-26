@@ -1,31 +1,51 @@
 """The contract between the cell and the alignment algorithm.
 
-The algorithm (algorithm.py, supplied by a colleague) never touches a device.
-It receives an :class:`AlignmentIO`, which can move the held fiber in the
-robot's X/Y plane and read the power meter, plus the :class:`AlignmentSettings`.
-It must leave the fiber at the best position it found, and it may stop as soon
-as the threshold is reached. Everything else is handled here:
+The algorithm (algorithm.py) never touches a device. It receives an
+:class:`AlignmentIO`, which moves the held fiber anywhere in 3D (position and
+orientation) and reads the power meter, plus the :class:`AlignmentSettings`. It
+must leave the fiber at the best position it found. Everything else is handled
+here:
 
-* Every reading is recorded and published to the custom view (``align_sample``).
-  The graph therefore shows exactly what the algorithm measured, and moves only
-  while an alignment runs.
-* Moves are confined to ``align_range_um`` around the start, because the fiber
-  tip is only microns from the fixed one. The run is capped at ``align_timeout_s``.
+* Every reading is recorded with the robot's pose at that moment, and published
+  to the custom view (``align_sample``). The graph therefore shows exactly what
+  the algorithm measured, and moves only while an alignment runs.
+* Every target pose is checked **before anything is sent**: each coordinate
+  must stay within ``align_range_um`` / ``align_range_deg`` of the start pose,
+  and be a finite number.
+* ABORT, a device fault and ``align_timeout_s`` are checked before every
+  command and every reading. A scan interrupted for any reason clears the
+  robot's motion queue, so queued moves never run on after it.
 * The verdict is a fresh reading at the final position, compared with
   ``power_threshold_mw``. The algorithm's own claim is not used.
 
-Units at this boundary are mm (robot coordinates, WRF) and W (power meter). The
-lateral plane is the robot's WRF X/Y, i.e. the fibers face each other along Z.
-Z and the orientation stay as they were at the start.
+A pose is ``(x, y, z, alpha, beta, gamma)``: mm in the robot's WRF, then Euler
+angles in degrees (XYZ mobile), exactly as the robot reports it. Power is in W.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core import AppContext
+
+from . import frames
+from .frames import Pose6
+
+#: Pose axes the custom view plots: WRF X and Z, the lateral plane (the fibers
+#: face each other along Y).
+PLOT_AXES = (0, 2)
+#: Most points kept in the align_result summary for the custom view.
+RESULT_POINTS_MAX = 5000
+#: Pause between two readings during a scan (s). The meter reading and the
+#: pose query take a few ms more.
+SCAN_SAMPLE_PERIOD_S = 0.002
+#: Checkpoint ids used by scans (the robot allows 1-8000).
+CHECKPOINT_IDS = range(7000, 8000)
+#: Motion for the return to the best pose after a timeout: slow, no blending.
+RETURN_MOTION = {"acc": 25, "lin_vel": 1, "ang_vel": 5, "blending": 0}
 
 
 class AlignmentError(RuntimeError):
@@ -33,7 +53,7 @@ class AlignmentError(RuntimeError):
 
 
 class AlignmentRangeError(AlignmentError):
-    """The algorithm asked for a move outside the search window."""
+    """The algorithm asked for a pose outside the search window (or not a number)."""
 
 
 class AlignmentInterrupted(AlignmentError):
@@ -43,33 +63,54 @@ class AlignmentInterrupted(AlignmentError):
 class AlignmentTimeout(Exception):
     """Raised by every AlignmentIO call once ``timeout_s`` has elapsed.
 
-    Not an error: run_alignment() catches it, moves back to the best position
-    read so far and judges that. An algorithm may catch it to clean up, but it
-    must not move again.
+    Not an error: run_alignment() catches it, moves back to the best pose read
+    so far and judges that. An algorithm may catch it to clean up, but it must
+    not move again.
     """
 
 
 @dataclass(frozen=True)
+class Sample:
+    """One power reading and the robot's actual pose right after it."""
+
+    pose: Pose6
+    power_w: float
+    #: "cart" (lateral moves), "ang" (rotations) or None. The view plots all but "ang".
+    kind: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class AlignmentSettings:
-    #: The alignment passes once the power meter reads at least this (W).
+    #: The alignment passes once the final reading reaches this (W).
     threshold_w: float
-    #: Suggested search step (mm).
-    step_mm: float
-    #: How far from the start the fiber may go, in X and in Y (mm).
+    #: How far each coordinate may go from the start pose (mm, degrees).
     range_mm: float
+    range_deg: float
     timeout_s: float
-    #: Pause after each move, before a reading (s).
+    #: Pause after a point-to-point move, before anything else (s).
     settle_s: float
+    #: Thresholds of the algorithm's phases (W).
+    spiral_cart_threshold_w: float
+    spiral_ang_threshold_w: float
+    axial_threshold_w: float
+    gradient_threshold_w: float
 
     @classmethod
     def from_context(cls, context: AppContext) -> "AlignmentSettings":
-        """Read the params from context.yaml, converted to W and mm."""
+        """Read the params from context.yaml, converted to W, mm and degrees."""
+        def mw(name: str, default: float) -> float:
+            return float(context.get_param(name, default)) * 1e-3
+
         return cls(
-            threshold_w=float(context.get_param("power_threshold_mw", 0.5)) * 1e-3,
-            step_mm=float(context.get_param("align_step_um", 5.0)) * 1e-3,
-            range_mm=float(context.get_param("align_range_um", 100.0)) * 1e-3,
-            timeout_s=float(context.get_param("align_timeout_s", 60.0)),
+            threshold_w=mw("power_threshold_mw", 0.9),
+            range_mm=float(context.get_param("align_range_um", 2000.0)) * 1e-3,
+            range_deg=float(context.get_param("align_range_deg", 8.0)),
+            timeout_s=float(context.get_param("align_timeout_s", 300.0)),
             settle_s=float(context.get_param("align_settle_s", 0.05)),
+            spiral_cart_threshold_w=mw("spiral_cart_threshold_mw", 0.1),
+            spiral_ang_threshold_w=mw("spiral_ang_threshold_mw", 0.2),
+            axial_threshold_w=mw("axial_threshold_mw", 0.25),
+            gradient_threshold_w=mw("gradient_threshold_mw", 0.5),
         )
 
 
@@ -80,9 +121,8 @@ class AlignmentResult:
     passed: bool
     #: That final reading (W).
     power_w: float
-    #: Final position (mm, WRF).
-    x: float
-    y: float
+    #: Final pose.
+    pose: Pose6
     #: Power readings taken, the final one included.
     reads: int
     duration_s: float
@@ -90,62 +130,115 @@ class AlignmentResult:
 
 
 class AlignmentIO:
-    """What the algorithm may do: move the fiber in X/Y and read the power."""
+    """What the algorithm may do: move the fiber, scan, and read the power."""
 
     def __init__(self, robot: Any, meter: Any, context: AppContext, settings: AlignmentSettings):
         self._robot = robot
         self._meter = meter
         self._context = context
         self._settings = settings
-
-        pose = robot.GetRtTargetCartPos(synchronous_update=True)
-        if not pose or len(pose) < 6:
-            raise AlignmentError(f"The robot reported no position ({pose!r}): alignment needs the real robot.")
-        x, y, *rest = (float(v) for v in pose[:6])
-        #: Where the search started (mm, WRF). The window is ``start ± range_mm``.
-        self.start: Tuple[float, float] = (x, y)
-        self._z_and_orientation = tuple(rest)
-        self._xy = (x, y)
+        #: Where the search started: the centre of the window.
+        self.start: Pose6 = self._pose_from(robot.GetRtTargetCartPos(synchronous_update=True))
         self._t0 = time.monotonic()
         self._deadline = self._t0 + settings.timeout_s
-        #: Every reading so far, as (x, y, power_w).
-        self.samples: List[Tuple[float, float, float]] = []
-        #: The highest reading so far, as (x, y, power_w), or None before the first.
-        self.best: Optional[Tuple[float, float, float]] = None
+        #: Every reading so far.
+        self.samples: List[Sample] = []
+        #: The highest reading so far, or None before the first.
+        self.best: Optional[Sample] = None
+        self._checkpoints = iter(())
+        # Power meter settings changed by the algorithm, with their original values.
+        self._meter_originals: Dict[str, Any] = {}
 
     # --- For the algorithm ---------------------------------------------------
 
-    def position(self) -> Tuple[float, float]:
-        """Current X, Y (mm, WRF): the last position reached."""
-        return self._xy
+    def pose(self) -> Pose6:
+        """The robot's actual pose now."""
+        self._check()
+        return self._actual_pose()
 
     def elapsed_s(self) -> float:
         return time.monotonic() - self._t0
 
-    def move_to(self, x: float, y: float) -> None:
-        """Move the fiber to X, Y (mm, WRF) in a straight line. Returns once settled."""
+    def move_to(self, pose: Sequence[float]) -> None:
+        """Move in a straight line to ``pose`` and return once there and settled."""
         self._check()
-        x0, y0 = self.start
-        r = self._settings.range_mm
-        # The epsilon absorbs float noise on points computed as start + k * step.
-        if abs(x - x0) > r + 1e-9 or abs(y - y0) > r + 1e-9:
-            raise AlignmentRangeError(
-                f"Move to ({x:.4f}, {y:.4f}) mm is outside the search window "
-                f"({x0:.4f} ± {r:.4f}, {y0:.4f} ± {r:.4f}) mm."
-            )
-        self._move(x, y)
+        self._move(self._checked(pose))
 
-    def move_by(self, dx: float, dy: float) -> None:
-        """Move the fiber by dX, dY (mm, WRF) from the current position."""
-        x, y = self._xy
-        self.move_to(x + dx, y + dy)
+    def move_rel_trf(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0,
+                     drx: float = 0.0, dry: float = 0.0, drz: float = 0.0) -> None:
+        """Move relative to the tool frame, like ``MoveLinRelTrf``.
 
-    def read_power(self) -> float:
-        """Power (W) at the current position. Recorded, and drawn on the custom view."""
+        The target is computed here and sent as an absolute ``MoveLin``, so the
+        pose checked against the window is exactly the pose the robot receives.
+        """
         self._check()
-        return self._read()
+        current = frames.pose_matrix(self._pose_from(self._robot.GetRtTargetCartPos(synchronous_update=True)))
+        relative = frames.make_homogeneous_matrix([dx, dy, dz], [drx, dry, drz])
+        self._move(self._checked(frames.matrix_pose(current @ relative)))
 
-    # --- For run_alignment (no time limit) --------------------------------------
+    def read_power(self, kind: Optional[str] = None) -> float:
+        """Power (W) now. Recorded with the pose, and drawn on the custom view."""
+        self._check()
+        return self._read(kind).power_w
+
+    def scan(self, poses: Sequence[Sequence[float]], kind: Optional[str] = None,
+             stop: Optional[Callable[[List[Sample]], bool]] = None) -> List[Sample]:
+        """Move through ``poses`` in one continuous motion, reading the power all along.
+
+        The moves are queued while the robot is paused, then run with the
+        current blending, and readings are taken until the last pose is
+        reached. If ``stop(samples)`` returns True (called after every reading,
+        with this scan's samples), the motion is cleared and the scan ends
+        there. Returns this scan's samples.
+        """
+        self._check()
+        targets = [self._checked(pose) for pose in poses]
+        if not targets:
+            return []
+        robot = self._robot
+        scanned: List[Sample] = []
+        try:
+            robot.PauseMotion()
+            for target in targets:
+                robot.MoveLin(*target)
+            done = robot.SetCheckpoint(self._next_checkpoint())
+            robot.ResumeMotion()
+            stopped = False
+            while not done.is_set():
+                self._check()
+                scanned.append(self._read(kind))
+                if stop is not None and stop(scanned):
+                    self._clear_motion()
+                    stopped = True
+                    break
+                time.sleep(SCAN_SAMPLE_PERIOD_S)
+            if not stopped:
+                # A cleared motion (ABORT, robot error) also sets the checkpoint:
+                # that must not pass for a finished scan.
+                self._check()
+                done.wait(timeout=0)
+        except BaseException:
+            self._clear_motion()
+            raise
+        return scanned
+
+    def set_motion(self, acc: Optional[float] = None, lin_vel: Optional[float] = None,
+                   ang_vel: Optional[float] = None, blending: Optional[float] = None) -> None:
+        """Cartesian acceleration (%), linear (mm/s) and angular (°/s) velocity, blending (%)."""
+        self._check()
+        self._apply_motion(acc, lin_vel, ang_vel, blending)
+
+    def set_power_averaging(self, count: int) -> None:
+        """Samples averaged per reading (about 3 ms each on a PM100x). Restored afterwards."""
+        self._check()
+        self._set_meter("averaging", int(count))
+
+    def set_power_auto_range(self, enabled: bool) -> None:
+        """Power meter auto range. Restored afterwards."""
+        self._check()
+        self._set_meter("auto_range", bool(enabled))
+
+    # --- For run_alignment ---------------------------------------------------------
 
     def _check(self) -> None:
         self._check_interrupted()
@@ -154,40 +247,114 @@ class AlignmentIO:
 
     def _check_interrupted(self) -> None:
         # ABORT clears the robot's motion queue, which makes a WaitIdle() in
-        # progress raise. Between two moves (settling, reading the meter) there
-        # is none to interrupt, and the robot accepts the next move again. So
-        # the loop also stops on the abort/fault event the controller marks
-        # first. run_alignment marks align_start before the algorithm runs, so
-        # an older abort can never be the latest event here.
+        # progress raise. Between two moves (settling, reading the meter, or a
+        # scan sampling) there is none to interrupt, and the robot accepts the
+        # next move again. So the alignment also stops on the abort/fault event
+        # the controller marks first. run_alignment marks align_start before the
+        # algorithm runs, so an older abort can never be the latest event here.
         event = self._context.latest("events") or {}
         if event.get("name") in ("abort", "fault"):
             raise AlignmentInterrupted(f"Alignment interrupted ({event['name']}).")
 
-    def _move(self, x: float, y: float) -> None:
-        self._robot.MoveLin(x, y, *self._z_and_orientation)
+    def _checked(self, pose: Sequence[float]) -> Pose6:
+        """``pose`` as six floats, or AlignmentRangeError if it leaves the window."""
+        try:
+            target = tuple(float(v) for v in pose)
+        except (TypeError, ValueError):
+            raise AlignmentRangeError(f"Not a pose: {pose!r}") from None
+        if len(target) != 6 or not all(math.isfinite(v) for v in target):
+            raise AlignmentRangeError(f"Not a valid pose: {pose!r}")
+        names = ("X", "Y", "Z", "alpha", "beta", "gamma")
+        for i, name in enumerate(names):
+            if i < 3:
+                offset, limit, unit = target[i] - self.start[i], self._settings.range_mm, "mm"
+            else:
+                offset, limit, unit = _wrap_deg(target[i] - self.start[i]), self._settings.range_deg, "°"
+            # The epsilon absorbs float noise on poses computed from the start.
+            if abs(offset) > limit + 1e-9:
+                raise AlignmentRangeError(
+                    f"{name} {target[i]:.4f} is {offset:+.4f} {unit} from the start: "
+                    f"outside the ±{limit:g} {unit} window. Pose: {target}"
+                )
+        return target
+
+    def _move(self, target: Pose6) -> None:
+        self._robot.MoveLin(*target)
         self._robot.WaitIdle()
-        self._xy = (x, y)
         time.sleep(self._settings.settle_s)
 
-    def _read(self) -> float:
-        # A direct reading on this (the task) thread: it is taken after the
-        # move has settled. The custom view's sampler shares the meter, and
-        # the driver serializes the two.
+    def _read(self, kind: Optional[str]) -> Sample:
+        # A direct reading on this (the task) thread. The custom view's sampler
+        # shares the meter, and the driver serializes the two.
         value = self._meter.read_power()
         if value is None:
             raise AlignmentError("The power meter returned no reading: alignment needs the real power meter.")
-        watts = float(value)
-        x, y = self._xy
-        self.samples.append((x, y, watts))
-        self._context.publish("align_sample", [x, y, watts])
-        # NaN never compares greater, so an invalid reading is never the best.
-        if self.best is None or watts > self.best[2]:
-            self.best = (x, y, watts)
-        return watts
+        sample = Sample(self._actual_pose(), float(value), kind)
+        self.samples.append(sample)
+        self._context.publish("align_sample", [*sample.pose, sample.power_w, kind])
+        # NaN never compares greater, so an invalid reading never stays the best.
+        if self.best is None or math.isnan(self.best.power_w) or sample.power_w > self.best.power_w:
+            self.best = sample
+        return sample
+
+    def _actual_pose(self) -> Pose6:
+        return self._pose_from(self._robot.GetRtCartPos(synchronous_update=True))
+
+    @staticmethod
+    def _pose_from(value: Any) -> Pose6:
+        try:
+            pose = tuple(float(v) for v in value[:6])
+        except (TypeError, ValueError):
+            pose = ()
+        if len(pose) != 6:
+            raise AlignmentError(f"The robot reported no position ({value!r}): alignment needs the real robot.")
+        return pose
+
+    def _apply_motion(self, acc, lin_vel, ang_vel, blending) -> None:
+        robot = self._robot
+        if acc is not None:
+            robot.SetCartAcc(acc)
+        if lin_vel is not None:
+            robot.SetCartLinVel(lin_vel)
+        if ang_vel is not None:
+            robot.SetCartAngVel(ang_vel)
+        if blending is not None:
+            robot.SetBlending(blending)
+
+    def _clear_motion(self) -> None:
+        """Stop and empty the motion queue, then accept new moves. Never raises."""
+        try:
+            self._robot.ClearMotion()
+            self._robot.ResumeMotion()
+        except Exception:
+            pass
+
+    def _next_checkpoint(self) -> int:
+        checkpoint = next(self._checkpoints, None)
+        if checkpoint is None:
+            self._checkpoints = iter(CHECKPOINT_IDS)
+            checkpoint = next(self._checkpoints)
+        return checkpoint
+
+    def _set_meter(self, name: str, value: Any) -> None:
+        if name not in self._meter_originals:
+            self._meter_originals[name] = getattr(self._meter, name)
+        setattr(self._meter, name, value)
+
+    def _restore_meter(self) -> None:
+        """Put back the meter settings the algorithm changed. Never raises."""
+        for name, value in self._meter_originals.items():
+            try:
+                setattr(self._meter, name, value)
+            except Exception:
+                pass
 
     def _return_to_best(self) -> None:
-        if self.best is not None and (self.best[0], self.best[1]) != self._xy:
-            self._move(self.best[0], self.best[1])
+        """Slowly back to the best pose read (not window-checked: the robot was there)."""
+        if self.best is None:
+            return
+        self._apply_motion(**RETURN_MOTION)
+        self._move(self._pose_from(self.best.pose))
 
 
 #: The algorithm's signature, see algorithm.py.
@@ -196,17 +363,15 @@ Algorithm = Callable[[AlignmentIO, AlignmentSettings], None]
 
 def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
                   align: Algorithm) -> AlignmentResult:
-    """Run ``align`` from the robot's current position, then judge the result.
+    """Run ``align`` from the robot's current pose, then judge the result.
 
     Brackets the run with ``align_start`` / ``align_end`` events and publishes
-    an ``align_result`` summary (with every point) for the custom view.
+    an ``align_result`` summary (with the points) for the custom view.
     """
     settings = AlignmentSettings.from_context(context)
     io = AlignmentIO(robot, meter, context, settings)
-    x0, y0 = io.start
-    r = settings.range_mm
-    window = {"x": [x0 - r, x0 + r], "y": [y0 - r, y0 + r]}
-    context.mark("align_start", fiber=fiber, threshold_w=settings.threshold_w, **window)
+    context.mark("align_start", fiber=fiber, threshold_w=settings.threshold_w, start=list(io.start),
+                 range_mm=settings.range_mm, range_deg=settings.range_deg, plot_axes=list(PLOT_AXES))
 
     timed_out = False
     try:
@@ -218,35 +383,44 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
             io._return_to_best()
         # The verdict: a fresh reading where the algorithm left the fiber.
         io._check_interrupted()
-        power_w = io._read()
+        final = io._read(None)
     except Exception as e:
         # An abort lands here too, from WaitIdle() or as AlignmentInterrupted.
         # Close the run on the view, then let the task runner handle it.
         context.mark("align_end", fiber=fiber, passed=False, error=f"{type(e).__name__}: {e}")
         raise
+    finally:
+        io._restore_meter()
 
-    x, y = io.position()
     result = AlignmentResult(
         fiber=fiber,
-        passed=power_w >= settings.threshold_w,
-        power_w=power_w,
-        x=x,
-        y=y,
+        passed=final.power_w >= settings.threshold_w,
+        power_w=final.power_w,
+        pose=final.pose,
         reads=len(io.samples),
         duration_s=io.elapsed_s(),
         timed_out=timed_out,
     )
-    context.mark("align_end", fiber=fiber, passed=result.passed, power_w=power_w)
+    context.mark("align_end", fiber=fiber, passed=result.passed, power_w=final.power_w)
+    kept = io.samples[::max(1, math.ceil(len(io.samples) / RESULT_POINTS_MAX))]
+    if kept[-1] is not final:
+        kept.append(final)
     context.publish("align_result", {
         "fiber": fiber,
         "passed": result.passed,
-        "power_w": power_w,
+        "power_w": final.power_w,
         "threshold_w": settings.threshold_w,
-        "final": [x, y],
+        "start": list(io.start),
+        "final": list(final.pose),
+        "plot_axes": list(PLOT_AXES),
         "reads": result.reads,
         "duration_s": round(result.duration_s, 2),
         "timed_out": timed_out,
-        "points": [list(sample) for sample in io.samples],
-        **window,
+        "points": [[*s.pose, s.power_w, s.kind] for s in kept],
     })
     return result
+
+
+def _wrap_deg(angle: float) -> float:
+    """``angle`` brought into [-180, 180)."""
+    return (angle + 180.0) % 360.0 - 180.0

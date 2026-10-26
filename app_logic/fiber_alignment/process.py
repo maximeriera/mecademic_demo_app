@@ -11,6 +11,9 @@ step tested by hand is exactly the step production runs. Each function:
 * keeps the ``held_fiber`` and ``at_alignment`` variables (context.yaml) up to
   date. They are how the cell knows what it holds and where it is, across steps
   and app restarts.
+
+Absolute moves are robot programs (see poses.py); only the alignment search
+moves the robot from Python.
 """
 
 from __future__ import annotations
@@ -23,11 +26,11 @@ from devices import Device
 
 from . import algorithm, gripper, poses
 from .alignment import AlignmentResult, run_alignment
-from .cell import ROBOT, ProcessError, power_meter, prepare_robot
+from .cell import ROBOT, ProcessError, power_meter, prepare_robot, run_program
 
 
 def pick_fiber(devices: Dict[str, Device], context: AppContext, number: int) -> None:
-    """Take fiber ``number`` from its slot and lift it to the slot's approach pose."""
+    """Take fiber ``number`` from its slot: ``fiber<N>_in``, close the gripper, ``fiber<N>_out``."""
     with context.step("Pick fiber"):
         held = context.get_variable("held_fiber", 0)
         if held:
@@ -40,19 +43,15 @@ def pick_fiber(devices: Dict[str, Device], context: AppContext, number: int) -> 
         robot = prepare_robot(devices, context)
 
         gripper.open_gripper(devices, context)
-        robot.MovePose(*slot.approach)
-        robot.WaitIdle()
-        robot.MoveLin(*slot.pick)
-        robot.WaitIdle()
+        run_program(devices, robot, slot.program_in)
         with context.step("Close gripper"):
             gripper.close_gripper(devices, context)
         context.set_variable("held_fiber", slot.number)
-        robot.MoveLin(*slot.approach)
-        robot.WaitIdle()
+        run_program(devices, robot, slot.program_out)
 
 
 def move_to_alignment_start(devices: Dict[str, Device], context: AppContext) -> None:
-    """Bring the held fiber in front of the fixed fiber, at the alignment start pose."""
+    """Bring the held fiber in front of the fixed fiber: the ``align_start`` program."""
     with context.step("Move to alignment start"):
         if context.get_variable("at_alignment", False):
             raise ProcessError("The robot is already at the alignment station: Retract first.")
@@ -60,19 +59,17 @@ def move_to_alignment_start(devices: Dict[str, Device], context: AppContext) -> 
             devices[ROBOT].logger.warning("Moving to the alignment start with no fiber in the gripper.")
         robot = prepare_robot(devices, context)
 
-        robot.MovePose(*poses.ALIGN_APPROACH)
-        robot.WaitIdle()
-        # Set before entering: if this move is interrupted, HOME still backs out first.
+        # Set before the program: if it is interrupted near the fixed fiber,
+        # HOME still backs out with align_retract first.
         context.set_variable("at_alignment", True)
-        robot.MoveLin(*poses.ALIGN_START)
-        robot.WaitIdle()
+        run_program(devices, robot, poses.ALIGN_START_PROGRAM)
 
 
 def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentResult:
-    """Run the alignment algorithm from the current position, then judge it against the threshold.
+    """Run the alignment algorithm from the current pose, then judge it against the threshold.
 
-    The search stays within ``align_range_um`` of where it starts, so it is
-    safe anywhere. It only makes sense at the alignment station, with a fiber.
+    The search stays within ``align_range_um`` / ``align_range_deg`` of where it
+    starts. It only makes sense at the alignment station, with a fiber.
     """
     with context.step("Align fiber"):
         logger = devices[ROBOT].logger
@@ -93,19 +90,18 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
 
 
 def retract_from_alignment(devices: Dict[str, Device], context: AppContext) -> None:
-    """Back the fiber away from the fixed fiber, along its axis, to the alignment approach pose."""
+    """Back the fiber out of the alignment station: the ``align_retract`` program."""
     with context.step("Retract from alignment"):
         if not context.get_variable("at_alignment", False):
             raise ProcessError("The robot is not at the alignment station: nothing to retract from.")
         robot = prepare_robot(devices, context)
 
-        robot.MoveLin(*poses.ALIGN_APPROACH)
-        robot.WaitIdle()
+        run_program(devices, robot, poses.ALIGN_RETRACT_PROGRAM)
         context.set_variable("at_alignment", False)
 
 
 def place_fiber(devices: Dict[str, Device], context: AppContext) -> None:
-    """Put the held fiber back into the slot it was picked from."""
+    """Put the held fiber back into its own slot: ``fiber<N>_in``, open the gripper, ``fiber<N>_out``."""
     with context.step("Place fiber"):
         held = context.get_variable("held_fiber", 0)
         if not held:
@@ -115,15 +111,11 @@ def place_fiber(devices: Dict[str, Device], context: AppContext) -> None:
         slot = poses.fiber_slot(held)
         robot = prepare_robot(devices, context)
 
-        robot.MovePose(*slot.approach)
-        robot.WaitIdle()
-        robot.MoveLin(*slot.pick)
-        robot.WaitIdle()
+        run_program(devices, robot, slot.program_in)
         with context.step("Open gripper"):
             gripper.open_gripper(devices, context)
         context.set_variable("held_fiber", 0)
-        robot.MoveLin(*slot.approach)
-        robot.WaitIdle()
+        run_program(devices, robot, slot.program_out)
 
 
 def run_cycle(devices: Dict[str, Device], context: AppContext, number: int) -> AlignmentResult:

@@ -17,6 +17,11 @@ ROBOT = "meca_robot"
 GRIPPER = "fiber_gripper"
 POWER_METER = "power_meter"
 
+#: Cartesian acceleration (%) and angular velocity (°/s) restored before every
+#: step: the alignment algorithm changes both. Mecademic's defaults.
+CART_ACC_PCT = 50.0
+CART_ANG_VEL_DEG_S = 45.0
+
 
 class ProcessError(RuntimeError):
     """A process step was asked for in a state where it is unsafe or meaningless.
@@ -45,10 +50,23 @@ def prepare_robot(devices: Dict[str, Device], context: AppContext) -> Any:
     robot.SetTrf(*poses.TOOL_TRF)
     robot.SetJointVel(context.get_param("joint_vel_pct", 20.0))
     robot.SetCartLinVel(context.get_param("lin_vel_mm_s", 10.0))
-    # No corner cutting: every move must reach its pose exactly, e.g. the
-    # approach pose above a slot before the straight descent onto it.
+    robot.SetCartAcc(CART_ACC_PCT)
+    robot.SetCartAngVel(CART_ANG_VEL_DEG_S)
+    # No corner cutting: every move must reach its pose exactly, e.g. a
+    # straight descent onto a slot.
     robot.SetBlending(0)
     return robot
+
+
+def run_program(devices: Dict[str, Device], robot: Any, name: str) -> None:
+    """Run a program stored on the robot and wait until it has finished.
+
+    ``robot`` is the API returned by :func:`prepare_robot`. ABORT interrupts
+    the wait, like any WaitIdle().
+    """
+    devices[ROBOT].logger.info(f"[{ROBOT}] Running robot program '{name}'")
+    robot.StartProgram(name)
+    robot.WaitIdle()
 
 
 def power_meter(devices: Dict[str, Device]) -> Any:

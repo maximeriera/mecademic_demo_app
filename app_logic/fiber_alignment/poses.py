@@ -1,24 +1,39 @@
-"""Robot poses of the fiber alignment cell: the data to teach on the real robot.
+"""Where the robot goes: programs stored on the robot, and the few poses Python still sends.
 
-Every pose is in the robot's world reference frame (WRF), in mm and degrees,
-exactly as the Mecademic web portal shows it, and assumes the tool reference
-frame ``TOOL_TRF`` below.
+Absolute moves are robot programs, taught and edited in the Mecademic web portal
+and started with ``StartProgram``. Python only knows their names (below):
 
-ALL VALUES ARE PLACEHOLDERS. Teach each pose on the robot, paste it here, then
-set ``POSES_TAUGHT = True``. Until then every robot motion is refused (see
-``cell.prepare_robot``), so made-up coordinates are never sent to the arm.
+``fiber<N>_in``
+    From any safe pose down to slot N's grip pose. Never drives the gripper:
+    Python closes it there on Pick and opens it there on Place.
+``fiber<N>_out``
+    From slot N's grip pose back to a safe pose. Pick and Place share both
+    programs, so a fiber always goes back exactly where it was taken from.
+``align_start``
+    From a safe pose to the alignment start: the held fiber faces the fixed
+    one with a small gap, with the TCP at the fiber tip.
+``align_retract``
+    From the aligned pose, anywhere inside the alignment window around the
+    start, straight back out along the fiber axis to a safe pose.
 
-Geometry assumed by the process: fibers stand vertical (tool pointing down).
-They are picked from above their slot, and the two fibers face each other along
-the robot's Z axis, so the alignment searches in X/Y.
+Rules for the programs:
+
+* Teach them with ``TOOL_TRF`` active. Python sets it before every step, and
+  the alignment pivots about it.
+* They run with the speeds Python sets (``joint_vel_pct``, ``lin_vel_mm_s``)
+  unless they set their own.
+
+Python still sends ``TOOL_TRF`` and the HOME/SHIPMENT joint positions. Until
+``POSES_TAUGHT`` is True, every robot motion is refused (see
+``cell.prepare_robot``).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Iterator, Tuple
 
-#: Flip to True once every pose below has been taught on the real cell.
+#: Flip to True once TOOL_TRF and the joint positions below are taught.
 POSES_TAUGHT = True
 
 
@@ -34,12 +49,8 @@ class Pose:
     gamma: float
 
     def __iter__(self) -> Iterator[float]:
-        """Unpack as the six arguments of MovePose / MoveLin: ``robot.MovePose(*pose)``."""
+        """Unpack as six arguments: ``robot.SetTrf(*pose)``."""
         return iter((self.x, self.y, self.z, self.alpha, self.beta, self.gamma))
-
-    def offset(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0) -> "Pose":
-        """The same pose, translated in the WRF."""
-        return replace(self, x=self.x + dx, y=self.y + dy, z=self.z + dz)
 
 
 @dataclass(frozen=True)
@@ -47,20 +58,15 @@ class FiberSlot:
     """One holder of the fiber rack. ``number`` is what the operator sees (1..N)."""
 
     number: int
-    #: The gripper closes here on pick and opens here on place, so a fiber
-    #: always goes back exactly where it was taken from.
-    pick: Pose
-
-    @property
-    def approach(self) -> Pose:
-        """Clearance pose straight above ``pick``."""
-        return self.pick.offset(dz=SLOT_APPROACH_DZ_MM)
+    #: Robot program: safe pose → grip pose of this slot.
+    program_in: str
+    #: Robot program: grip pose of this slot → safe pose.
+    program_out: str
 
 
 # --- Tool --------------------------------------------------------------------
 
-#: Tool reference frame (SetTrf), ideally with the TCP at the tip of the held
-#: fiber. Teach every pose below with this same TRF.
+#: Tool reference frame (SetTrf), with the TCP at the tip of the held fiber.
 TOOL_TRF = Pose(0.0, 10.70, 9.0, 0.0, 0.0, 0.0)  # TODO teach
 
 # --- Joint positions -----------------------------------------------------------
@@ -68,28 +74,19 @@ TOOL_TRF = Pose(0.0, 10.70, 9.0, 0.0, 0.0, 0.0)  # TODO teach
 HOME_JOINTS: Tuple[float, ...] = (0.0, -20.0, 20.0, 0.0, 30.0, 0.0)  # TODO teach
 SHIPMENT_JOINTS: Tuple[float, ...] = (0.0, -60.0, 60.0, 0.0, 90.0, 0.0)  # TODO teach
 
-# --- Fiber rack ------------------------------------------------------------------
-
-#: Height of each slot's approach pose above its pick pose.
-SLOT_APPROACH_DZ_MM = 20.0
+# --- Robot programs -------------------------------------------------------------
 
 #: One entry per fiber holder. Add or remove entries to change N; numbers must
 #: run 1..N in order.
 FIBER_SLOTS: Tuple[FiberSlot, ...] = (
-    FiberSlot(1, pick=Pose(170.0, -60.0, 40.0, 180.0, 0.0, 0.0)),  # TODO teach
-    FiberSlot(2, pick=Pose(170.0, -40.0, 40.0, 180.0, 0.0, 0.0)),  # TODO teach
-    FiberSlot(3, pick=Pose(170.0, -20.0, 40.0, 180.0, 0.0, 0.0)),  # TODO teach
-    FiberSlot(4, pick=Pose(170.0, 0.0, 40.0, 180.0, 0.0, 0.0)),  # TODO teach
+    FiberSlot(1, "fiber1_in", "fiber1_out"),
+    FiberSlot(2, "fiber2_in", "fiber2_out"),
+    FiberSlot(3, "fiber3_in", "fiber3_out"),
+    FiberSlot(4, "fiber4_in", "fiber4_out"),
 )
 
-# --- Alignment station: the fixed fiber, connected to the power meter -------------
-
-#: Where the search starts: the held fiber faces the fixed one with a small gap.
-ALIGN_START = Pose(220.0, 60.0, 50.0, 180.0, 0.0, 0.0)  # TODO teach
-#: On the fixed fiber's axis, backed off from ALIGN_START. The fiber enters and
-#: leaves the station in a straight line (MoveLin) between these two poses, so
-#: the tips never move sideways while they are close.
-ALIGN_APPROACH = ALIGN_START.offset(dz=10.0)  # TODO teach, or keep as an offset
+ALIGN_START_PROGRAM = "align_start"
+ALIGN_RETRACT_PROGRAM = "align_retract"
 
 
 if [slot.number for slot in FIBER_SLOTS] != list(range(1, len(FIBER_SLOTS) + 1)):

@@ -1,5 +1,5 @@
 // Fiber alignment view: live power against the threshold, and the power read
-// at each robot X/Y during the latest alignment. Reads the hub through
+// at each robot X/Z offset during the latest alignment. Reads the hub through
 // DataHubClient, the threshold and the cell state from /api/context, and draws
 // the graph with Plot3D (plot3d.js). No chart library on purpose (no CDN on a
 // show floor); vendor one into this folder if a demo needs more.
@@ -150,10 +150,32 @@
         return Object.assign(run, summary, { points, status: 'done' });
     }
 
+    // A sample is [x, y, z, alpha, beta, gamma, power_w, kind] (see alignment.py).
+    const POWER = 6;
+    const KIND = 7;
+    const AXIS_NAMES = ['X', 'Y', 'Z', 'α', 'β', 'γ'];
+    // Narrowest plotted span (µm), so a few microns of motion do not fill the plot.
+    const MIN_SPAN_UM = 10;
+
+    // [min, max] of `values`, padded by 10 % and at least MIN_SPAN_UM wide.
+    function span(values) {
+        if (!values.length) return [-MIN_SPAN_UM / 2, MIN_SPAN_UM / 2];
+        let lo = Math.min(...values);
+        let hi = Math.max(...values);
+        const pad = Math.max((hi - lo) * 0.1, (MIN_SPAN_UM - (hi - lo)) / 2, 0);
+        return [lo - pad, hi + pad];
+    }
+
     function renderAlignment(state) {
         const run = latestAlignment(state);
-        if (!run || !Array.isArray(run.x) || !Array.isArray(run.y)) return;
-        const points = (run.points || []).filter(p => Array.isArray(p) && isNum(p[2]));
+        if (!run || !Array.isArray(run.start)) return;
+        const [ax, ay] = Array.isArray(run.plot_axes) ? run.plot_axes : [0, 2];
+        const readings = (run.points || []).filter(p => Array.isArray(p) && isNum(p[POWER]));
+        // Offsets from the start, in µm. Rotations barely move X/Z: their
+        // readings would pile up on one spot, so they are left out.
+        const points = readings
+            .filter(p => p[KIND] !== 'ang')
+            .map(p => [(p[ax] - run.start[ax]) * 1000, (p[ay] - run.start[ay]) * 1000, p[POWER]]);
         const values = points.map(p => p[2]);
         const threshold = isNum(run.threshold_w) ? run.threshold_w : null;
         const top = Math.max(threshold || 0, ...values) || 1e-3;
@@ -161,11 +183,15 @@
         const unit = unitFor(top);
 
         plotThreshold = threshold !== null ? threshold / unit.scale : null;
-        plot.setLabels({ x: 'X (mm)', y: 'Y (mm)', z: `Power (${unit.name})` });
-        plot.setAxes({ x: run.x, y: run.y, z: [bottom / unit.scale, (top / unit.scale) * 1.1] });
+        plot.setLabels({ x: `Δ${AXIS_NAMES[ax]} (µm)`, y: `Δ${AXIS_NAMES[ay]} (µm)`, z: `Power (${unit.name})` });
+        plot.setAxes({
+            x: span(points.map(p => p[0])),
+            y: span(points.map(p => p[1])),
+            z: [bottom / unit.scale, (top / unit.scale) * 1.1],
+        });
         plot.setPoints(points.map(([x, y, w]) => [x, y, w / unit.scale]));
         plot.setMessage(run.status === 'running' ? 'Alignment started, waiting for the first reading…' : 'No reading recorded.');
-        renderCaption(run, values);
+        renderCaption(run, readings.map(p => p[POWER]));
     }
 
     function renderCaption(run, values) {

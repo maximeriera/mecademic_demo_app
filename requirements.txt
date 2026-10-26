@@ -26,7 +26,10 @@ pyusb==1.3.1             # USB transport for pyvisa-py; needs the libusb system 
 
 # --- GigE Vision camera ---
 harvesters==1.4.3        # GenTL / GenICam image acquisition
-numpy==2.3.5             # frame buffers
+numpy==2.3.5             # frame buffers; also the fiber alignment algorithm
+
+# --- Fiber alignment workspace (app_logic/fiber_alignment) ---
+scipy==1.18.1            # rotations / Euler angles in the alignment algorithm's frame math
 
 # --- Planar motor system ---
 # pmclib is not published on PyPI; a wheel is bundled in ressources/.

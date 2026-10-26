@@ -6,16 +6,32 @@ power meter and aligns it until the power reaches a threshold. Then it backs
 out and puts the fiber back where it was. Each PROD cycle handles one fiber and
 works through the rack in order.
 
-| # | Step (as shown in the UI) | Devices |
+| # | Step (as shown in the UI) | How |
 |---|---|---|
-| 1 | Pick fiber | robot + gripper |
-| 2 | Move to alignment start | robot |
-| 3 | Align fiber | robot + power meter |
-| 4 | Retract from alignment | robot |
-| 5 | Place fiber (into the slot it was picked from) | robot + gripper |
+| 1 | Pick fiber | robot program `fiber<N>_in`, gripper closes, `fiber<N>_out` |
+| 2 | Move to alignment start | robot program `align_start` |
+| 3 | Align fiber | colleague's algorithm: robot moves from Python + power meter |
+| 4 | Retract from alignment | robot program `align_retract` |
+| 5 | Place fiber (into the slot it was picked from) | robot program `fiber<N>_in`, gripper opens, `fiber<N>_out` |
 
 A fiber that does not reach the threshold is still put back and counted in
 `failed_count`, and the loop moves on to the next fiber.
+
+## Robot programs
+
+Every absolute move is a program stored on the robot (Mecademic web portal),
+started with `StartProgram`. Their names are in `fiber_alignment/poses.py`.
+
+| Program | From → to |
+|---|---|
+| `fiber1_in` … `fiber4_in` | any safe pose → the slot's grip pose. Never drives the gripper |
+| `fiber1_out` … `fiber4_out` | the slot's grip pose → a safe pose |
+| `align_start` | a safe pose → the alignment start: fibers facing, small gap |
+| `align_retract` | the aligned pose (anywhere inside the alignment window) → straight back out along the fiber axis → a safe pose |
+
+Teach them with `TOOL_TRF` (`poses.py`) active: Python sets it before every
+step, and the alignment rotates about it, so its TCP must be the fiber tip.
+They run at the speeds set in the Variables tab unless they set their own.
 
 ## Files
 
@@ -27,21 +43,23 @@ A fiber that does not reach the threshold is still put back and counted in
 | `home.py`, `shipment.py` | Back out of the alignment station if needed, then a joint position |
 | `calib.py` | Nothing to calibrate yet |
 | `manual_actions.py` | One Manual tab button per step, plus gripper open/close and a full cycle |
-| `fiber_alignment/poses.py` | **Data**: fiber slots, alignment station, home/shipment, tool frame |
-| `fiber_alignment/cell.py` | Device names, `ProcessError`, robot setup (frame, speeds) |
+| `fiber_alignment/poses.py` | **Data**: robot program names, tool frame, home/shipment joints |
+| `fiber_alignment/cell.py` | Device names, `ProcessError`, robot setup (frame, speeds), `run_program()` |
 | `fiber_alignment/gripper.py` | SmarAct gripper: open/close are moves of its MCS2 jaw channel |
 | `fiber_alignment/process.py` | The five steps, shared by PROD and the Manual tab |
-| `fiber_alignment/alignment.py` | Contract with the alignment algorithm: moves, readings, timeout, verdict |
-| `fiber_alignment/algorithm.py` | The algorithm: **placeholder** spiral search, to be replaced |
-| `custom_view/` | `/view/`: live power vs threshold (green/red), and the power-vs-X/Y graph of the alignment |
+| `fiber_alignment/alignment.py` | Contract with the algorithm: 3D moves, scans, readings, window, timeout, verdict |
+| `fiber_alignment/algorithm.py` | The colleague's algorithm (spirals, axial search, gradient circles), ported |
+| `fiber_alignment/frames.py` | His frame math (poses ↔ 4×4 matrices, plane fit) |
+| `custom_view/` | `/view/`: live power vs threshold (green/red), and the power-vs-X/Z graph of the alignment |
 
 ## To do before running on the cell
 
-- [ ] Teach every pose in `fiber_alignment/poses.py` (and `TOOL_TRF`), then set `POSES_TAUGHT = True`. Until then, every robot move is refused.
-- [ ] `config.yaml`: the robot's IP address, and the power meter's `wavelength` (the source's).
-- [ ] `context.yaml`: `power_threshold_mw`, from the peak power measured on the setup.
+- [ ] Write the robot programs above in the web portal, taught with `TOOL_TRF` active.
+- [ ] Teach `TOOL_TRF` and the home/shipment joints in `fiber_alignment/poses.py`, then set `POSES_TAUGHT = True`. Until then, every robot move is refused.
+- [ ] `config.yaml`: the robot's IP address. The power meter's `wavelength` (1557 nm, from the colleague's script) should match the source.
+- [ ] `context.yaml`: `power_threshold_mw`, from the peak power measured on the setup, and the four phase thresholds (`spiral_cart_threshold_mw` … `gradient_threshold_mw`) from the robot variables of the colleague's `fiber_variables` program.
+- [ ] Check `align_range_um` / `align_range_deg`: any pose the algorithm asks for beyond them is refused, which faults the alignment.
 - [ ] Gripper (SmarAct MCS2 at 192.168.0.20): check its jaw channel and `velocity_mm_s` in `config.yaml`, then teach `gripper_open_mm` / `gripper_closed_mm` (Variables tab). The closed position is where the jaws hold the fiber, not beyond it.
-- [ ] Alignment: plug the colleague's algorithm into `fiber_alignment/algorithm.py`. Its docstring gives the contract.
 
 ## Testing step by step
 
