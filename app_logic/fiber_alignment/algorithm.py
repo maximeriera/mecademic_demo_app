@@ -1,102 +1,189 @@
-"""Fiber alignment algorithm, ported from the colleague's alignment_demo.py.
+"""Fiber alignment algorithm: find the light, centre on it, square the angle, climb to the peak.
 
-Same sequence, constants and decisions as his script. Only the I/O changed:
+Built for a demo cell that may start cold: the fiber can start where no light
+reaches the meter, as long as the optimum is within ``acquire_radius_um``
+laterally. It never moves the fiber along its axis: the gap stays the one the
+``align_start`` program taught.
 
-* the robot and the power meter are reached through ``io`` (alignment.py), which
-  keeps every pose inside the alignment window and stops on ABORT;
-* his DataFrames are lists of :class:`~alignment.Sample`, his robot-variable
-  thresholds are params (context.yaml), and his matplotlib graphs are the
-  custom view.
+``align`` runs four phases, each inside ``with io.phase(name):`` and plotted by
+the custom view as PHASE_VIEWS declares:
 
-``align`` runs:
+1. Acquire: the noise floor at the start, then, unless light already reaches
+   the meter, an outward spiral in the lateral plane until it does, and the
+   move to its best reading.
+2. Center: two-way scans across the light along x then z, each fitted with a
+   Gaussian; the fiber moves to the fitted centre until it no longer shifts.
+   The two directions also measure what is left of the reading/pose lag.
+3. Angle: for rx then rz, a few tilts around the current one, re-centred
+   laterally at each, so that a TCP off the fiber tip (which turns a tilt into
+   a shift) does not fool it. A parabola through the log of the peak power
+   against the tilt gives the best tilt.
+4. Peak: a 3×3 pattern of readings at rest around the centre, a quadratic fit
+   of the log power and a Newton step to its top, until the steps are below
+   the robot's resolution; then to the best reading taken at rest.
 
-1. a cartesian spiral (X/Z) then an angular spiral (alpha/gamma), each stopping
-   once past its threshold with the power no longer rising, then settling on
-   its best point;
-2. if still below the axial threshold, 1-D scans along four axes (two
-   rotations, two translations) in a frame turned 15° further every four scans,
-   shrinking as they go;
-3. a gradient ascent: small circles, alternately cartesian and angular, a
-   plane fitted to their readings, and a step up the slope.
+Positions are offsets from the start in the start's tool frame (see
+``io.local`` / ``io.pose_at``): x and z lateral (µm), y along the fiber (never
+moved), rx and rz rotations about the tool axes (degrees). Scan speeds come
+from the measured time between readings (``io.sample_period_s``), so readings
+are as dense as intended whatever the meter and the network do.
 
 The contract with the cell (see alignment.py): move only through ``io``, never
-catch exceptions broadly, leave the fiber at the best pose found. To keep the
-custom view informed, run each phase inside ``with io.phase(name):`` (names
-from ``PHASES``) and publish what the view draws for it with ``io.publish()``:
-"profile" for each axial scan, "gradient" for each gradient circle.
+catch exceptions broadly, leave the fiber at the best pose found. The custom
+view plots the readings and what is published here with ``io.publish()``:
+"acquire", "profile" and "peak" (their fields: custom_view/__init__.py).
 """
 
-from typing import List, Optional, Tuple
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import frames
-from .alignment import AlignmentIO, AlignmentSettings, Sample
+from . import fit
+from .alignment import AlignmentError, AlignmentIO, AlignmentNoSignal, AlignmentSettings, Sample
+from .frames import Pose6
 
-#: The phases, in order: the custom view lists them and finds each one's plot by
-#: its name (custom_view/view.js), so rename them there too.
-PHASES = ("Cartesian spiral", "Angular spiral", "Axial search", "Gradient ascent")
+#: The phases, in order. The custom view lists them and plots each as PHASE_VIEWS says.
+PHASES = ("Acquire", "Center", "Angle", "Peak")
 
-# --- Spiral search ------------------------------------------------------------
-# generate_archimedean_spiral(max_radius, spiral_pitch, point_spacing): mm for
-# the cartesian spiral, degrees for the angular one.
-CART_SPIRAL = (0.5, 0.1, 0.05)
-ANG_SPIRAL = (3.0, 0.5, 0.05)
-SPIRAL_MOTION = {"acc": 100, "lin_vel": 5000, "ang_vel": 1000, "blending": 50}
-#: Slow move to the best point of a scan.
-SETTLE_MOTION = {"acc": 25, "lin_vel": 1, "ang_vel": 5}
+#: How the custom view plots each phase: "map" is a 3D landscape of the power
+#: over two axes, "profiles" the latest 1-D scan per axis (one plot per slot),
+#: "peak" the pattern readings and the steps of the peak search. Axes are
+#: io.local's: x, y, z (µm), rx, ry, rz (°).
+PHASE_VIEWS = {
+    "Acquire": {"type": "map", "axes": ["x", "z"]},
+    "Center": {"type": "profiles", "slots": ["x", "z"]},
+    "Angle": {"type": "profiles", "slots": ["rx", "rz", "x", "z"]},
+    "Peak": {"type": "peak", "axes": ["x", "z"]},
+}
 
-# --- Axial search ---------------------------------------------------------------
-AXIAL_LIMIT_DEG = 2.0
-AXIAL_LIMIT_MM = 0.5
-AXIAL_ITERATIONS = 30
-AXIAL_MOTION = {"acc": 100, "lin_vel": 20, "ang_vel": 20, "blending": 0}
-#: Every four scans: limits and speeds × AXIAL_DECAY, frame turned AXIAL_FRAME_STEP_DEG about Y.
-AXIAL_DECAY = 0.8
-AXIAL_FRAME_STEP_DEG = 15.0
-#: Re-scan, slower and narrower, when the reading at the best pose falls this far below the scan's best.
-AXIAL_DISCREPANCY = 0.10
-AXIAL_RESCAN_SCALE = 0.2
-AXIAL_RESCAN_MOTION = {"acc": 2, "lin_vel": 0.5, "ang_vel": 0.5}
-AXIAL_AFTER_RESCAN_MOTION = {"acc": 10, "lin_vel": 2, "ang_vel": 2}
+# --- Meter ---------------------------------------------------------------------------
+#: Samples averaged per reading (about 3 ms each on a PM100x): while scanning, and at rest.
+SCAN_AVERAGING = 1
+STILL_AVERAGING = 10
+#: Fixed meter range of the scans, × the source power: no range switch mid-scan.
+SCAN_RANGE = 1.2
+#: Highest range tried when light overranges it (W).
+MAX_RANGE_W = 1.0
 
-# --- Gradient circles --------------------------------------------------------------
-CIRCLE_REPS = 16
-CIRCLE_STEP = 0.03
-CIRCLE_RESOLUTION = 18
-#: mm for cartesian circles, degrees for angular ones.
-CIRCLE_RADIUS = 0.03
-CIRCLE_MOTION = {"acc": 100, "lin_vel": 5000, "ang_vel": 1000, "blending": 50}
-#: Radius and step × CIRCLE_DECAY once a circle ends above the gradient threshold.
-CIRCLE_DECAY = 0.8
+# --- Motion ----------------------------------------------------------------------------
+#: Point-to-point moves: to a scan's start, to a pattern point, to a tilt.
+MOVE_MOTION = {"acc": 50, "lin_vel": 2.0, "ang_vel": 5.0, "blending": 0}
+#: Slowest scan speed (mm/s).
+MIN_SCAN_SPEED = 0.01
 
-# --- Power meter averaging: samples of about 3 ms on a PM100x ----------------------
-SEARCH_AVERAGING = 1     # his 1 ms average time
-GRADIENT_AVERAGING = 3   # his 10 ms
+# --- Acquire -----------------------------------------------------------------------------
+#: Readings at the start that give the noise floor.
+NOISE_READS = 20
+#: Light is a reading this many noise standard deviations above the floor, and
+#: at least signal_detect_uw.
+NOISE_SIGMAS = 8.0
+#: A start already reading this fraction of the source is close: no spiral.
+WARM_FRACTION = 0.01
+#: Readings every pitch × SPIRAL_SPACING along the spiral; its path vertices at most this far apart (µm).
+SPIRAL_SPACING = 0.5
+SPIRAL_VERTEX_UM = 10.0
+#: Moves queued per scan: the spiral runs as consecutive scans.
+SPIRAL_CHUNK = 400
+#: The spiral stops once the power falls under this fraction of the best since the light was found.
+PAST_PEAK = 0.5
+#: Room (mm) the window must leave around the spiral, for the centring scans.
+WINDOW_MARGIN_MM = 0.1
+
+# --- Center --------------------------------------------------------------------------------
+#: 1/e² radius (µm) of the power against the lateral offset before the first
+#: fit: single-mode fibers at a small gap.
+WIDTH_PRIOR_UM = 10.0
+#: Fitted widths are kept within these bounds (µm).
+WIDTH_MIN_UM, WIDTH_MAX_UM = 1.0, 200.0
+#: A cross scan spans ± SCAN_HALF_WIDTHS widths, with SCAN_DENSITY readings per width.
+SCAN_HALF_WIDTHS = 2.5
+SCAN_DENSITY = 8
+SCAN_HALF_MIN_UM, SCAN_HALF_MAX_UM = 5.0, 250.0
+SCAN_SPACING_MIN_UM = 0.25
+#: A fitted centre within this fraction of the span from its ends is at the
+#: edge: scan again around it, at most EDGE_RESCANS times.
+EDGE_FRACTION = 0.15
+EDGE_RESCANS = 2
+#: Centring stops once the centre moves less than max(CENTER_TOL_WIDTHS widths, CENTER_TOL_MIN_UM).
+CENTER_TOL_WIDTHS = 0.1
+CENTER_TOL_MIN_UM = 0.5
+CENTER_ITERATIONS = 3
+
+# --- Angle -----------------------------------------------------------------------------------
+#: Tilts per line search, across ± the span (degrees, halved each round).
+ANGLE_POINTS = 5
+ANGLE_SPAN_DEG = 1.5
+ANGLE_ROUNDS = 2
+#: A round gaining less than this (dB) ends the phase.
+ANGLE_MIN_GAIN_DB = 0.1
+#: Room (degrees) the window must leave around the tilts.
+ANGLE_MARGIN_DEG = 0.5
+
+# --- Peak --------------------------------------------------------------------------------------
+#: Pattern radius: PEAK_RADIUS_WIDTHS × the mean width, at least PEAK_RADIUS_MIN_UM.
+PEAK_RADIUS_WIDTHS = 0.5
+PEAK_RADIUS_MIN_UM = 1.0
+#: The search stops on a step under PEAK_MIN_STEP_UM (about the robot's
+#: resolution), a gain under PEAK_MIN_GAIN_DB, or after PEAK_ITERATIONS.
+PEAK_MIN_STEP_UM = 0.5
+PEAK_MIN_GAIN_DB = 0.05
+PEAK_ITERATIONS = 6
+#: The 3×3 pattern in pattern radii, in an order that needs no long moves.
+PATTERN = ((-1, -1), (0, -1), (1, -1), (1, 0), (0, 0), (-1, 0), (-1, 1), (0, 1), (1, 1))
+
+#: Index of each lateral axis in io.local's offsets.
+LOCAL_INDEX = {"x": 0, "z": 2}
+
+
+@dataclass
+class _State:
+    """What the phases learn and hand on, in io.local's coordinates."""
+
+    settings: AlignmentSettings
+    #: The best estimate of the optimum so far: x, z (µm), rx, rz (°).
+    pos: Dict[str, float] = field(default_factory=lambda: {"x": 0.0, "z": 0.0, "rx": 0.0, "rz": 0.0})
+    #: 1/e² radius (µm) of the power against x and z.
+    width: Dict[str, float] = field(default_factory=lambda: {"x": WIDTH_PRIOR_UM, "z": WIDTH_PRIOR_UM})
+    #: The power expected at pos (W).
+    peak_w: float = 0.0
+    #: Fixed range of the scans (W); raised if light overranges it.
+    scan_range_w: float = 0.0
+    #: Direction of the last one-way scan.
+    flip: bool = False
+    # Meter and motion settings in force, so that only changes are sent.
+    averaging: Optional[int] = None
+    range_w: Optional[float] = -1.0
+    motion: Dict[str, float] = field(default_factory=dict)
+
+    def pose(self, io: AlignmentIO, **override: float) -> Pose6:
+        p = {**self.pos, **override}
+        return io.pose_at(x=p["x"], z=p["z"], rx=p["rx"], rz=p["rz"])
 
 
 def align(io: AlignmentIO, settings: AlignmentSettings) -> None:
-    cartesian_spiral, angular_spiral, axial, gradient = PHASES
-    io.set_power_auto_range(True)
-    io.set_power_averaging(SEARCH_AVERAGING)
-
-    with io.phase(cartesian_spiral):
-        spiral_search(io, settings.spiral_cart_threshold_w, angular=False)
-    with io.phase(angular_spiral):
-        power = spiral_search(io, settings.spiral_ang_threshold_w, angular=True)
-
-    if power < settings.axial_threshold_w:
-        with io.phase(axial):
-            axial_search(io, AXIAL_LIMIT_DEG, AXIAL_LIMIT_MM, settings.axial_threshold_w)
-
-    io.set_power_averaging(GRADIENT_AVERAGING)
-    with io.phase(gradient):
-        looping_circles(io, angular=False, reps=CIRCLE_REPS, step_magnitude=CIRCLE_STEP,
-                        circle_resolution=CIRCLE_RESOLUTION, radius=CIRCLE_RADIUS, alternate=True,
-                        gradient_threshold=settings.gradient_threshold_w)
+    if settings.acquire_radius_mm + WINDOW_MARGIN_MM > settings.range_mm:
+        raise AlignmentError(
+            f"acquire_radius_um ({settings.acquire_radius_mm * 1e3:g}) needs {WINDOW_MARGIN_MM * 1e3:g} µm of room "
+            f"inside align_range_um ({settings.range_mm * 1e3:g}): lower it, or widen the window.")
+    if ANGLE_SPAN_DEG + ANGLE_MARGIN_DEG > settings.range_deg:
+        raise AlignmentError(f"align_range_deg ({settings.range_deg:g}) leaves no room for the "
+                             f"±{ANGLE_SPAN_DEG:g}° tilts: widen it to {ANGLE_SPAN_DEG + ANGLE_MARGIN_DEG:g}° or more.")
+    state = _State(settings, scan_range_w=SCAN_RANGE * settings.source_power_w)
+    with io.phase("Acquire"):
+        acquire(io, state)
+    with io.phase("Center"):
+        center(io, state)
+    with io.phase("Angle"):
+        angle(io, state)
+    with io.phase("Peak"):
+        peak(io, state)
 
 
-# --- Spiral search ------------------------------------------------------------------
+# --- Acquire -------------------------------------------------------------------------------
 
 def generate_archimedean_spiral(center=(0.0, 0.0), max_radius=0.5, spiral_pitch=0.002, point_spacing=0.001):
     """
@@ -136,226 +223,304 @@ def generate_archimedean_spiral(center=(0.0, 0.0), max_radius=0.5, spiral_pitch=
     return np.column_stack((c1_0 + r * np.cos(thetas), c2_0 + r * np.sin(thetas)))
 
 
-def spiral_search(io: AlignmentIO, stop_threshold: float, angular: bool) -> float:
-    """Spiral around the current pose (X/Z, or alpha/gamma), then settle on its best point.
+def acquire(io: AlignmentIO, state: _State) -> None:
+    """The noise floor, then a spiral until light shows, unless it already does; ends on the best reading."""
+    s = state.settings
+    _averaging(io, state, SCAN_AVERAGING)
+    _range(io, state, None)
+    noise, sigma = fit.noise_stats([io.read_power("cart") for _ in range(NOISE_READS)])
+    detect = max(s.signal_detect_w, noise + NOISE_SIGMAS * sigma) if math.isfinite(noise) else s.signal_detect_w
+    warm = math.isfinite(noise) and noise >= WARM_FRACTION * s.source_power_w
+    radius_um, pitch_um = s.acquire_radius_mm * 1e3, s.acquire_pitch_mm * 1e3
+    info = {"noise_w": noise, "sigma_w": sigma, "detect_w": detect, "radius_um": radius_um, "pitch_um": pitch_um,
+            "warm": warm}
+    if warm:
+        state.peak_w = noise
+        io.publish("acquire", {**info, "found": True, "at": [0.0, 0.0], "power_w": noise})
+        return
+    io.publish("acquire", {**info, "found": False})
 
-    Returns the power read there.
-    """
-    kind = "ang" if angular else "cart"
-    spiral = generate_archimedean_spiral((0.0, 0.0), *(ANG_SPIRAL if angular else CART_SPIRAL))
-    io.set_motion(**SPIRAL_MOTION)
-    s = io.pose()
-    if angular:
-        targets = [(s[0], s[1], s[2], s[3] + a, s[4], s[5] + b) for a, b in spiral]
-    else:
-        targets = [(s[0] + a, s[1], s[2] + b, s[3], s[4], s[5]) for a, b in spiral]
-
-    scan_max = float("-inf")
+    spacing_um = pitch_um * SPIRAL_SPACING
+    path = generate_archimedean_spiral(max_radius=radius_um, spiral_pitch=pitch_um,
+                                       point_spacing=min(SPIRAL_VERTEX_UM, spacing_um))
+    _motion(io, state, acc=MOVE_MOTION["acc"], lin_vel=_scan_speed(io, spacing_um), blending=100)
+    found: Dict[str, Optional[Sample]] = {"best": None}
+    stopped = {"done": False}
 
     def past_peak(samples: List[Sample]) -> bool:
-        # His rule: once the scan has gone above the threshold, stop as soon as
-        # the power is no longer rising over the last five readings.
-        nonlocal scan_max
-        scan_max = max(scan_max, samples[-1].power_w)
-        return scan_max > stop_threshold and len(samples) > 4 and samples[-1].power_w - samples[-5].power_w <= 0
+        sample = samples[-1]
+        # An overrange (+inf) is light too.
+        if sample.power_w >= detect and (found["best"] is None or sample.power_w > found["best"].power_w):
+            found["best"] = sample
+        stopped["done"] = found["best"] is not None and sample.power_w < PAST_PEAK * found["best"].power_w
+        return stopped["done"]
 
-    best = _best(io.scan(targets, kind=kind, stop=past_peak))
-    if best is not None:
-        io.set_motion(**SETTLE_MOTION)
-        io.move_to(best.pose)
-    return io.read_power(kind)
-
-
-# --- Axial search -------------------------------------------------------------------
-
-#: Names of axis_scan's axes, for the custom view's profiles.
-AXIS_NAMES = ("Rx", "Rz", "X", "Z")
-
-
-def axis_scan(io: AlignmentIO, axis_num: int, limit_deg: float, limit_cart: float,
-              T_A_ObjYrot, T_B_ObjYrot_anti, iteration: int = 0, rescan: bool = False) -> List[Sample]:
-    """One scan along an axis of the rotated frame: 0 = rotation about X, 1 = about Z, 2 = along X, 3 = along Z.
-
-    Both ends are placed relative to the scan's start frame, as in his script:
-    the scan runs from +limit to -2 × limit. The readings are also published to
-    the custom view as a 1-D profile along the scanned axis.
-    """
-    if axis_num == 0:
-        cart, orient, cart2, orient2 = [0, 0, 0], [limit_deg, 0, 0], [0, 0, 0], [-2 * limit_deg, 0, 0]
-    elif axis_num == 1:
-        cart, orient, cart2, orient2 = [0, 0, 0], [0, 0, limit_deg], [0, 0, 0], [0, 0, -2 * limit_deg]
-    elif axis_num == 2:
-        cart, orient, cart2, orient2 = [limit_cart, 0, 0], [0, 0, 0], [-2 * limit_cart, 0, 0], [0, 0, 0]
-    else:
-        cart, orient, cart2, orient2 = [0, 0, limit_cart], [0, 0, 0], [0, 0, -2 * limit_cart], [0, 0, 0]
-
-    targets = [
-        frames.matrix_pose(T_A_ObjYrot @ frames.make_homogeneous_matrix_extrinsic(c, o) @ T_B_ObjYrot_anti)
-        for c, o in ((cart, orient), (cart2, orient2))
-    ]
-    samples = io.scan(targets, kind="ang" if axis_num < 2 else "cart")
-
-    # Each reading's position along the scanned axis: undo the frames the
-    # targets were built with, leaving the scan's own offset.
-    inv_a, inv_b = np.linalg.inv(T_A_ObjYrot), np.linalg.inv(T_B_ObjYrot_anti)
-    points = []
-    for sample in samples:
-        T_offset = inv_a @ frames.pose_matrix(sample.pose) @ inv_b
-        if axis_num < 2:
-            _, angles = frames.extract_pose_extrinsic(T_offset)
-            coord = angles[0] if axis_num == 0 else angles[2]
-        else:
-            position, _ = frames.extract_pose(T_offset)
-            coord = position[0] if axis_num == 2 else position[2]
-        points.append([round(float(coord), 6), sample.power_w])
-    io.publish("profile", {
-        "axis": AXIS_NAMES[axis_num],
-        "iteration": iteration,
-        "rescan": rescan,
-        "limit": limit_deg if axis_num < 2 else limit_cart,
-        "unit": "°" if axis_num < 2 else "mm",
-        "points": points,
-    })
-    return samples
-
-
-def axial_search(io: AlignmentIO, limit_deg: float, limit_cart: float, axis_threshold: float) -> None:
-    motion = dict(AXIAL_MOTION)
-    io.set_motion(**motion)
-
-    angle_y = 0.0
-    T_B_ObjYrot = frames.make_homogeneous_matrix_extrinsic([0, 0, 0], [0, angle_y, 0])
-    T_B_ObjYrot_anti = frames.make_homogeneous_matrix_extrinsic([0, 0, 0], [0, -angle_y, 0])
-
-    for i in range(AXIAL_ITERATIONS):
-        if i % 4 == 0 and i != 0:
-            limit_deg *= AXIAL_DECAY
-            limit_cart *= AXIAL_DECAY
-            for key in ("acc", "lin_vel", "ang_vel"):
-                motion[key] *= AXIAL_DECAY
-            io.set_motion(**motion)
-
-            angle_y += AXIAL_FRAME_STEP_DEG
-            T_B_ObjYrot = frames.make_homogeneous_matrix_extrinsic([0, 0, 0], [0, angle_y, 0])
-            T_B_ObjYrot_anti = frames.make_homogeneous_matrix_extrinsic([0, 0, 0], [0, -angle_y, 0])
-
-        axis = i % 4
-        kind = "ang" if axis < 2 else "cart"
-        T_A_ObjYrot = frames.pose_matrix(io.pose()) @ T_B_ObjYrot
-
-        best = _best(axis_scan(io, axis, limit_deg, limit_cart, T_A_ObjYrot, T_B_ObjYrot_anti, iteration=i))
-        if best is None:
-            continue
-        io.move_to(best.pose)
-        power = io.read_power(kind)
-
-        if best.power_w > 0 and (best.power_w - power) / best.power_w >= AXIAL_DISCREPANCY:
-            # The best reading did not hold: scan again, slower and narrower.
-            io.set_motion(**AXIAL_RESCAN_MOTION)
-            rescan = axis_scan(io, axis, limit_deg * AXIAL_RESCAN_SCALE, limit_cart * AXIAL_RESCAN_SCALE,
-                               T_A_ObjYrot, T_B_ObjYrot_anti, iteration=i, rescan=True)
-            motion.update(AXIAL_AFTER_RESCAN_MOTION)
-            io.set_motion(**AXIAL_AFTER_RESCAN_MOTION)
-            best = _best(rescan)
-            if best is not None:
-                io.move_to(best.pose)
-                power = io.read_power(kind)
-
-        if power >= axis_threshold:
+    # The path starts at the start pose, where the fiber is.
+    for first in range(1, len(path), SPIRAL_CHUNK):
+        io.scan([io.pose_at(x=u, z=v) for u, v in path[first:first + SPIRAL_CHUNK]], kind="cart", stop=past_peak)
+        if stopped["done"]:
             break
+    best = found["best"]
+    if best is None:
+        raise AlignmentNoSignal(
+            f"No light above {detect:.3g} W within {radius_um:g} µm of the start (noise {noise:.3g} W): "
+            f"check the laser, the fibers and the align_start pose.")
+    x, _, z, _, _, _ = io.local(best.pose)
+    state.pos.update(x=x, z=z)
+    _goto(io, state)
+    state.peak_w = _still(io, state, "cart")
+    io.publish("acquire", {**info, "found": True, "at": [round(x, 3), round(z, 3)], "power_w": state.peak_w})
 
 
-# --- Gradient circles ------------------------------------------------------------------
+# --- Center --------------------------------------------------------------------------------
 
-def cart_circle(io: AlignmentIO, circle_resolution: int, radius: float, T_A_B) -> List[Tuple[float, float, float]]:
-    """Circle of ``radius`` mm in the X/Z plane of frame B. Returns (x_B, z_B, power) per reading."""
-    targets = []
-    for i in range(circle_resolution + 1):
-        angle = np.radians(360 / circle_resolution * i)
-        T_B_Obj = frames.make_homogeneous_matrix([np.cos(angle) * radius, 0, np.sin(angle) * radius], [0, 0, 0])
-        targets.append(frames.matrix_pose(T_A_B @ T_B_Obj))
-    io.move_to(targets[0])
-
-    T_B_A = np.linalg.inv(T_A_B)
-    points = []
-    for sample in io.scan(targets[1:], kind="cart"):
-        pos_B, _ = frames.extract_pose(T_B_A @ frames.pose_matrix(sample.pose))
-        points.append((pos_B[0], pos_B[2], sample.power_w))
-    return points
+def center(io: AlignmentIO, state: _State) -> None:
+    """Cross scans along x and z until the fitted centre stops moving; ends there, at rest."""
+    for iteration in range(CENTER_ITERATIONS):
+        x0, z0 = state.pos["x"], state.pos["z"]
+        for axis in ("x", "z"):
+            cross_scan(io, state, axis, iteration)
+        tolerance = max(CENTER_TOL_MIN_UM, CENTER_TOL_WIDTHS * min(state.width.values()))
+        if math.hypot(state.pos["x"] - x0, state.pos["z"] - z0) < tolerance:
+            break
+    _goto(io, state)
+    state.peak_w = _still(io, state, "cart")
 
 
-def ang_circle(io: AlignmentIO, circle_resolution: int, degs: float, T_A_B) -> List[Tuple[float, float, float]]:
-    """Circle of ``degs`` degrees in rotation about X and Z of frame B. Returns (rx_B, rz_B, power) per reading."""
-    targets = []
-    for i in range(circle_resolution + 1):
-        angle = np.radians(360 / circle_resolution * i)
-        T_B_Obj = frames.make_homogeneous_matrix_extrinsic([0, 0, 0], [np.cos(angle) * degs, 0, np.sin(angle) * degs])
-        targets.append(frames.matrix_pose(T_A_B @ T_B_Obj))
-    io.move_to(targets[0])
+def cross_scan(io: AlignmentIO, state: _State, axis: str, iteration: int, two_way: bool = True) -> fit.Gauss:
+    """Scan across the light along ``axis`` ("x" or "z"), and move pos[axis] to the fitted centre.
 
-    T_B_A = np.linalg.inv(T_A_B)
-    points = []
-    for sample in io.scan(targets[1:], kind="ang"):
-        _, ori_B = frames.extract_pose_extrinsic(T_B_A @ frames.pose_matrix(sample.pose))
-        points.append((ori_B[0], ori_B[2], sample.power_w))
-    return points
-
-
-def looping_circles(io: AlignmentIO, angular: bool, reps: int, step_magnitude: float, circle_resolution: int,
-                    radius: float, alternate: bool, gradient_threshold: float) -> None:
-    io.set_motion(**CIRCLE_MOTION)
-    for rep in range(reps):
-        center = io.pose()
-        T_A_B = frames.pose_matrix(center)
-        if angular:
-            points = np.array(ang_circle(io, circle_resolution, radius, T_A_B))
+    Both ways by default: the readings of each direction are fitted on their
+    own, their centres differ by twice what remains of the reading/pose lag
+    ("lag" in the profile), and their mean is free of it. One way (each time
+    the other way round) when only the peak power matters most.
+    """
+    index = LOCAL_INDEX[axis]
+    width = state.width[axis]
+    half = min(max(SCAN_HALF_WIDTHS * width, SCAN_HALF_MIN_UM), SCAN_HALF_MAX_UM)
+    spacing = max(width / SCAN_DENSITY, SCAN_SPACING_MIN_UM)
+    middle = state.pos[axis]
+    attempts = EDGE_RESCANS + 1
+    attempt = 0
+    while True:
+        lo, hi = middle - half, middle + half
+        if two_way:
+            legs = ((1, hi), (-1, lo))
         else:
-            points = np.array(cart_circle(io, circle_resolution, radius, T_A_B))
-        if len(points) < 3:
-            # Too few readings to fit a plane (a very fast circle): try again.
+            state.flip = not state.flip
+            legs = ((-1, lo),) if state.flip else ((1, hi),)
+        _averaging(io, state, SCAN_AVERAGING)
+        _range(io, state, state.scan_range_w)
+        _goto(io, state, **{axis: hi if legs[0][0] < 0 else lo})
+        _motion(io, state, lin_vel=_scan_speed(io, spacing), blending=0)
+        passes = []
+        for direction, end in legs:
+            samples = io.scan([state.pose(io, **{axis: end})], kind="cart")
+            passes.append((direction, [(io.local(s.pose)[index], s.power_w) for s in samples]))
+        if any(math.isinf(p) for _, points in passes for _, p in points):
+            # More light than the range: a range ten times higher, and again.
+            state.scan_range_w *= 10.0
+            if state.scan_range_w > MAX_RANGE_W:
+                raise AlignmentError(f"The power meter overranges at {state.scan_range_w / 10:.3g} W: "
+                                     f"check source_power_mw and the meter.")
             continue
-
-        _, normal = frames.fit_plane_to_points(points)
-        a, b, c = normal
-        if c == 0:
-            # His script stops here too (the fit gives no slope).
-            return
-        # Direction of fastest ascent in the circle's plane.
-        ascent_2d = np.array([-a / c, -b / c])
-        gradient_mag = np.linalg.norm(ascent_2d)
-        if gradient_mag == 0:
-            # Flat: nowhere to climb (his script would divide by zero here).
-            return
-        ascent_2d_unit = ascent_2d / gradient_mag
-
-        current = points[-1]
-        # For the custom view: the circle's centre, the slope found, the step about to be taken.
-        io.publish("gradient", {
-            "rep": rep,
-            "kind": "ang" if angular else "cart",
-            "center": list(center),
-            "magnitude": float(gradient_mag),
-            "step": float(step_magnitude),
-            "radius": float(radius),
-            "power_end": float(current[2]),
-        })
-        if current[2] >= gradient_threshold:
-            radius *= CIRCLE_DECAY
-            step_magnitude *= CIRCLE_DECAY
-
-        # Step along the slope, from where the circle ended.
-        d1 = ascent_2d_unit[0] * step_magnitude - current[0]
-        d2 = ascent_2d_unit[1] * step_magnitude - current[1]
-        if angular:
-            io.move_rel_trf(0, 0, 0, d1, 0, d2)
+        fits = [fit.gauss1d(*zip(*points)) if len(points) >= 4 else None for _, points in passes]
+        everything = [pt for _, points in passes for pt in points]
+        both = fit.gauss1d(*zip(*everything)) if len(everything) >= 4 else None
+        if len(fits) == 2 and all(fits):
+            forward, backward = fits
+            found = fit.Gauss(center=0.5 * (forward.center + backward.center),
+                              width=0.5 * (forward.width + backward.width),
+                              peak=0.5 * (forward.peak + backward.peak),
+                              baseline=0.5 * (forward.baseline + backward.baseline))
+            lag = 0.5 * (forward.center - backward.center)
         else:
-            io.move_rel_trf(d1, 0, d2, 0, 0, 0)
+            found, lag = both, None
+        attempt += 1
+        if found is None:
+            chosen = None
+        else:
+            chosen = found.center
+        edge = chosen is None or not (lo + EDGE_FRACTION * (hi - lo) <= chosen <= hi - EDGE_FRACTION * (hi - lo))
+        io.publish("profile", {
+            "axis": axis,
+            "iteration": iteration,
+            "rescan": attempt > 1,
+            "unit": "µm",
+            "span": [round(lo, 3), round(hi, 3)],
+            "passes": [{"dir": d, "points": [[round(c, 3), p] for c, p in points]} for d, points in passes],
+            "fit": None if found is None else {
+                "model": "gauss", "center": round(found.center, 3), "width": round(found.width, 3),
+                "peak": found.top, "baseline": found.baseline, "lag": None if lag is None else round(lag, 3),
+            },
+            "chosen": None if chosen is None or edge else round(chosen, 3),
+        })
+        if not edge or attempt >= attempts:
+            break
+        if found is None:
+            # No peak in the span: around its best reading, twice as wide.
+            points = [pt for _, pts in passes for pt in pts if math.isfinite(pt[1])]
+            middle = max(points, key=lambda pt: pt[1])[0] if points else middle
+            half = min(2 * half, SCAN_HALF_MAX_UM)
+        else:
+            # The peak is at (or past) an end: centre the next scan on it.
+            middle = min(max(found.center, lo - half), hi + half)
+    if found is None:
+        raise AlignmentNoSignal(f"Lost the light while centring along {axis}: no peak within ±{half:.1f} µm "
+                                f"of {middle:+.1f} µm. Check the laser and the fibers.")
+    state.pos[axis] = found.center
+    state.width[axis] = min(max(found.width, WIDTH_MIN_UM), WIDTH_MAX_UM)
+    state.peak_w = found.top
+    return found
 
-        if alternate:
-            angular = not angular
+
+# --- Angle ----------------------------------------------------------------------------------
+
+def angle(io: AlignmentIO, state: _State) -> None:
+    """Tilt line searches in rx then rz, re-centred at each tilt; again, narrower, while it gains."""
+    span = ANGLE_SPAN_DEG
+    for round_ in range(ANGLE_ROUNDS):
+        before = state.peak_w
+        for axis in ("rx", "rz"):
+            tilt_search(io, state, axis, span, round_)
+        if _db(state.peak_w, before) < ANGLE_MIN_GAIN_DB:
+            break
+        span /= 2
+    _goto(io, state)
+    state.peak_w = _still(io, state, "cart")
 
 
-def _best(samples: List[Sample]) -> Optional[Sample]:
-    """The sample with the highest valid power, or None."""
-    valid = [s for s in samples if s.power_w == s.power_w]  # drops NaN
-    return max(valid, key=lambda s: s.power_w) if valid else None
+def tilt_search(io: AlignmentIO, state: _State, axis: str, span: float, round_: int) -> None:
+    """Try tilts around pos[axis], each re-centred laterally; go to the tilt a parabola through log power picks."""
+    limit = state.settings.range_deg - ANGLE_MARGIN_DEG
+    middle = state.pos[axis]
+    tilts = sorted({round(min(max(middle + d, -limit), limit), 6) for d in np.linspace(-span, span, ANGLE_POINTS)})
+    tried = []  # (tilt, peak power re-centred, x, z)
+    for tilt in tilts:
+        state.pos[axis] = tilt
+        # One way: the peak power is what counts here, the centre is scanned
+        # both ways once the tilt is chosen.
+        for lateral in ("x", "z"):
+            cross_scan(io, state, lateral, round_, two_way=False)
+        tried.append((tilt, state.peak_w, state.pos["x"], state.pos["z"]))
+    parabola = fit.parabola1d([t[0] for t in tried], [t[1] for t in tried])
+    if parabola is not None and parabola.curvature < 0 and math.isfinite(parabola.vertex):
+        chosen = min(max(parabola.vertex, tilts[0]), tilts[-1])
+    else:
+        chosen = max(tried, key=lambda t: t[1])[0]
+    # The lateral centre moves with the tilt when the TCP is not at the fiber
+    # tip: start the re-centring where the tilts say it is, then scan.
+    state.pos[axis] = chosen
+    state.pos["x"] = float(np.interp(chosen, [t[0] for t in tried], [t[2] for t in tried]))
+    state.pos["z"] = float(np.interp(chosen, [t[0] for t in tried], [t[3] for t in tried]))
+    for lateral in ("x", "z"):
+        cross_scan(io, state, lateral, round_)
+    # How far the lateral centre moves per radian of tilt (a tilt about x
+    # moves it along z): about the gap with the TCP at the fiber tip, far more
+    # when it is not there.
+    moved = [-t[3] for t in tried] if axis == "rx" else [t[2] for t in tried]
+    radians = [math.radians(t[0]) for t in tried]
+    pivot = float(np.polyfit(radians, moved, 1)[0]) if len(tried) >= 2 and np.ptp(radians) > 0 else None
+    io.publish("profile", {
+        "axis": axis,
+        "iteration": round_,
+        "rescan": False,
+        "unit": "°",
+        "span": [tilts[0], tilts[-1]],
+        "passes": [{"dir": 1, "points": [[t[0], t[1]] for t in tried]}],
+        "fit": None if parabola is None or not parabola.curvature < 0 else {
+            "model": "parabola", "center": round(parabola.vertex, 5), "width": round(parabola.width, 5),
+            "peak": parabola.peak,
+        },
+        "chosen": round(chosen, 5),
+        "pivot_um": None if pivot is None else round(pivot, 1),
+    })
+
+
+# --- Peak -----------------------------------------------------------------------------------
+
+def peak(io: AlignmentIO, state: _State) -> None:
+    """Newton steps on a quadratic fit of log power over a 3×3 pattern at rest; ends on the best reading at rest."""
+    radius = max(PEAK_RADIUS_MIN_UM, PEAK_RADIUS_WIDTHS * 0.5 * (state.width["x"] + state.width["z"]))
+    _range(io, state, None)
+    previous = None
+    for iteration in range(PEAK_ITERATIONS):
+        cx, cz = state.pos["x"], state.pos["z"]
+        readings = []
+        for i, j in PATTERN:
+            _goto(io, state, x=cx + i * radius, z=cz + j * radius)
+            readings.append((i * radius, j * radius, _still(io, state, "cart")))
+        middle = readings[PATTERN.index((0, 0))][2]
+        (du, dz), newton = fit.quad2d_step(readings, radius)
+        step = math.hypot(du, dz)
+        io.publish("peak", {
+            "iter": iteration,
+            "center": [round(cx, 3), round(cz, 3)],
+            "radius_um": round(radius, 3),
+            "step": [round(du, 3), round(dz, 3)],
+            "step_um": round(step, 3),
+            "newton": newton,
+            "power_w": middle,
+            "points": [[round(cx + u, 3), round(cz + v, 3), p] for u, v, p in readings],
+        })
+        state.pos.update(x=cx + du, z=cz + dz)
+        gain = _db(middle, previous) if previous else math.inf
+        previous = middle
+        if step < PEAK_MIN_STEP_UM or gain < PEAK_MIN_GAIN_DB:
+            break
+    _goto(io, state)
+    state.peak_w = _still(io, state, "cart")
+    best = io.best_still
+    if best is not None and best.power_w > state.peak_w:
+        _motion(io, state, **MOVE_MOTION)
+        io.move_to(best.pose)
+
+
+# --- Helpers ---------------------------------------------------------------------------------
+
+def _goto(io: AlignmentIO, state: _State, **override: float) -> None:
+    """Point-to-point to pos, with ``override`` coordinates."""
+    _motion(io, state, **MOVE_MOTION)
+    io.move_to(state.pose(io, **override))
+
+
+def _still(io: AlignmentIO, state: _State, kind: str) -> float:
+    """A reading at rest, averaged. A scan's fixed range may be too low for it: then in auto range."""
+    _averaging(io, state, STILL_AVERAGING)
+    power = io.read_still(kind)
+    if math.isinf(power):
+        _range(io, state, None)
+        power = io.read_still(kind)
+    return power
+
+
+def _scan_speed(io: AlignmentIO, spacing_um: float) -> float:
+    """Scan speed (mm/s) that leaves ``spacing_um`` between two readings."""
+    return max(MIN_SCAN_SPEED, spacing_um * 1e-3 / io.sample_period_s)
+
+
+def _motion(io: AlignmentIO, state: _State, **motion: float) -> None:
+    changed = {k: v for k, v in motion.items() if state.motion.get(k) != v}
+    if changed:
+        io.set_motion(**changed)
+        state.motion.update(changed)
+
+
+def _averaging(io: AlignmentIO, state: _State, count: int) -> None:
+    if state.averaging != count:
+        io.set_power_averaging(count)
+        state.averaging = count
+
+
+def _range(io: AlignmentIO, state: _State, watts: Optional[float]) -> None:
+    """A fixed meter range (W), or auto range with None."""
+    if state.range_w != watts:
+        io.set_power_range(watts)
+        state.range_w = watts
+
+
+def _db(power: float, reference: Optional[float]) -> float:
+    """``power`` against ``reference`` in dB (-inf if either is not positive)."""
+    if not reference or not power or power <= 0 or reference <= 0:
+        return -math.inf
+    return 10 * math.log10(power / reference)

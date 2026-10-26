@@ -2,8 +2,9 @@
 
 A pose is ``(x, y, z, alpha, beta, gamma)``: mm, then Euler angles in degrees,
 XYZ *mobile* (intrinsic, scipy's ``'XYZ'``), the robot's convention. The
-``*_extrinsic`` variants use fixed-axis ``'xyz'`` angles. His algorithm uses
-them for small rotations about a frame's own axes.
+``*_extrinsic`` variants use fixed-axis ``'xyz'`` angles: the alignment frame
+(``AlignmentIO.local`` / ``pose_at``) uses them for small rotations about the
+start's tool axes.
 """
 
 from typing import Sequence, Tuple
@@ -49,19 +50,3 @@ def matrix_pose(T) -> Pose6:
     """Robot pose of a 4x4 matrix, as plain floats."""
     translation, angles = extract_pose(T)
     return tuple(float(v) for v in (*translation, *angles))
-
-
-def fit_plane_to_points(points):
-    """Fits a plane to a collection of 3D points using SVD.
-
-    Parameters:
-    points (np.ndarray): An (N, 3) array of 3D points.
-
-    Returns:
-    centroid (np.ndarray): A point on the plane (mean of all points).
-    normal (np.ndarray): The normal vector of the best-fit plane.
-    """
-    centroid = np.mean(points, axis=0)
-    # The normal is the right singular vector of the smallest singular value.
-    _, _, vh = np.linalg.svd(points - centroid)
-    return centroid, vh[-1, :]

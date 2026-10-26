@@ -41,22 +41,25 @@ params:
   # --- Alignment (read by fiber_alignment/alignment.py) -----------------------
   power_threshold_mw:
     type: float
-    # TODO: set from the peak power measured on the real setup.
+    # TODO: set from the peak power measured on the real setup, 0.5-1 dB under
+    # it. With an air gap, two glass/air faces cost ~7 %: a perfect alignment of
+    # a 1 mW source reads about 0.93 mW.
     default: 0.9
     editable_when_idle: true
     description: Alignment passes when the power meter reads at least this (mW). Shown on the custom view.
 
   align_range_um:
     type: float
-    # The axial search reaches 2 × 0.5 mm from where it starts, after the
-    # spirals may already have moved the fiber by up to 0.5 mm.
+    # The search spiral reaches acquire_radius_um from the start, the centring
+    # scans a little beyond: the alignment refuses to start unless this leaves
+    # them 100 µm. Y (along the fiber) is never moved.
     default: 2000.0
     editable_when_idle: true
     description: How far each of X, Y, Z may go from the alignment start (µm). A pose beyond it is refused before it is sent.
 
   align_range_deg:
     type: float
-    # Angular spiral up to 3°, then axial scans up to 2 × 2°.
+    # Tilt searches go ±1.5° around the current tilt: the alignment needs 2° at least.
     default: 8.0
     editable_when_idle: true
     description: How far each of alpha, beta, gamma may turn from the alignment start (°). A pose beyond it is refused before it is sent.
@@ -73,33 +76,32 @@ params:
     editable_when_idle: true
     description: Pause after each point-to-point alignment move (s).
 
-  # Thresholds of the algorithm's phases (fiber_alignment/algorithm.py).
-  # TODO: copy them from the robot variables set by the colleague's
-  # fiber_variables program (his script works in W; these are in mW).
-  spiral_cart_threshold_mw:
+  # Source and search (fiber_alignment/algorithm.py).
+  source_power_mw:
     type: float
-    default: 0.1
+    # TODO: the laser's output, measured fiber to meter.
+    default: 1.0
     editable_when_idle: true
-    description: Cartesian spiral stops once past this (mW) and the power stops rising.
+    description: Power of the source (mW), what a perfect coupling would read. A start reading over 1 % of it skips the search spiral; the custom view shows the coupling against it in dB.
 
-  spiral_ang_threshold_mw:
+  acquire_radius_um:
     type: float
-    default: 0.2
+    default: 500.0
     editable_when_idle: true
-    description: Angular spiral stops once past this (mW) and the power stops rising.
+    description: When no light reaches the meter at the start, the search spirals out to this far from it (µm). Must fit inside align_range_um.
 
-  axial_threshold_mw:
+  acquire_pitch_um:
     type: float
-    # His script logs "Above 0.25 mW cutoff" when it is reached.
-    default: 0.25
+    # Single-mode fibers at a small gap show 1 µW up to ~14 µm off-centre.
+    default: 20.0
     editable_when_idle: true
-    description: Axial search runs only below this after the spirals, and stops once it is reached (mW).
+    description: Distance between two turns of the search spiral (µm). Smaller finds weaker light, larger searches faster.
 
-  gradient_threshold_mw:
+  signal_detect_uw:
     type: float
-    default: 0.5
+    default: 1.0
     editable_when_idle: true
-    description: Gradient circles shrink (radius and step × 0.8) when a circle ends above this (mW).
+    description: Lowest power the search counts as light (µW). Raised automatically above the noise measured at the start.
 
   # --- Motion (applied at the start of every step) ------------------------------
   joint_vel_pct:
