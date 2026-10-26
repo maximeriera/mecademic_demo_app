@@ -3,6 +3,8 @@
 //   const camera = Plot3D.camera();                    // share it to rotate panels together
 //   const plot = Plot3D.create(canvas, camera, {labels: {x: 'X', y: 'Y', z: 'Z'}, fontPx: 14});
 //   plot.setAxes({x: [x0, x1], y: [y0, y1], z: [z0, z1]}, 300); // optional ms: animate to it
+//   plot.setAxes(null);                                // no box: only the message
+//   plot.setMessage('Waiting…');                       // shown while there is nothing to draw
 //   plot.setLabels({x: 'X', y: 'Y', z: 'Z'});         // e.g. when the z unit changes
 //   plot.setColor(z => 'rgb(...)');                    // surface and point colour, from height
 //   plot.setPoints([[x, y, z], ...], {tail: 200});     // path; the last `tail` points stand out
@@ -104,6 +106,11 @@
         attachDrag(canvas, cam);
 
         function setAxes(value, ms) {
+            if (!value) {
+                axes = null;
+                anim = null;
+                return;
+            }
             const target = anim ? anim.to : axes;
             if (target && ['x', 'y', 'z'].every(k => sameRange(target[k], value[k]))) return;
             if (!axes || !ms) {

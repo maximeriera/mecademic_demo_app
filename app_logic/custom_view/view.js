@@ -1,10 +1,11 @@
-// Fiber alignment view: live power against the threshold, a tracker of the
-// alignment's phases, and for each phase a plot that fits it: 3D power
-// landscapes for the spirals and the gradient circles, 1-D profiles for the
-// axial scans, the power over time in dB, and an end-of-alignment summary.
-// Reads the hub through DataHubClient, the threshold and the cell state from
-// /api/context. Dependency-free canvas drawing (plot3d.js, chart2d.js,
-// landscape.js): no CDN on a show floor.
+// Fiber alignment view: live power against the threshold, the power over
+// time in dB, the alignment's progress and verdict, and one plot per phase,
+// side by side: 3D power landscapes for the two spirals and for the gradient
+// circles (lateral and angular), and 1-D profiles for the axial scans, which
+// take the gradient's place while they run (the search is often skipped).
+// Reads the hub through DataHubClient, the threshold from /api/context.
+// Dependency-free canvas drawing (plot3d.js, chart2d.js, landscape.js): no CDN
+// on a show floor.
 (function () {
     'use strict';
 
@@ -28,15 +29,21 @@
     const PHASE = 8;
     const T = 9;
 
-    // How each phase of algorithm.PHASES is drawn. Unknown phases get DEFAULT_VIEW.
-    const LATERAL = { type: 'map', axes: [0, 2], scale: 1000, names: ['ΔX', 'ΔZ'], unit: 'µm', minSpan: 20 };
-    const PHASE_VIEWS = {
-        'Cartesian spiral': LATERAL,
-        'Angular spiral': { type: 'map', axes: [3, 5], scale: 1, names: ['Δα', 'Δγ'], unit: '°', minSpan: 0.02 },
-        'Axial search': { type: 'profiles' },
-        'Gradient ascent': { type: 'gradient' },
-    };
-    const DEFAULT_VIEW = LATERAL;
+    // The plots follow the phases of algorithm.PHASES by name: rename a phase
+    // there and here together. A phase not named here is only listed.
+    const SPIRALS = [
+        {
+            phase: 'Cartesian spiral', id: 'cart', axes: [0, 2], scale: 1000, names: ['ΔX', 'ΔZ'], unit: 'µm', minSpan: 20,
+            waiting: 'Waiting for the Cartesian spiral…',
+        },
+        {
+            phase: 'Angular spiral', id: 'ang', axes: [3, 5], scale: 1, names: ['Δα', 'Δγ'], unit: '°', minSpan: 0.02,
+            waiting: 'Waiting for the angular spiral…',
+        },
+    ];
+    const AXIAL_PHASE = 'Axial search';
+    const GRADIENT_PHASE = 'Gradient ascent';
+    // Phase bands of the power trace.
     const SHORT_NAMES = {
         'Cartesian spiral': 'Cart. spiral',
         'Angular spiral': 'Ang. spiral',
@@ -49,9 +56,7 @@
     const token = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
     const ACCENT = token('--color-accent', '#5DEFBF');
     const SOFT = token('--color-accent-soft', '#9DF5D7');
-    const MUTED = token('--color-muted', '#9aa39f');
     const YELLOW = token('--color-yellow', '#ffd447');
-    const BLUE = token('--color-blue', '#3bb8ff');
     // Power colours of the landscapes: a heat ramp whose lightness rises evenly
     // (OKLCH L 0.40 → 0.96), dim violet → magenta → coral → amber → pale
     // yellow. Each plot spreads it over the dB range it shows, so small
@@ -129,10 +134,9 @@
         return `${fmt(watts, unit)} ${unit.name}`;
     }
 
-    // --- Threshold and cell state, from /api/context ---------------------------------
+    // --- Threshold, from /api/context ---------------------------------------------------
 
     let thresholdW = null;  // null until known (no context file, or no such param)
-    let cell = {};          // variable name → value
 
     function refreshContext() {
         fetch('/api/context')
@@ -140,20 +144,8 @@
             .then(ctx => {
                 const param = ctx.enabled && ctx.params ? ctx.params[THRESHOLD_PARAM] : null;
                 thresholdW = param && isNum(param.value) ? param.value * 1e-3 : null;
-                cell = {};
-                Object.entries(ctx.variables || {}).forEach(([name, entry]) => { cell[name] = entry.value; });
-                renderCell();
             })
             .catch(() => { /* the hub poll reports a lost connection */ });
-    }
-
-    function renderCell() {
-        const held = cell.held_fiber;
-        $('held-fiber').textContent = held === undefined ? '—' : held ? `#${held}` : 'none';
-        $('next-fiber').textContent = cell.next_fiber === undefined ? '—' : `#${cell.next_fiber}`;
-        $('n-counts').textContent = cell.aligned_count === undefined ? '—' : `${cell.aligned_count} / ${cell.failed_count}`;
-        const last = cell.last_align_power_mw;
-        $('last-power').textContent = isNum(last) && last > 0 ? withUnit(last * 1e-3) : '—';
     }
 
     // --- Live power tile ------------------------------------------------------------------
@@ -296,6 +288,9 @@
         });
     }
 
+    // Phases that took readings (or are taking them).
+    const ran = phase => !!phase && ['running', 'done', 'timed out', 'failed'].includes(phase.status);
+
     function gainDb(phase) {
         return phase.best_before_w > 0 && phase.best_w > 0 ? dbOf(phase.best_w, phase.best_before_w) : null;
     }
@@ -303,90 +298,75 @@
     // Readings taken: the summary's count once the run is over, as its points are decimated.
     const readsOf = run => (isNum(run.reads) ? run.reads : run.samples.length);
 
-    // --- Phase tracker and time budget --------------------------------------------------------
+    // --- The alignment card: verdict, time budget, phases ---------------------------------------
 
-    let selected = null;  // phase name or 'summary', chosen by a click once the run is over
-    let trackerKey = '';
+    const PHASE_ICONS = { running: '●', done: '✓', 'timed out': '✓', failed: '✗', skipped: '–', pending: '○', 'not run': '·' };
+    let phasesKey = '';
 
-    function renderTracker(run, states) {
-        const running = run.status === 'running';
-        const chips = states.map(p => {
-            let cls = { running: 'active', done: 'done', 'timed out': 'done', failed: 'failed', skipped: 'skipped' }[p.status] || '';
-            let metric = '–';
-            if (p.status === 'running') {
-                const count = p.name === 'Axial search' ? `scan ${run.profiles.length}`
-                    : p.name === 'Gradient ascent' ? `circle ${run.gradient.length}`
-                    : `${run.samples.filter(s => s[PHASE] === p.index).length} readings`;
-                metric = `${count} · ${(run.elapsed - (p.t0 || 0)).toFixed(1)} s`;
-            } else if (p.status === 'done' || p.status === 'timed out' || p.status === 'failed') {
-                const gain = gainDb(p);
-                const what = gain !== null ? `${signed(gain)} dB` : isNum(p.best_w) ? `found ${withUnit(p.best_w)}` : '';
-                metric = `${what}${what ? ' · ' : ''}${((p.t1 || 0) - (p.t0 || 0)).toFixed(1)} s${p.status === 'timed out' ? ' · timed out' : ''}`;
-            } else if (p.status === 'skipped') {
-                metric = 'skipped';
-            }
-            const clickable = !running && (p.status === 'done' || p.status === 'timed out' || p.status === 'failed');
-            if (clickable) cls += ' clickable';
-            if (!running && selected === p.name) cls += ' selected';
-            return { key: p.name, cls, name: SHORT_NAMES[p.name] || p.name, metric, clickable };
-        });
-
-        // The verdict, as the last chip.
-        let vCls = '';
-        let vMetric = running ? '–' : run.status === 'error' ? 'interrupted' : '';
-        if (run.status === 'done' && run.result) {
-            vCls = run.result.passed ? 'pass' : 'fail';
-            vMetric = `${run.result.passed ? '✓' : '✗'} ${withUnit(run.result.power_w)}`;
-        } else if (run.status === 'error') {
-            vCls = 'failed';
-        }
-        if (!running) vCls += ` clickable${selected === null || selected === 'summary' ? ' selected' : ''}`;
-        chips.push({ key: 'summary', cls: vCls, name: 'Verdict', metric: vMetric, clickable: !running });
-
-        const key = JSON.stringify(chips);
-        if (key === trackerKey) return;
-        trackerKey = key;
-        $('tracker').replaceChildren(...chips.map(c => {
-            const li = document.createElement('li');
-            li.className = `chip ${c.cls}`;
-            const name = document.createElement('span');
-            name.className = 'chip-name';
-            name.textContent = c.name;
-            const metric = document.createElement('span');
-            metric.className = 'chip-metric';
-            metric.textContent = c.metric;
-            li.append(name, metric);
-            if (c.clickable) {
-                li.addEventListener('click', () => {
-                    selected = c.key;
-                    trackerKey = '';
-                    if (lastState) render(lastState);
-                });
-            }
-            return li;
-        }));
-    }
-
-    function renderBudget(run) {
-        const caption = $('run-caption');
-        const fiber = run.fiber ? `fiber #${run.fiber}` : 'no fiber held';
+    function renderRun(run, states) {
+        $('run-fiber').textContent = run.fiber ? `— fiber #${run.fiber}` : '— no fiber held';
+        const verdict = $('verdict');
+        const sub = $('verdict-sub');
+        const r = run.result || {};
         if (run.status === 'running') {
-            caption.textContent = `— ${fiber} · aligning…`;
-            caption.className = '';
+            const best = maxOf(run.samples.map(s => s[POWER]));
+            verdict.className = 'verdict live';
+            verdict.textContent = 'Aligning…';
+            sub.textContent = `${run.samples.length} readings${isNum(best) ? ` · best so far ${withUnit(best)}` : ''}`;
         } else if (run.status === 'error') {
-            caption.textContent = `— ${fiber} · interrupted: ${run.error}`;
-            caption.className = 'ng';
+            verdict.className = 'verdict ng';
+            verdict.textContent = '✗ Interrupted';
+            sub.textContent = run.error || '';
         } else {
-            const r = run.result || {};
-            caption.textContent = `— ${fiber} · ${r.passed ? '✓' : '✗'} ${withUnit(r.power_w)} ${r.passed ? '≥' : '<'} ${withUnit(run.threshold_w)}`
-                + (r.timed_out ? ' · timed out' : '');
-            caption.className = r.passed ? 'ok' : 'ng';
+            verdict.className = `verdict ${r.passed ? 'ok' : 'ng'}`;
+            verdict.textContent = `${r.passed ? '✓ Aligned' : '✗ Below threshold'} · ${withUnit(r.power_w)}`;
+            sub.textContent = `threshold ${withUnit(run.threshold_w)} · ${readsOf(run)} readings` + (r.timed_out ? ' · timed out' : '');
         }
+        sub.title = sub.textContent;
+
         const timeout = run.timeout_s || 0;
         const frac = timeout ? clamp(run.elapsed / timeout, 0, 1) : 0;
         $('budget-fill').style.width = `${(frac * 100).toFixed(1)}%`;
         $('budget-fill').classList.toggle('warn', frac > 0.8);
         $('budget-text').textContent = timeout ? `${run.elapsed.toFixed(1)} s / ${timeout} s` : `${run.elapsed.toFixed(1)} s`;
+
+        renderPhaseList(run, states);
+    }
+
+    // One row per phase: its state, what it gained (or is doing) and how long it took.
+    function renderPhaseList(run, states) {
+        const rows = states.map(p => {
+            let metric = '';
+            let time = '';
+            if (p.status === 'running') {
+                metric = p.name === AXIAL_PHASE ? `scan ${run.profiles.length}`
+                    : p.name === GRADIENT_PHASE ? `circle ${run.gradient.length}`
+                    : `${run.samples.filter(s => s[PHASE] === p.index).length} readings`;
+                time = `${Math.max(0, run.elapsed - (p.t0 || 0)).toFixed(1)} s`;
+            } else if (ran(p)) {
+                const gain = gainDb(p);
+                metric = gain !== null ? `${signed(gain)} dB` : isNum(p.best_w) ? `found ${withUnit(p.best_w)}` : '';
+                if (p.status === 'timed out') metric += `${metric ? ' · ' : ''}timed out`;
+                time = `${((p.t1 || 0) - (p.t0 || 0)).toFixed(1)} s`;
+            } else if (p.status !== 'pending') {
+                metric = p.status;
+            }
+            return { cls: p.status.replace(' ', '-'), icon: PHASE_ICONS[p.status] || '·', name: p.name, metric, time };
+        });
+        const key = JSON.stringify(rows);
+        if (key === phasesKey) return;
+        phasesKey = key;
+        $('phase-list').replaceChildren(...rows.map(row => {
+            const li = document.createElement('li');
+            li.className = row.cls;
+            ['icon', 'name', 'metric', 'time'].forEach(field => {
+                const span = document.createElement('span');
+                span.className = `ph-${field}`;
+                span.textContent = row[field];
+                li.append(span);
+            });
+            return li;
+        }));
     }
 
     // --- 3D power landscapes ----------------------------------------------------------------------
@@ -395,8 +375,8 @@
     // surface interpolated from them (height = linear power, colour = HEAT
     // over the surface's dB range, with a colour bar), the best reading, and
     // optionally a trail on the floor. Axes fit the data, only grow within
-    // one `key`, and animate.
-    function landscape(canvas, cam) {
+    // one `key`, and animate. Until its phase runs, it shows only a message.
+    function landscape(canvas, cam, message) {
         const plot = Plot3D.create(canvas, cam, { fontPx: FONT_PX });
         let unit = UNITS[1];
         let threshold = null;
@@ -405,6 +385,7 @@
         let built = { key: null, shape: '', at: 0 };
         let domain = null;  // [low, high] watts the colours span
         plot.setColor(z => heatColor(domain, z * unit.scale));
+        plot.setMessage(message);
 
         function extent(values, minSpan) {
             let lo = minOf(values);
@@ -458,6 +439,19 @@
                 plot.setFloorPath(o.floorPath || []);
                 plot.setMessage(o.message || 'Waiting for readings…');
             },
+            // Back to a message only, e.g. while its phase is pending.
+            clear(text) {
+                key = null;
+                ranges = null;
+                built = { key: null, shape: '', at: 0 };
+                plot.setAxes(null);
+                plot.setPoints([]);
+                plot.setSurface(null);
+                plot.setMarkers([]);
+                plot.setFloorPath([]);
+                plot.setLegend(null);
+                plot.setMessage(text);
+            },
         };
     }
 
@@ -467,25 +461,22 @@
         return samples.filter(s => isNum(s[POWER])).map(s => [off(s, axes[0]) * scale, off(s, axes[1]) * scale, s[POWER]]);
     }
 
-    const mainCam = Plot3D.camera({ speed: 0.15 });
-    const gradCam = Plot3D.camera({ speed: 0.15 });
-    const mapView = landscape($('plot-map'), mainCam);
-    const summaryView = landscape($('plot-summary'), mainCam);
-    const gradLat = landscape($('plot-grad-lat'), gradCam);
-    const gradAng = landscape($('plot-grad-ang'), gradCam);
+    // All the landscapes turn together.
+    const cam = Plot3D.camera({ speed: 0.15 });
+    const spirals = SPIRALS.map(spec => ({ spec, view: landscape($(`plot-${spec.id}`), cam, spec.waiting) }));
+    const gradLat = landscape($('plot-grad-lat'), cam, 'Waiting for the gradient ascent…');
+    const gradAng = landscape($('plot-grad-ang'), cam, 'Waiting for the gradient ascent…');
 
     // --- 2D charts ---------------------------------------------------------------------------------
 
     const trace = Chart2D.create($('chart-trace'), { fontPx: FONT_PX, xLabel: 'time (s)', yLabel: 'dB vs threshold', message: 'Waiting for an alignment…' });
-    const gradientChart = Chart2D.create($('chart-gradient'), { fontPx: FONT_PX - 1, xLabel: 'circle', yLabel: 'relative slope', message: 'No gradient circles.' });
     const AXIAL = ['Rx', 'Rz', 'X', 'Z'];
     const profileCharts = {};
     AXIAL.forEach(axis => {
         profileCharts[axis] = Chart2D.create($(`profile-${axis}`), { fontPx: FONT_PX - 1, message: `Waiting for an ${axis} scan…` });
     });
 
-    Plot3D.animate([mapView.plot, summaryView.plot, trace, gradientChart, ...Object.values(profileCharts)], mainCam);
-    Plot3D.animate([gradLat.plot, gradAng.plot], gradCam);
+    Plot3D.animate([...spirals.map(s => s.view.plot), gradLat.plot, gradAng.plot, trace, ...Object.values(profileCharts)], cam);
 
     // The lowest and highest point of each of `buckets` time slices: a long
     // trace drawn fast, with its envelope kept.
@@ -621,151 +612,74 @@
         $('grad-ang-box').classList.toggle('active', activeKind === 'ang');
     }
 
-    function renderSummary(run, states) {
-        summaryView.update({
-            key: `${run.key}:summary`,
-            points: project(run.samples.filter(s => s[KIND] !== 'ang'), [0, 2], 1000, run.start),
-            names: ['ΔX', 'ΔZ'], unit: 'µm', minSpan: 20, threshold: run.threshold_w, n: 44, sigmaCells: 1.8, tail: 1,
-        });
+    // --- Plot cards: one per phase, side by side ------------------------------------------------------
 
-        const verdict = $('verdict');
-        const r = run.result || {};
-        const readings = readsOf(run);
-        if (run.status === 'error') {
-            verdict.className = 'verdict ng';
-            verdict.textContent = 'Alignment interrupted';
-            const small = document.createElement('small');
-            small.textContent = run.error || '';
-            verdict.append(small);
-        } else {
-            verdict.className = `verdict ${r.passed ? 'ok' : 'ng'}`;
-            verdict.textContent = `${r.passed ? '✓ Aligned' : '✗ Below threshold'}: ${withUnit(r.power_w)}`;
-            const small = document.createElement('small');
-            small.textContent = `threshold ${withUnit(run.threshold_w)} · ${run.elapsed.toFixed(1)} s · ${readings} readings`
-                + (r.timed_out ? ' · timed out' : '');
-            verdict.append(small);
-        }
-
-        const gains = states.map(p => gainDb(p)).filter(isNum);
-        const span = Math.max(1, maxOf(gains.map(Math.abs), 1));
-        $('waterfall').replaceChildren(...states.map(p => {
-            const li = document.createElement('li');
-            const gain = gainDb(p);
-            li.className = `wf-row${p.status === 'skipped' || p.status === 'not run' ? ' skipped' : ''}${isNum(gain) && gain < 0 ? ' neg' : ''}`;
-            const name = document.createElement('span');
-            name.textContent = SHORT_NAMES[p.name] || p.name;
-            const bar = document.createElement('span');
-            bar.className = 'wf-bar';
-            const fill = document.createElement('i');
-            fill.style.width = isNum(gain) ? `${(Math.abs(gain) / span) * 100}%` : '0';
-            bar.append(fill);
-            const val = document.createElement('span');
-            val.className = 'wf-val';
-            val.textContent = isNum(gain) ? `${signed(gain)} dB`
-                : isNum(p.best_w) ? withUnit(p.best_w)
-                : p.status;
-            li.append(name, bar, val);
-            return li;
-        }));
-
-        // Lateral slopes are in power/mm, angular ones in power/°: each kind
-        // is drawn relative to its steepest circle.
-        const slopes = kind => {
-            const list = run.gradient.map((g, i) => [i + 1, g]).filter(([, g]) => g.kind === kind && isNum(g.magnitude));
-            const top = maxOf(list.map(([, g]) => g.magnitude));
-            return list.map(([i, g]) => [i, top > 0 ? g.magnitude / top : 0]);
-        };
-        gradientChart.setRange({ x: [0.5, Math.max(2, run.gradient.length) + 0.5], y: [0, 1.1] }, 0);
-        gradientChart.setData({
-            series: [
-                { points: slopes('cart'), color: ACCENT, width: 2, dots: true },
-                { points: slopes('ang'), color: BLUE, width: 2, dots: true },
-            ],
-        });
+    // What an empty plot says, from its phase's state.
+    function idleMessage(phase, waiting) {
+        if (!phase || phase.status === 'pending') return waiting;
+        return phase.status === 'skipped' ? 'Skipped' : 'Not run';
     }
 
-    // --- Main panel ------------------------------------------------------------------------------------
-
-    function showPanel(id) {
-        ['panel-map', 'panel-profiles', 'panel-gradient', 'panel-summary'].forEach(p => { $(p).hidden = p !== id; });
-    }
-
-    function renderMain(run, states) {
-        const running = run.status === 'running';
-        let phase = null;
-        if (running) {
-            phase = run.phaseLog.filter(p => p.status === 'running').pop() || null;
-        } else if (selected && selected !== 'summary') {
-            phase = states.find(p => p.name === selected) || null;
-        }
-
-        if (!running && !phase) {
-            showPanel('panel-summary');
-            $('panel-title').textContent = 'Summary';
-            $('panel-sub').textContent = `fiber #${run.fiber || '–'} · ${readsOf(run)} readings · ${run.elapsed.toFixed(1)} s`;
-            renderSummary(run, states);
-            return;
-        }
-
-        const name = phase ? phase.name : 'Starting';
-        const view = (phase && PHASE_VIEWS[phase.name]) || DEFAULT_VIEW;
-        const index = phase ? phase.index : null;
-        const samples = index === null ? run.samples : run.samples.filter(s => s[PHASE] === index);
+    // "312 readings · best 94.48 µW" for a card's title line. Once the phase
+    // is over, its own count: the points of a reloaded run are decimated.
+    function phaseNumbers(run, phase, count) {
+        const samples = run.samples.filter(s => s[PHASE] === phase.index);
+        const reads = phase.status !== 'running' && isNum(phase.reads) ? phase.reads : samples.length;
         const best = maxOf(samples.map(s => s[POWER]));
-        const status = running ? 'running' : phase.status;
-        const readings = !running && isNum(phase.reads) ? phase.reads : samples.length;
-        $('panel-title').textContent = name;
-        $('panel-sub').textContent = `${status} · ${readings} readings${isNum(best) ? ` · best ${withUnit(best)}` : ''}`;
-
-        if (view.type === 'profiles') {
-            showPanel('panel-profiles');
-            renderProfiles(run);
-        } else if (view.type === 'gradient') {
-            showPanel('panel-gradient');
-            renderGradient(run, index);
-        } else {
-            showPanel('panel-map');
-            $('panel-title').textContent = `${name} · power over ${view.names[0]} / ${view.names[1]} (${view.unit})`;
-            mapView.update({
-                key: `${run.key}:${name}`,
-                points: project(samples, view.axes, view.scale, run.start),
-                names: view.names, unit: view.unit, minSpan: view.minSpan, threshold: run.threshold_w,
-            });
-        }
+        return `${count || `${reads} readings`}${isNum(best) ? ` · best ${withUnit(best)}` : ''}`;
     }
 
-    // --- Live numbers ------------------------------------------------------------------------------------
-
-    function renderNumbers(run) {
-        const last = run.samples[run.samples.length - 1];
-        const start = run.start;
-        const set = (id, text) => { $(id).textContent = text; };
-        if (!last || !start) {
-            ['n-dx', 'n-dz', 'n-da', 'n-dg', 'n-dy', 'n-db', 'n-best', 'n-gain', 'n-reads'].forEach(id => set(id, '—'));
+    function renderSpiral({ spec, view }, run, phase) {
+        $(`card-${spec.id}`).classList.toggle('active', !!phase && phase.status === 'running');
+        const sub = $(`sub-${spec.id}`);
+        if (!ran(phase)) {
+            view.clear(idleMessage(phase, spec.waiting));
+            sub.textContent = '';
             return;
         }
-        const um = i => `${signed((last[i] - start[i]) * 1000)} µm`;
-        const deg = i => `${signed(wrapDeg(last[i] - start[i]), 3)}°`;
-        set('n-dx', um(0));
-        set('n-dz', um(2));
-        set('n-dy', um(1));
-        set('n-da', deg(3));
-        set('n-dg', deg(5));
-        set('n-db', deg(4));
-        let best = null;
-        let first = null;
-        run.samples.forEach(s => {
-            if (!isNum(s[POWER])) return;
-            if (!first) first = s;
-            if (!best || s[POWER] > best[POWER]) best = s;
+        view.update({
+            key: `${run.key}:${phase.name}`,
+            points: project(run.samples.filter(s => s[PHASE] === phase.index), spec.axes, spec.scale, run.start),
+            names: spec.names, unit: spec.unit, minSpan: spec.minSpan, threshold: run.threshold_w,
         });
-        set('n-best', best
-            ? `${withUnit(best[POWER])} @ ${signed((best[0] - start[0]) * 1000)} / ${signed((best[2] - start[2]) * 1000)} µm`
-            : '—');
-        set('n-gain', best && first && first[POWER] > 0 ? `${signed(dbOf(best[POWER], first[POWER]))} dB` : '—');
-        const tLast = last[T];
-        const rate = isNum(tLast) ? run.samples.filter(s => s[T] > tLast - 1).length : 0;
-        set('n-reads', run.status === 'running' ? `${run.samples.length} · ${rate}/s` : `${readsOf(run)}`);
+        sub.textContent = phaseNumbers(run, phase);
+    }
+
+    // The gradient's card. The axial search, often skipped, borrows it while
+    // it runs, and keeps it if the alignment ends before the gradient.
+    function renderFine(run, axial, gradient) {
+        const showAxial = ran(axial) && (axial.status === 'running' || !ran(gradient));
+        const phase = showAxial ? axial : gradient;
+        const running = !!phase && phase.status === 'running';
+        $('panel-profiles').hidden = !showAxial;
+        $('panel-gradient').hidden = showAxial;
+        $('title-fine').textContent = showAxial ? AXIAL_PHASE : GRADIENT_PHASE;
+        $('card-fine').classList.toggle('active', running);
+        const sub = $('sub-fine');
+        if (showAxial) {
+            renderProfiles(run);
+            const n = run.profiles.length;
+            sub.textContent = phaseNumbers(run, axial, running ? `scan ${n}` : `${n} scans`);
+            return;
+        }
+        if (!ran(gradient)) {
+            const text = idleMessage(gradient, 'Waiting for the gradient ascent…');
+            gradLat.clear(text);
+            gradAng.clear(text);
+            $('grad-lat-box').classList.remove('active');
+            $('grad-ang-box').classList.remove('active');
+            sub.textContent = '';
+            return;
+        }
+        renderGradient(run, gradient.index);
+        const n = run.gradient.length;
+        sub.textContent = phaseNumbers(run, gradient, running ? `circle ${n}` : `${n} circles`);
+    }
+
+    function renderPlots(run, states) {
+        const byName = name => states.find(p => p.name === name) || null;
+        spirals.forEach(s => renderSpiral(s, run, byName(s.spec.phase)));
+        renderFine(run, byName(AXIAL_PHASE), byName(GRADIENT_PHASE));
     }
 
     // --- Events and hub status -------------------------------------------------------------------------
@@ -818,26 +732,15 @@
 
     // --- Main loop ------------------------------------------------------------------------------------------
 
-    let lastState = null;
-    let runKey = null;
-
     function render(state) {
-        lastState = state;
         renderPower(state);
         renderEvents(state);
         const run = buildRun(state);
         if (!run) return;
-        if (run.key !== runKey) {
-            runKey = run.key;
-            selected = null;
-            trackerKey = '';
-        }
         const states = phaseStates(run);
-        renderTracker(run, states);
-        renderBudget(run);
+        renderRun(run, states);
         renderTrace(run);
-        renderNumbers(run);
-        renderMain(run, states);
+        renderPlots(run, states);
     }
 
     refreshManifest();
