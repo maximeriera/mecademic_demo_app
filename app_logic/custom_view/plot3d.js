@@ -1,12 +1,14 @@
 // plot3d.js — dependency-free 3D scatter + surface on a 2D <canvas>.
 //
 //   const camera = Plot3D.camera();                    // share it to rotate panels together
-//   const plot = Plot3D.create(canvas, camera, {labels: {x: 'X', y: 'Y', z: 'Z'}});
-//   plot.setAxes({x: [x0, x1], y: [y0, y1], z: [z0, z1]});
+//   const plot = Plot3D.create(canvas, camera, {labels: {x: 'X', y: 'Y', z: 'Z'}, fontPx: 14});
+//   plot.setAxes({x: [x0, x1], y: [y0, y1], z: [z0, z1]}, 300); // optional ms: animate to it
 //   plot.setLabels({x: 'X', y: 'Y', z: 'Z'});         // e.g. when the z unit changes
-//   plot.setColor(z => 'rgb(...)');
-//   plot.setPoints([[x, y, z], ...]);                  // scan path + points, last one marked
+//   plot.setColor(z => 'rgb(...)');                    // surface and point colour, from height
+//   plot.setPoints([[x, y, z], ...], {tail: 200});     // path; the last `tail` points stand out
 //   plot.setSurface({x: [...], y: [...], z: [[...]]}); // mesh on grid nodes, null = hole
+//   plot.setMarkers([{x, y, z, kind: 'best'}]);        // a star on the best point
+//   plot.setFloorPath([[x, y], ...]);                  // a trail drawn on the floor
 //   Plot3D.animate([plot, ...], camera);              // auto-rotates; drag to orbit
 //
 // Orthographic projection, painter's ordering: fine for a few thousand points.
@@ -34,8 +36,8 @@
         return Math.max(0, Math.min(4, -Math.floor(Math.log10(step))));
     }
 
-    function camera() {
-        return { yaw: -0.65, pitch: 0.6, dragging: false, idleUntil: 0 };
+    function camera(options) {
+        return Object.assign({ yaw: -0.65, pitch: 0.6, dragging: false, idleUntil: 0, speed: AUTO_ROTATE_RAD_S }, options);
     }
 
     function attachDrag(canvas, cam) {
@@ -65,27 +67,61 @@
         canvas.addEventListener('pointercancel', end);
     }
 
+    const easeOut = t => 1 - Math.pow(1 - t, 3);
+    const sameRange = (a, b) => a && b && a[0] === b[0] && a[1] === b[1];
+
     function create(canvas, cam, options) {
-        let labels = (options && options.labels) || { x: 'X', y: 'Y', z: 'Z' };
+        options = options || {};
+        let labels = options.labels || { x: 'X', y: 'Y', z: 'Z' };
+        const fontPx = options.fontPx || 11;
         const style = Object.assign({
             text: '#9aa39f',
             grid: 'rgba(255, 255, 255, 0.08)',
             edge: 'rgba(255, 255, 255, 0.22)',
-            path: 'rgba(252, 253, 252, 0.16)',
+            path: 'rgba(252, 253, 252, 0.14)',
+            tail: '252, 253, 252',
             marker: '#FCFDFC',
-        }, options && options.style);
+            best: '#5DEFBF',
+            floor: 'rgba(157, 245, 215, 0.85)',
+        }, options.style);
         let axes = null;
+        let anim = null;           // {from, to, start, ms}: an axes transition in progress
         let color = () => '#5DEFBF';
         let points = [];
+        let tail = Infinity;
         let surface = null;
+        let markers = [];
+        let floorPath = [];
         let message = 'Waiting for data…';
 
         attachDrag(canvas, cam);
+
+        function setAxes(value, ms) {
+            const target = anim ? anim.to : axes;
+            if (target && ['x', 'y', 'z'].every(k => sameRange(target[k], value[k]))) return;
+            if (!axes || !ms) {
+                axes = value;
+                anim = null;
+                return;
+            }
+            anim = { from: currentAxes(), to: value, start: performance.now(), ms };
+        }
+
+        function currentAxes() {
+            if (!anim) return axes;
+            const t = Math.min(1, (performance.now() - anim.start) / anim.ms);
+            const e = easeOut(t);
+            const lerp = k => anim.from[k].map((v, i) => v + e * (anim.to[k][i] - v));
+            axes = t >= 1 ? anim.to : { x: lerp('x'), y: lerp('y'), z: lerp('z') };
+            if (t >= 1) anim = null;
+            return axes;
+        }
 
         function render() {
             const dpr = window.devicePixelRatio || 1;
             const w = canvas.clientWidth;
             const h = canvas.clientHeight;
+            if (!w || !h) return;  // hidden panel
             if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
                 canvas.width = Math.round(w * dpr);
                 canvas.height = Math.round(h * dpr);
@@ -93,7 +129,8 @@
             const ctx = canvas.getContext('2d');
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
-            ctx.font = '11px Archivo, sans-serif';
+            ctx.font = `${fontPx}px Archivo, sans-serif`;
+            currentAxes();
 
             if (!axes || (!points.length && !surface)) {
                 ctx.fillStyle = style.text;
@@ -110,7 +147,8 @@
             const cosY = Math.cos(cam.yaw), sinY = Math.sin(cam.yaw);
             const cosP = Math.cos(cam.pitch), sinP = Math.sin(cam.pitch);
             const reach = Math.hypot(box.x, box.y);
-            const scale = Math.min((w - 90) / (2 * reach), (h - 60) / (2 * (reach * sinP + box.z * cosP)));
+            const margin = fontPx * 8;
+            const scale = Math.min((w - margin) / (2 * reach), (h - fontPx * 5) / (2 * (reach * sinP + box.z * cosP)));
             const cx = w / 2;
             const cy = h / 2;
 
@@ -157,11 +195,11 @@
             ctx.textBaseline = 'middle';
             const yEdge = P(x0, y0, z0)[2] + P(x1, y0, z0)[2] < P(x0, y1, z0)[2] + P(x1, y1, z0)[2] ? y0 : y1;
             const xEdge = P(x0, y0, z0)[2] + P(x0, y1, z0)[2] < P(x1, y0, z0)[2] + P(x1, y1, z0)[2] ? x0 : x1;
-            xTicks.values.forEach(v => label(P(v, yEdge, z0), v.toFixed(decimalsFor(xTicks.step)), 14));
-            yTicks.values.forEach(v => label(P(xEdge, v, z0), v.toFixed(decimalsFor(yTicks.step)), 14));
+            xTicks.values.forEach(v => label(P(v, yEdge, z0), v.toFixed(decimalsFor(xTicks.step)), fontPx * 1.3));
+            yTicks.values.forEach(v => label(P(xEdge, v, z0), v.toFixed(decimalsFor(yTicks.step)), fontPx * 1.3));
             // Titles sit past the tick labels, clear of the middle tick.
-            label(P((x0 + x1) / 2, yEdge, z0), labels.x, 46);
-            label(P(xEdge, (y0 + y1) / 2, z0), labels.y, 46);
+            label(P((x0 + x1) / 2, yEdge, z0), labels.x, fontPx * 4);
+            label(P(xEdge, (y0 + y1) / 2, z0), labels.y, fontPx * 4);
 
             // Z ticks on the vertical edge that is leftmost on screen. Its foot is
             // a floor corner that already carries tick labels, so skip low ticks.
@@ -176,10 +214,12 @@
                 });
             const zTop = P(zx, zy, z1);
             ctx.textAlign = 'left';
-            ctx.fillText(labels.z, zTop[0] - 6, zTop[1] - 14);
+            ctx.fillText(labels.z, zTop[0] - 6, zTop[1] - fontPx * 1.3);
 
+            if (floorPath.length) drawFloorPath(ctx, P, z0);
             if (surface) drawSurface(ctx, P);
             if (points.length) drawPoints(ctx, P, z0);
+            if (markers.length) drawMarkers(ctx, P);
         }
 
         function drawSurface(ctx, P) {
@@ -212,49 +252,108 @@
 
         function drawPoints(ctx, P, zFloor) {
             const projected = points.map(([x, y, z]) => ({ s: P(x, y, z), z }));
+            const first = Math.max(0, projected.length - tail);
 
+            // The whole path, faint; then its tail, brighter towards the latest point.
             ctx.strokeStyle = style.path;
             ctx.lineWidth = 1;
             ctx.beginPath();
-            projected.forEach(({ s }, i) => (i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1])));
+            projected.slice(0, first + 1).forEach(({ s }, i) => (i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1])));
             ctx.stroke();
+            const span = projected.length - first;
+            for (let i = first + 1; i < projected.length; i++) {
+                const a = projected[i - 1].s, b = projected[i].s;
+                ctx.strokeStyle = `rgba(${style.tail}, ${(0.15 + 0.75 * (i - first) / span).toFixed(3)})`;
+                ctx.lineWidth = 1.5;
+                line2(ctx, a, b);
+            }
 
             projected
-                .slice()
+                .slice(first)
                 .sort((a, b) => b.s[2] - a.s[2])
                 .forEach(({ s, z }) => {
                     ctx.fillStyle = color(z);
                     ctx.beginPath();
-                    ctx.arc(s[0], s[1], 2.6, 0, Math.PI * 2);
+                    ctx.arc(s[0], s[1], 2.8, 0, Math.PI * 2);
                     ctx.fill();
                 });
 
-            // The sensor's current spot: a probe line down to the floor and a ring.
+            // The current spot: a probe line down to the floor and a ring.
             const last = points[points.length - 1];
             const tip = projected[projected.length - 1].s;
             const foot = P(last[0], last[1], zFloor);
             ctx.strokeStyle = style.marker;
+            ctx.lineWidth = 1;
             ctx.setLineDash([3, 3]);
-            ctx.beginPath();
-            ctx.moveTo(foot[0], foot[1]);
-            ctx.lineTo(tip[0], tip[1]);
-            ctx.stroke();
+            line2(ctx, foot, tip);
             ctx.setLineDash([]);
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.arc(tip[0], tip[1], 6, 0, Math.PI * 2);
+            ctx.arc(tip[0], tip[1], 7, 0, Math.PI * 2);
             ctx.stroke();
         }
 
+        function drawMarkers(ctx, P) {
+            markers.forEach(m => {
+                const s = P(m.x, m.y, m.z);
+                if (m.kind === 'best') {
+                    star(ctx, s[0], s[1], 9, 4);
+                    ctx.fillStyle = style.best;
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(12, 26, 15, 0.9)';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
+            });
+        }
+
+        function drawFloorPath(ctx, P, zFloor) {
+            const s = floorPath.map(([x, y]) => P(x, y, zFloor));
+            ctx.strokeStyle = style.floor;
+            ctx.fillStyle = style.floor;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            s.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+            ctx.stroke();
+            s.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
         return {
-            setAxes(value) { axes = value; },
+            setAxes,
             setLabels(value) { labels = value; },
             setColor(fn) { color = fn; },
-            setPoints(value) { points = value || []; },
+            setPoints(value, opts) {
+                points = value || [];
+                tail = opts && opts.tail ? opts.tail : Infinity;
+            },
             setSurface(value) { surface = value || null; },
+            setMarkers(value) { markers = value || []; },
+            setFloorPath(value) { floorPath = value || []; },
             setMessage(text) { message = text; },
             render,
         };
+    }
+
+    function line2(ctx, a, b) {
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.stroke();
+    }
+
+    function star(ctx, x, y, outer, inner) {
+        ctx.beginPath();
+        for (let k = 0; k < 10; k++) {
+            const r = k % 2 ? inner : outer;
+            const a = -Math.PI / 2 + (k * Math.PI) / 5;
+            const px = x + r * Math.cos(a), py = y + r * Math.sin(a);
+            k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        }
+        ctx.closePath();
     }
 
     function animate(plots, cam) {
@@ -263,7 +362,7 @@
         function frame(now) {
             const dt = Math.min(0.1, (now - previous) / 1000);
             previous = now;
-            if (!still && !cam.dragging && now > cam.idleUntil) cam.yaw += dt * AUTO_ROTATE_RAD_S;
+            if (!still && !cam.dragging && now > cam.idleUntil) cam.yaw += dt * cam.speed;
             plots.forEach(plot => plot.render());
             requestAnimationFrame(frame);
         }

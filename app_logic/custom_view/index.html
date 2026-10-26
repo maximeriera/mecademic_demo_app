@@ -12,24 +12,24 @@
             padding: 0 16px 16px;
         }
 
-        /* Everything but the events fits exactly one browser window: the graph
-           takes whatever height the other rows leave. Events sit below. */
+        /* Everything but the events fits exactly one 1080p screen: the main
+           panel and the trace take whatever height the other rows leave. */
         .screen {
-            width: min(100%, 1800px);
+            width: min(100%, 1880px);
             height: 100vh;
             height: 100dvh;
-            min-height: 640px;
+            min-height: 760px;
             display: flex;
             flex-direction: column;
             gap: 10px;
-            padding: 10px 0 12px;
+            padding: 8px 0 12px;
+            font-size: 16px;
         }
         .screen .view-topbar {
             width: 100%;
             margin-bottom: 0;
             padding-bottom: 10px;
         }
-
         .view-header {
             display: flex;
             flex-wrap: wrap;
@@ -38,22 +38,10 @@
         }
         .view-header h1 {
             margin: 0;
-            font-size: 1.15em;
+            font-size: 1.2em;
             color: var(--color-accent);
-            letter-spacing: 0.01em;
         }
-        .view-sub {
-            color: var(--color-muted);
-            font-size: 0.8em;
-        }
-        .card-title,
-        .power-state,
-        .stats dt {
-            font-size: 0.72em;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
+        .view-sub { color: var(--color-muted); font-size: 0.8em; }
         .banner {
             padding: 8px 14px;
             border: 1px solid var(--color-red);
@@ -69,35 +57,38 @@
             padding: 10px 14px 12px;
             min-width: 0;
         }
-        .card-title {
-            color: var(--color-accent-soft);
-            margin-bottom: 6px;
+        .card-title,
+        .sub-title,
+        .power-state,
+        .numbers dt {
+            font-size: 0.72em;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
+        .card-title { color: var(--color-accent-soft); margin-bottom: 6px; }
         .card-title span {
             color: var(--color-muted);
             font-weight: 600;
             letter-spacing: 0.02em;
             text-transform: none;
         }
-        canvas {
-            display: block;
-            width: 100%;
-        }
+        .sub-title { color: var(--color-muted); margin-bottom: 4px; }
+        canvas { display: block; width: 100%; }
 
-        /* Live power + cell state, in one row. */
-        .top-row {
+        /* --- Row 1: live power + phase tracker ----------------------------- */
+        .head-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) clamp(220px, 22vw, 340px);
+            grid-template-columns: minmax(300px, 1fr) minmax(0, 2.3fr);
             gap: 10px;
         }
-
         /* Live power: the whole tile turns green at or above the threshold and
            red below it, so the state reads from across the stand. */
         .power-card {
             display: flex;
             flex-direction: column;
             justify-content: center;
-            gap: 6px;
+            gap: 4px;
             border-width: 2px;
             transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
         }
@@ -112,118 +103,155 @@
             box-shadow: 0 0 18px rgba(255, 90, 107, 0.25);
         }
         .power-value {
-            font-size: 3.4em;
+            font-size: 3.2em;
             font-weight: 800;
             line-height: 1;
             color: var(--color-text);
             font-variant-numeric: tabular-nums;
-            transition: color 0.15s ease;
         }
-        .power-value .unit {
-            font-size: 0.4em;
-            font-weight: 600;
-            color: var(--color-muted);
-            margin-left: 8px;
-        }
+        .power-value .unit { font-size: 0.4em; font-weight: 600; color: var(--color-muted); margin-left: 8px; }
         .power-card.above .power-value { color: var(--color-accent); }
         .power-card.below .power-value { color: var(--color-red); }
-        .power-threshold {
-            font-size: 1.05em;
-            color: var(--color-muted);
-            font-variant-numeric: tabular-nums;
-        }
+        .power-threshold { color: var(--color-muted); font-variant-numeric: tabular-nums; }
         .power-threshold strong { color: var(--color-text); }
         .power-state { color: var(--color-muted); }
         .power-card.above .power-state { color: var(--color-accent); }
         .power-card.below .power-state { color: var(--color-red); }
 
-        .stats {
-            display: grid;
-            grid-template-columns: auto auto;
-            gap: 4px 18px;
-            margin: 0;
-            font-size: 0.95em;
-            font-variant-numeric: tabular-nums;
-        }
-        .stats dt { color: var(--color-muted); align-self: center; }
-        .stats dd {
-            margin: 0;
-            text-align: right;
-            font-weight: 700;
-        }
-
-        /* Alignment graph: fills the height left over. */
-        .graph-card {
-            flex: 1;
-            min-height: 260px;
-            display: flex;
-            flex-direction: column;
-        }
-        .plot3d {
-            flex: 1 1 0;
-            min-height: 0;
-        }
-        #align-caption.ok { color: var(--color-accent); }
-        #align-caption.ng { color: var(--color-red); }
-
-        .legend {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 10px;
-            margin-top: 6px;
-            font-size: 0.78em;
-            color: var(--color-muted);
-        }
-        /* Below the threshold. Same stops as LOW / HIGH in view.js. */
-        .colorbar {
-            width: 160px;
-            height: 10px;
-            border-radius: 2px;
-            background: linear-gradient(90deg, rgb(59, 184, 255), rgb(255, 212, 71));
-        }
-        .chip {
-            width: 14px;
-            height: 10px;
-            border-radius: 2px;
-            background: var(--color-accent);
-        }
-        .legend-note { margin-left: auto; }
-
-        .events-card { width: min(100%, 1800px); }
-        .events {
+        .tracker-card { display: flex; flex-direction: column; gap: 8px; }
+        #run-caption.ok { color: var(--color-accent); }
+        #run-caption.ng { color: var(--color-red); }
+        .tracker {
             list-style: none;
             margin: 0;
             padding: 0;
-            font-size: 0.85em;
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(0, 1fr);
+            gap: 8px;
+        }
+        .chip {
+            position: relative;
+            padding: 8px 10px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-control);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--color-muted);
+            min-width: 0;
+            transition: background-color 0.3s ease, border-color 0.3s ease;
+        }
+        .chip-name { display: block; font-weight: 700; font-size: 0.95em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chip-metric { display: block; font-size: 0.85em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chip.done { color: var(--color-text); border-color: var(--color-accent-2); }
+        .chip.done .chip-metric { color: var(--color-accent); }
+        .chip.active {
+            color: var(--color-text);
+            border-color: var(--color-yellow);
+            background: rgba(255, 212, 71, 0.12);
+            box-shadow: 0 0 14px rgba(255, 212, 71, 0.18);
+        }
+        .chip.active .chip-metric { color: var(--color-yellow); }
+        .chip.skipped { opacity: 0.55; border-style: dashed; }
+        .chip.failed { color: var(--color-red); border-color: var(--color-red); }
+        .chip.pass { color: var(--color-accent); border-color: var(--color-accent); background: rgba(93, 239, 191, 0.12); }
+        .chip.fail { color: var(--color-red); border-color: var(--color-red); background: rgba(255, 90, 107, 0.12); }
+        .chip.clickable { cursor: pointer; }
+        .chip.clickable:hover { background: rgba(255, 255, 255, 0.07); }
+        .chip.selected { outline: 2px solid var(--color-accent-soft); outline-offset: 1px; }
+
+        .budget { display: flex; align-items: center; gap: 10px; font-size: 0.85em; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+        .budget-bar { flex: 1; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+        .budget-fill { height: 100%; width: 0; background: var(--color-accent-2); transition: width 0.3s linear; }
+        .budget-fill.warn { background: var(--color-yellow); }
+
+        /* --- Row 2: main panel + side column ---------------------------------- */
+        .body-row {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr);
+            gap: 10px;
+        }
+        .main-card { display: flex; flex-direction: column; min-height: 0; }
+        .panel-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+        .panel-title { font-size: 1.1em; font-weight: 800; color: var(--color-accent); }
+        .panel-sub { color: var(--color-muted); font-size: 0.85em; font-variant-numeric: tabular-nums; }
+        .panel { flex: 1; min-height: 0; }
+        .panel[hidden] { display: none; }
+        .panel > canvas { height: 100%; }
+        .panel-profiles { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; }
+        .panel-profiles canvas { height: 100%; min-height: 0; }
+        .panel-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .panel-summary { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; }
+        .sub-panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            border: 1px solid transparent;
+            border-radius: var(--radius-control);
+            padding: 4px;
+            transition: border-color 0.3s ease;
+        }
+        .sub-panel.active { border-color: var(--color-yellow); }
+        .sub-panel canvas { flex: 1; min-height: 0; }
+        .summary-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+        .summary-side canvas { flex: 1; min-height: 120px; }
+        .verdict { font-size: 1.15em; font-weight: 800; }
+        .verdict.ok { color: var(--color-accent); }
+        .verdict.ng { color: var(--color-red); }
+        .verdict small { display: block; font-weight: 600; font-size: 0.75em; color: var(--color-muted); }
+        .waterfall { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+        .wf-row { display: grid; grid-template-columns: 9.5em minmax(0, 1fr) 6em; gap: 8px; align-items: center; font-size: 0.9em; }
+        .wf-bar { height: 12px; border-radius: 3px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+        .wf-bar i { display: block; height: 100%; background: var(--color-accent-2); }
+        .wf-row.neg .wf-bar i { background: var(--color-red); }
+        .wf-row.skipped { opacity: 0.5; }
+        .wf-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+        .side-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+        .trace-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+        .trace-card canvas { flex: 1; min-height: 0; }
+        .numbers {
+            margin: 0;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px 14px;
             font-variant-numeric: tabular-nums;
         }
-        .events li {
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 5px 0;
-            border-bottom: 1px solid var(--color-border);
-        }
+        .numbers > div { min-width: 0; }
+        .numbers dt { color: var(--color-muted); }
+        .numbers dd { margin: 2px 0 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .numbers .big dd { font-size: 1.6em; font-weight: 800; color: var(--color-text); }
+        .numbers .wide { grid-column: span 2; }
+
+        .events-card { width: min(100%, 1880px); }
+        .events { list-style: none; margin: 0; padding: 0; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+        .events li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--color-border); }
         .events li:last-child { border-bottom: none; }
         .events .t { color: var(--color-muted); }
         .empty { color: var(--color-muted); font-size: 0.9em; }
 
-        /* Too narrow to fit one screen: stack and scroll normally. */
-        @media (max-width: 900px) {
+        /* Too narrow for one screen: stack and scroll normally. */
+        @media (max-width: 1200px) {
             .screen { height: auto; min-height: 0; }
-            .top-row { grid-template-columns: minmax(0, 1fr); }
-            .power-value { font-size: 2.6em; }
-            .graph-card { flex: none; }
-            .plot3d { flex: none; height: 360px; }
-            .legend-note { margin-left: 0; }
+            .head-row, .body-row { grid-template-columns: minmax(0, 1fr); }
+            .tracker { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+            .main-card { height: 620px; }
+            .trace-card { height: 300px; flex: none; }
+            .panel-summary, .panel-pair { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr 1fr; }
+        }
+        @media (max-width: 700px) {
+            .numbers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .power-value { font-size: 2.4em; }
+            .panel-profiles { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(4, 1fr); }
+            .main-card { height: 900px; }
         }
     </style>
 </head>
 <body>
     <div class="screen">
-        <!-- Default top bar (logo, system status + task, current step),
-             mounted here by /static/js/view-header.js. -->
+        <!-- Default top bar (logo, system status + task, current step, back to
+             the controller), mounted here by /static/js/view-header.js. -->
         <div id="view-topbar"></div>
 
         <header class="view-header">
@@ -233,7 +261,7 @@
 
         <div class="banner" id="setup-error" hidden></div>
 
-        <div class="top-row">
+        <div class="head-row">
             <section class="card power-card" id="power-card">
                 <div class="card-title">Power <span>— live</span></div>
                 <div class="power-value"><span id="power-now">—</span><span class="unit" id="power-unit"></span></div>
@@ -241,30 +269,82 @@
                 <div class="power-state" id="power-state">Waiting for the power meter…</div>
             </section>
 
-            <section class="card">
-                <div class="card-title">Cell</div>
-                <dl class="stats">
-                    <dt>Held fiber</dt><dd id="held-fiber">—</dd>
-                    <dt>Next fiber</dt><dd id="next-fiber">—</dd>
-                    <dt>Aligned</dt><dd id="aligned-count">—</dd>
-                    <dt>Failed</dt><dd id="failed-count">—</dd>
-                    <dt>Last alignment</dt><dd id="last-power">—</dd>
-                </dl>
+            <section class="card tracker-card">
+                <div class="card-title">Alignment <span id="run-caption">— waiting for an alignment</span></div>
+                <ol class="tracker" id="tracker"></ol>
+                <div class="budget">
+                    <div class="budget-bar"><div class="budget-fill" id="budget-fill"></div></div>
+                    <span id="budget-text">—</span>
+                </div>
             </section>
         </div>
 
-        <section class="card graph-card">
-            <div class="card-title">Alignment <span id="align-caption">— waiting for an alignment</span></div>
-            <canvas id="plot" class="plot3d"></canvas>
-            <div class="legend">
-                <span>0</span>
-                <div class="colorbar" aria-hidden="true"></div>
-                <span>threshold</span>
-                <span class="chip" aria-hidden="true"></span>
-                <span>at or above</span>
-                <span class="legend-note">Power vs the robot's X/Z offset from the alignment start (rotations not shown), recorded during the alignment step only. Drag to rotate.</span>
-            </div>
-        </section>
+        <div class="body-row">
+            <section class="card main-card">
+                <div class="panel-head">
+                    <span class="panel-title" id="panel-title">Waiting for an alignment</span>
+                    <span class="panel-sub" id="panel-sub"></span>
+                </div>
+
+                <div class="panel" id="panel-map"><canvas id="plot-map"></canvas></div>
+
+                <div class="panel panel-profiles" id="panel-profiles" hidden>
+                    <canvas id="profile-Rx"></canvas>
+                    <canvas id="profile-Rz"></canvas>
+                    <canvas id="profile-X"></canvas>
+                    <canvas id="profile-Z"></canvas>
+                </div>
+
+                <div class="panel panel-pair" id="panel-gradient" hidden>
+                    <div class="sub-panel" id="grad-lat-box">
+                        <div class="sub-title">Lateral · ΔX / ΔZ (µm)</div>
+                        <canvas id="plot-grad-lat"></canvas>
+                    </div>
+                    <div class="sub-panel" id="grad-ang-box">
+                        <div class="sub-title">Angular · Δα / Δγ (m°)</div>
+                        <canvas id="plot-grad-ang"></canvas>
+                    </div>
+                </div>
+
+                <div class="panel panel-summary" id="panel-summary" hidden>
+                    <div class="sub-panel">
+                        <div class="sub-title">Explored lateral landscape · ΔX / ΔZ (µm)</div>
+                        <canvas id="plot-summary"></canvas>
+                    </div>
+                    <div class="summary-side">
+                        <div class="verdict" id="verdict"></div>
+                        <div class="sub-title">Gain per phase</div>
+                        <ul class="waterfall" id="waterfall"></ul>
+                        <div class="sub-title">Gradient slope per circle</div>
+                        <canvas id="chart-gradient"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <aside class="side-col">
+                <section class="card trace-card">
+                    <div class="card-title">Power over time <span>— dB vs threshold, best so far in green</span></div>
+                    <canvas id="chart-trace"></canvas>
+                </section>
+                <section class="card">
+                    <dl class="numbers">
+                        <div class="big"><dt>ΔX</dt><dd id="n-dx">—</dd></div>
+                        <div class="big"><dt>ΔZ</dt><dd id="n-dz">—</dd></div>
+                        <div class="big"><dt>Δα</dt><dd id="n-da">—</dd></div>
+                        <div class="big"><dt>Δγ</dt><dd id="n-dg">—</dd></div>
+                        <div><dt>ΔY</dt><dd id="n-dy">—</dd></div>
+                        <div><dt>Δβ</dt><dd id="n-db">—</dd></div>
+                        <div class="wide"><dt>Best</dt><dd id="n-best">—</dd></div>
+                        <div><dt>Gain</dt><dd id="n-gain">—</dd></div>
+                        <div><dt>Readings</dt><dd id="n-reads">—</dd></div>
+                        <div><dt>Held fiber</dt><dd id="held-fiber">—</dd></div>
+                        <div><dt>Next fiber</dt><dd id="next-fiber">—</dd></div>
+                        <div class="wide"><dt>Aligned / failed</dt><dd id="n-counts">—</dd></div>
+                        <div class="wide"><dt>Last alignment</dt><dd id="last-power">—</dd></div>
+                    </dl>
+                </section>
+            </aside>
+        </div>
     </div>
 
     <section class="card events-card">
@@ -275,6 +355,8 @@
     <script src="/static/js/view-header.js"></script>
     <script src="/static/js/datahub.js"></script>
     <script src="plot3d.js"></script>
+    <script src="chart2d.js"></script>
+    <script src="landscape.js"></script>
     <script src="view.js"></script>
 </body>
 </html>

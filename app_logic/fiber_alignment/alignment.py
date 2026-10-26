@@ -9,6 +9,10 @@ here:
 * Every reading is recorded with the robot's pose at that moment, and published
   to the custom view (``align_sample``). The graph therefore shows exactly what
   the algorithm measured, and moves only while an alignment runs.
+* The algorithm names its phases with ``io.phase()``: they show in the top bar,
+  are timed on the Production tab and drive the custom view's panels. Extra
+  data for the view (axial profiles, gradient steps) goes through
+  ``io.publish()``.
 * Every target pose is checked **before anything is sent**: each coordinate
   must stay within ``align_range_um`` / ``align_range_deg`` of the start pose,
   and be a finite number.
@@ -27,8 +31,9 @@ from __future__ import annotations
 import logging
 import math
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 from core import AppContext
 
@@ -40,6 +45,8 @@ from .frames import Pose6
 PLOT_AXES = (0, 2)
 #: Most points kept in the align_result summary for the custom view.
 RESULT_POINTS_MAX = 5000
+#: Most entries kept per io.publish() name in the align_result summary.
+RESULT_PUBLISHED_MAX = 500
 #: Pause between two readings during a scan (s). The meter reading and the
 #: pose query take a few ms more.
 SCAN_SAMPLE_PERIOD_S = 0.002
@@ -83,8 +90,12 @@ class Sample:
 
     pose: Pose6
     power_w: float
-    #: "cart" (lateral moves), "ang" (rotations) or None. The view plots all but "ang".
+    #: "cart" (lateral moves), "ang" (rotations) or None.
     kind: Optional[str] = None
+    #: Index of the phase it was read in (see AlignmentIO.phase), or -1.
+    phase: int = -1
+    #: Seconds since the alignment started.
+    t: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -141,12 +152,14 @@ class AlignmentIO:
     """What the algorithm may do: move the fiber, scan, and read the power."""
 
     def __init__(self, robot: Any, meter: Any, context: AppContext, settings: AlignmentSettings,
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None, phases: Sequence[str] = ()):
         self._robot = robot
         self._meter = meter
         self._context = context
         self._settings = settings
         self._log = logger or logging.getLogger(__name__)
+        #: The algorithm's declared phases, in order (the view's phase tracker).
+        self.phases: List[str] = list(phases)
         #: Where the search started: the centre of the window.
         self.start: Pose6 = self._target_pose()
         self._t0 = time.monotonic()
@@ -155,11 +168,69 @@ class AlignmentIO:
         self.samples: List[Sample] = []
         #: The highest reading so far, or None before the first.
         self.best: Optional[Sample] = None
+        #: One entry per phase run, for the summary.
+        self.phase_log: List[Dict[str, Any]] = []
+        #: What the algorithm published for the view, by name.
+        self.published: Dict[str, List[Any]] = {}
+        self._phase = -1
         self._checkpoints = iter(())
         # Power meter settings changed by the algorithm, with their original values.
         self._meter_originals: Dict[str, Any] = {}
 
     # --- For the algorithm ---------------------------------------------------
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        """Run one phase of the algorithm (``with io.phase("Cartesian spiral"): ...``).
+
+        The phase is shown in the top bar under "Align fiber" and timed on the
+        Production tab (a nested step), followed by the custom view's phase
+        tracker, and summarised in align_result. Readings taken inside it are
+        tagged with it. Name the phases as declared in ``PHASES`` (algorithm.py).
+        """
+        index = self.phases.index(name) if name in self.phases else -1
+        entry: Dict[str, Any] = {
+            "name": name,
+            "index": index,
+            "t0": round(self.elapsed_s(), 3),
+            "best_before_w": self.best.power_w if self.best else None,
+            "status": "running",
+        }
+        reads_before = len(self.samples)
+        previous, self._phase = self._phase, index
+        self.phase_log.append(entry)
+        self._context.mark("align_phase_start", phase=name, index=index, t=entry["t0"])
+        self._log.info(f"Alignment phase '{name}' started")
+        status = "done"
+        try:
+            with self._context.step(name):
+                yield
+        except AlignmentTimeout:
+            status = "timed out"
+            raise
+        except BaseException:
+            status = "failed"
+            raise
+        finally:
+            self._phase = previous
+            entry.update(t1=round(self.elapsed_s(), 3), status=status, reads=len(self.samples) - reads_before,
+                         best_w=self.best.power_w if self.best else None)
+            self._context.mark("align_phase_end", phase=name, index=index, t=entry["t1"], status=status,
+                               reads=entry["reads"], best_w=entry["best_w"], best_before_w=entry["best_before_w"])
+            self._log.info(f"Alignment phase '{name}' {status}: {entry['reads']} reading(s) in "
+                           f"{entry['t1'] - entry['t0']:.2f} s")
+
+    def publish(self, name: str, value: Any) -> None:
+        """Share extra data with the custom view, as channel ``align_<name>``.
+
+        Dict values get the current phase index and time added. The view uses
+        "profile" (one per axial scan) and "gradient" (one per gradient circle);
+        anything else is kept in align_result for later use.
+        """
+        if isinstance(value, dict):
+            value = {**value, "phase": self._phase, "t": round(self.elapsed_s(), 3)}
+        self.published.setdefault(name, []).append(value)
+        self._context.publish(f"align_{name}", value)
 
     def pose(self) -> Pose6:
         """The robot's actual pose now."""
@@ -326,9 +397,9 @@ class AlignmentIO:
         value = self._meter.read_power()
         if value is None:
             raise AlignmentError("The power meter returned no reading: alignment needs the real power meter.")
-        sample = Sample(self._actual_pose(), float(value), kind)
+        sample = Sample(self._actual_pose(), float(value), kind, self._phase, round(self.elapsed_s(), 4))
         self.samples.append(sample)
-        self._context.publish("align_sample", [*sample.pose, sample.power_w, kind])
+        self._context.publish("align_sample", _sample_row(sample))
         # NaN never compares greater, so an invalid reading never stays the best.
         if self.best is None or math.isnan(self.best.power_w) or sample.power_w > self.best.power_w:
             self.best = sample
@@ -417,21 +488,24 @@ Algorithm = Callable[[AlignmentIO, AlignmentSettings], None]
 
 
 def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
-                  align: Algorithm, logger: Optional[logging.Logger] = None) -> AlignmentResult:
+                  align: Algorithm, logger: Optional[logging.Logger] = None,
+                  phases: Sequence[str] = ()) -> AlignmentResult:
     """Run ``align`` from the robot's current pose, then judge the result.
 
     Brackets the run with ``align_start`` / ``align_end`` events and publishes
-    an ``align_result`` summary (with the points) for the custom view. Each
-    phase is logged to ``logger`` (the robot's device log).
+    an ``align_result`` summary (points, phases, published data) for the
+    custom view. Each phase is logged to ``logger`` (the robot's device log).
+    ``phases`` are the algorithm's phase names, in order (``algorithm.PHASES``).
     """
     log = logger or logging.getLogger(__name__)
     settings = AlignmentSettings.from_context(context)
-    io = AlignmentIO(robot, meter, context, settings, logger=log)
+    io = AlignmentIO(robot, meter, context, settings, logger=log, phases=phases)
     log.info(f"Alignment of fiber {fiber}: start {_fmt_pose(io.start)}, window ±{settings.range_mm:g} mm / "
              f"±{settings.range_deg:g}°, threshold {settings.threshold_w:.4g} W, timeout {settings.timeout_s:g} s. "
              f"Robot: {io._robot_state()}")
     context.mark("align_start", fiber=fiber, threshold_w=settings.threshold_w, start=list(io.start),
-                 range_mm=settings.range_mm, range_deg=settings.range_deg, plot_axes=list(PLOT_AXES))
+                 range_mm=settings.range_mm, range_deg=settings.range_deg, plot_axes=list(PLOT_AXES),
+                 phases=list(io.phases), timeout_s=settings.timeout_s)
 
     timed_out = False
     try:
@@ -449,8 +523,13 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
     except Exception as e:
         # An abort lands here too, from WaitIdle() or as AlignmentInterrupted.
         # Close the run on the view, then let the task runner handle it.
-        log.error(f"Alignment of fiber {fiber} failed after {io.elapsed_s():.1f} s: {type(e).__name__}: {e}")
-        context.mark("align_end", fiber=fiber, passed=False, error=f"{type(e).__name__}: {e}")
+        error = f"{type(e).__name__}: {e}"
+        log.error(f"Alignment of fiber {fiber} failed after {io.elapsed_s():.1f} s: {error}")
+        context.mark("align_end", fiber=fiber, passed=False, error=error)
+        try:
+            context.publish("align_result", _summary(io, settings, fiber, passed=False, power_w=None, error=error))
+        except Exception as summary_error:  # never hide the alignment's own error
+            log.warning(f"Could not publish the alignment summary: {summary_error}")
         raise
     finally:
         io._restore_meter()
@@ -465,23 +544,43 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
         timed_out=timed_out,
     )
     context.mark("align_end", fiber=fiber, passed=result.passed, power_w=final.power_w)
+    context.publish("align_result", _summary(io, settings, fiber, passed=result.passed, power_w=final.power_w,
+                                             final=list(final.pose), timed_out=timed_out))
+    return result
+
+
+def _summary(io: AlignmentIO, settings: AlignmentSettings, fiber: int, **outcome: Any) -> Dict[str, Any]:
+    """The align_result payload: enough for the custom view to redraw the run after a page reload."""
     kept = io.samples[::max(1, math.ceil(len(io.samples) / RESULT_POINTS_MAX))]
-    if kept[-1] is not final:
-        kept.append(final)
-    context.publish("align_result", {
+    if io.samples and kept[-1] is not io.samples[-1]:
+        kept.append(io.samples[-1])
+    ran = {entry["index"] for entry in io.phase_log}
+    phases = [dict(entry) for entry in io.phase_log]
+    for index, name in enumerate(io.phases):
+        if index not in ran:
+            # Skipped if a later phase ran, else the run ended before reaching it.
+            later = any(i > index for i in ran)
+            phases.append({"name": name, "index": index, "status": "skipped" if later else "not run"})
+    phases.sort(key=lambda p: (p["index"] if p["index"] >= 0 else len(io.phases), p.get("t0", 0.0)))
+    return {
         "fiber": fiber,
-        "passed": result.passed,
-        "power_w": final.power_w,
         "threshold_w": settings.threshold_w,
         "start": list(io.start),
-        "final": list(final.pose),
         "plot_axes": list(PLOT_AXES),
-        "reads": result.reads,
-        "duration_s": round(result.duration_s, 2),
-        "timed_out": timed_out,
-        "points": [[*s.pose, s.power_w, s.kind] for s in kept],
-    })
-    return result
+        "timeout_s": settings.timeout_s,
+        "phase_names": list(io.phases),
+        "reads": len(io.samples),
+        "duration_s": round(io.elapsed_s(), 2),
+        **outcome,
+        "phases": phases,
+        "published": {name: values[-RESULT_PUBLISHED_MAX:] for name, values in io.published.items()},
+        "points": [_sample_row(s) for s in kept],
+    }
+
+
+def _sample_row(sample: Sample) -> List[Any]:
+    """A sample as the custom view reads it: [x, y, z, alpha, beta, gamma, power_w, kind, phase, t]."""
+    return [*sample.pose, sample.power_w, sample.kind, sample.phase, sample.t]
 
 
 def _wrap_deg(angle: float) -> float:

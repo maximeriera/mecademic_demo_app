@@ -20,7 +20,10 @@ Same sequence, constants and decisions as his script. Only the I/O changed:
    plane fitted to their readings, and a step up the slope.
 
 The contract with the cell (see alignment.py): move only through ``io``, never
-catch exceptions broadly, leave the fiber at the best pose found.
+catch exceptions broadly, leave the fiber at the best pose found. To keep the
+custom view informed, run each phase inside ``with io.phase(name):`` (names
+from ``PHASES``) and publish what the view draws for it with ``io.publish()``:
+"profile" for each axial scan, "gradient" for each gradient circle.
 """
 
 from typing import List, Optional, Tuple
@@ -29,6 +32,9 @@ import numpy as np
 
 from . import frames
 from .alignment import AlignmentIO, AlignmentSettings, Sample
+
+#: The phases, in order: the custom view's phase tracker and panels follow them.
+PHASES = ("Cartesian spiral", "Angular spiral", "Axial search", "Gradient ascent")
 
 # --- Spiral search ------------------------------------------------------------
 # generate_archimedean_spiral(max_radius, spiral_pitch, point_spacing): mm for
@@ -69,19 +75,24 @@ GRADIENT_AVERAGING = 3   # his 10 ms
 
 
 def align(io: AlignmentIO, settings: AlignmentSettings) -> None:
+    cartesian_spiral, angular_spiral, axial, gradient = PHASES
     io.set_power_auto_range(True)
     io.set_power_averaging(SEARCH_AVERAGING)
 
-    spiral_search(io, settings.spiral_cart_threshold_w, angular=False)
-    power = spiral_search(io, settings.spiral_ang_threshold_w, angular=True)
+    with io.phase(cartesian_spiral):
+        spiral_search(io, settings.spiral_cart_threshold_w, angular=False)
+    with io.phase(angular_spiral):
+        power = spiral_search(io, settings.spiral_ang_threshold_w, angular=True)
 
     if power < settings.axial_threshold_w:
-        axial_search(io, AXIAL_LIMIT_DEG, AXIAL_LIMIT_MM, settings.axial_threshold_w)
+        with io.phase(axial):
+            axial_search(io, AXIAL_LIMIT_DEG, AXIAL_LIMIT_MM, settings.axial_threshold_w)
 
     io.set_power_averaging(GRADIENT_AVERAGING)
-    looping_circles(io, angular=False, reps=CIRCLE_REPS, step_magnitude=CIRCLE_STEP,
-                    circle_resolution=CIRCLE_RESOLUTION, radius=CIRCLE_RADIUS, alternate=True,
-                    gradient_threshold=settings.gradient_threshold_w)
+    with io.phase(gradient):
+        looping_circles(io, angular=False, reps=CIRCLE_REPS, step_magnitude=CIRCLE_STEP,
+                        circle_resolution=CIRCLE_RESOLUTION, radius=CIRCLE_RADIUS, alternate=True,
+                        gradient_threshold=settings.gradient_threshold_w)
 
 
 # --- Spiral search ------------------------------------------------------------------
@@ -156,12 +167,17 @@ def spiral_search(io: AlignmentIO, stop_threshold: float, angular: bool) -> floa
 
 # --- Axial search -------------------------------------------------------------------
 
+#: Names of axis_scan's axes, for the custom view's profiles.
+AXIS_NAMES = ("Rx", "Rz", "X", "Z")
+
+
 def axis_scan(io: AlignmentIO, axis_num: int, limit_deg: float, limit_cart: float,
-              T_A_ObjYrot, T_B_ObjYrot_anti) -> List[Sample]:
+              T_A_ObjYrot, T_B_ObjYrot_anti, iteration: int = 0, rescan: bool = False) -> List[Sample]:
     """One scan along an axis of the rotated frame: 0 = rotation about X, 1 = about Z, 2 = along X, 3 = along Z.
 
     Both ends are placed relative to the scan's start frame, as in his script:
-    the scan runs from +limit to -2 × limit.
+    the scan runs from +limit to -2 × limit. The readings are also published to
+    the custom view as a 1-D profile along the scanned axis.
     """
     if axis_num == 0:
         cart, orient, cart2, orient2 = [0, 0, 0], [limit_deg, 0, 0], [0, 0, 0], [-2 * limit_deg, 0, 0]
@@ -176,7 +192,30 @@ def axis_scan(io: AlignmentIO, axis_num: int, limit_deg: float, limit_cart: floa
         frames.matrix_pose(T_A_ObjYrot @ frames.make_homogeneous_matrix_extrinsic(c, o) @ T_B_ObjYrot_anti)
         for c, o in ((cart, orient), (cart2, orient2))
     ]
-    return io.scan(targets, kind="ang" if axis_num < 2 else "cart")
+    samples = io.scan(targets, kind="ang" if axis_num < 2 else "cart")
+
+    # Each reading's position along the scanned axis: undo the frames the
+    # targets were built with, leaving the scan's own offset.
+    inv_a, inv_b = np.linalg.inv(T_A_ObjYrot), np.linalg.inv(T_B_ObjYrot_anti)
+    points = []
+    for sample in samples:
+        T_offset = inv_a @ frames.pose_matrix(sample.pose) @ inv_b
+        if axis_num < 2:
+            _, angles = frames.extract_pose_extrinsic(T_offset)
+            coord = angles[0] if axis_num == 0 else angles[2]
+        else:
+            position, _ = frames.extract_pose(T_offset)
+            coord = position[0] if axis_num == 2 else position[2]
+        points.append([round(float(coord), 6), sample.power_w])
+    io.publish("profile", {
+        "axis": AXIS_NAMES[axis_num],
+        "iteration": iteration,
+        "rescan": rescan,
+        "limit": limit_deg if axis_num < 2 else limit_cart,
+        "unit": "°" if axis_num < 2 else "mm",
+        "points": points,
+    })
+    return samples
 
 
 def axial_search(io: AlignmentIO, limit_deg: float, limit_cart: float, axis_threshold: float) -> None:
@@ -203,7 +242,7 @@ def axial_search(io: AlignmentIO, limit_deg: float, limit_cart: float, axis_thre
         kind = "ang" if axis < 2 else "cart"
         T_A_ObjYrot = frames.pose_matrix(io.pose()) @ T_B_ObjYrot
 
-        best = _best(axis_scan(io, axis, limit_deg, limit_cart, T_A_ObjYrot, T_B_ObjYrot_anti))
+        best = _best(axis_scan(io, axis, limit_deg, limit_cart, T_A_ObjYrot, T_B_ObjYrot_anti, iteration=i))
         if best is None:
             continue
         io.move_to(best.pose)
@@ -213,7 +252,7 @@ def axial_search(io: AlignmentIO, limit_deg: float, limit_cart: float, axis_thre
             # The best reading did not hold: scan again, slower and narrower.
             io.set_motion(**AXIAL_RESCAN_MOTION)
             rescan = axis_scan(io, axis, limit_deg * AXIAL_RESCAN_SCALE, limit_cart * AXIAL_RESCAN_SCALE,
-                               T_A_ObjYrot, T_B_ObjYrot_anti)
+                               T_A_ObjYrot, T_B_ObjYrot_anti, iteration=i, rescan=True)
             motion.update(AXIAL_AFTER_RESCAN_MOTION)
             io.set_motion(**AXIAL_AFTER_RESCAN_MOTION)
             best = _best(rescan)
@@ -264,8 +303,9 @@ def ang_circle(io: AlignmentIO, circle_resolution: int, degs: float, T_A_B) -> L
 def looping_circles(io: AlignmentIO, angular: bool, reps: int, step_magnitude: float, circle_resolution: int,
                     radius: float, alternate: bool, gradient_threshold: float) -> None:
     io.set_motion(**CIRCLE_MOTION)
-    for _ in range(reps):
-        T_A_B = frames.pose_matrix(io.pose())
+    for rep in range(reps):
+        center = io.pose()
+        T_A_B = frames.pose_matrix(center)
         if angular:
             points = np.array(ang_circle(io, circle_resolution, radius, T_A_B))
         else:
@@ -288,6 +328,16 @@ def looping_circles(io: AlignmentIO, angular: bool, reps: int, step_magnitude: f
         ascent_2d_unit = ascent_2d / gradient_mag
 
         current = points[-1]
+        # For the custom view: the circle's centre, the slope found, the step about to be taken.
+        io.publish("gradient", {
+            "rep": rep,
+            "kind": "ang" if angular else "cart",
+            "center": list(center),
+            "magnitude": float(gradient_mag),
+            "step": float(step_magnitude),
+            "radius": float(radius),
+            "power_end": float(current[2]),
+        })
         if current[2] >= gradient_threshold:
             radius *= CIRCLE_DECAY
             step_magnitude *= CIRCLE_DECAY

@@ -1,8 +1,10 @@
-// Fiber alignment view: live power against the threshold, and the power read
-// at each robot X/Z offset during the latest alignment. Reads the hub through
-// DataHubClient, the threshold and the cell state from /api/context, and draws
-// the graph with Plot3D (plot3d.js). No chart library on purpose (no CDN on a
-// show floor); vendor one into this folder if a demo needs more.
+// Fiber alignment view: live power against the threshold, a tracker of the
+// alignment's phases, and for each phase a plot that fits it: 3D power
+// landscapes for the spirals and the gradient circles, 1-D profiles for the
+// axial scans, the power over time in dB, and an end-of-alignment summary.
+// Reads the hub through DataHubClient, the threshold and the cell state from
+// /api/context. Dependency-free canvas drawing (plot3d.js, chart2d.js,
+// landscape.js): no CDN on a show floor.
 (function () {
     'use strict';
 
@@ -11,19 +13,74 @@
     // A power reading older than this is stale: the hub stopped sampling.
     const STALE_S = 2;
     const EVENTS_SHOWN = 8;
+    // Read from a distance on a 27" screen.
+    const FONT_PX = 14;
+    const AXES_ANIM_MS = 300;
+    const SURFACE_REBUILD_MS = 250;
+    // Earlier axial scans kept on a profile, fading.
+    const PROFILES_SHOWN = 6;
+
+    // A sample is [x, y, z, alpha, beta, gamma, power_w, kind, phase, t] (see alignment.py).
+    const POWER = 6;
+    const KIND = 7;
+    const PHASE = 8;
+    const T = 9;
+
+    // How each phase of algorithm.PHASES is drawn. Unknown phases get DEFAULT_VIEW.
+    const LATERAL = { type: 'map', axes: [0, 2], scale: 1000, names: ['ΔX', 'ΔZ'], unit: 'µm', minSpan: 20 };
+    const PHASE_VIEWS = {
+        'Cartesian spiral': LATERAL,
+        'Angular spiral': { type: 'map', axes: [3, 5], scale: 1, names: ['Δα', 'Δγ'], unit: '°', minSpan: 0.02 },
+        'Axial search': { type: 'profiles' },
+        'Gradient ascent': { type: 'gradient' },
+    };
+    const DEFAULT_VIEW = LATERAL;
+    const SHORT_NAMES = {
+        'Cartesian spiral': 'Cart. spiral',
+        'Angular spiral': 'Ang. spiral',
+        'Axial search': 'Axial',
+        'Gradient ascent': 'Gradient',
+    };
 
     const $ = id => document.getElementById(id);
     const css = getComputedStyle(document.documentElement);
     const token = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
-    const ABOVE = token('--color-accent', '#5DEFBF');
-    // Points below the threshold run from blue (no light) to amber (almost
-    // there). Keep in sync with .colorbar in index.html.
+    const ACCENT = token('--color-accent', '#5DEFBF');
+    const SOFT = token('--color-accent-soft', '#9DF5D7');
+    const MUTED = token('--color-muted', '#9aa39f');
+    const YELLOW = token('--color-yellow', '#ffd447');
+    const BLUE = token('--color-blue', '#3bb8ff');
+    // dB vs threshold → colour: blue (DB_FLOOR and below) → amber (just below) → green (at or above).
+    const DB_FLOOR = -30;
     const LOW = [59, 184, 255];
     const HIGH = [255, 212, 71];
 
     const isNum = v => typeof v === 'number' && Number.isFinite(v);
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const wrapDeg = a => ((a + 180) % 360 + 360) % 360 - 180;
+    const dbOf = (watts, ref) => (watts > 0 && ref > 0 ? 10 * Math.log10(watts / ref) : -60);
+    const signed = (v, digits = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}`;
 
-    // --- Power units ----------------------------------------------------------------
+    function dbColor(db) {
+        if (db >= 0) return ACCENT;
+        const f = clamp((db - DB_FLOOR) / -DB_FLOOR, 0, 1);
+        const c = LOW.map((v, i) => Math.round(v + f * (HIGH[i] - v)));
+        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    }
+
+    function maxOf(values, fallback = -Infinity) {
+        let m = fallback;
+        for (const v of values) if (isNum(v) && v > m) m = v;
+        return m;
+    }
+
+    function minOf(values, fallback = Infinity) {
+        let m = fallback;
+        for (const v of values) if (isNum(v) && v < m) m = v;
+        return m;
+    }
+
+    // --- Power units --------------------------------------------------------------
 
     // The hub and the alignment carry watts; the page shows them with an SI
     // prefix picked from the value.
@@ -42,13 +99,12 @@
     }
 
     function withUnit(watts) {
+        if (!isNum(watts)) return '—';
         const unit = unitFor(watts);
         return `${fmt(watts, unit)} ${unit.name}`;
     }
 
-    const signed = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`;
-
-    // --- Threshold and cell state, from /api/context -----------------------------------
+    // --- Threshold and cell state, from /api/context ---------------------------------
 
     let thresholdW = null;  // null until known (no context file, or no such param)
     let cell = {};          // variable name → value
@@ -70,13 +126,12 @@
         const held = cell.held_fiber;
         $('held-fiber').textContent = held === undefined ? '—' : held ? `#${held}` : 'none';
         $('next-fiber').textContent = cell.next_fiber === undefined ? '—' : `#${cell.next_fiber}`;
-        $('aligned-count').textContent = cell.aligned_count ?? '—';
-        $('failed-count').textContent = cell.failed_count ?? '—';
+        $('n-counts').textContent = cell.aligned_count === undefined ? '—' : `${cell.aligned_count} / ${cell.failed_count}`;
         const last = cell.last_align_power_mw;
         $('last-power').textContent = isNum(last) && last > 0 ? withUnit(last * 1e-3) : '—';
     }
 
-    // --- Live power -----------------------------------------------------------------------
+    // --- Live power tile ------------------------------------------------------------------
 
     function renderPower(state) {
         const samples = state.channels.power;
@@ -94,9 +149,7 @@
             $('power-unit').textContent = '';
         }
         $('threshold').textContent = thresholdW !== null ? withUnit(thresholdW) : 'not set';
-        $('margin').textContent = known && watts > 0 && thresholdW > 0
-            ? `(${signed(10 * Math.log10(watts / thresholdW))} dB)`
-            : '';
+        $('margin').textContent = known && watts > 0 && thresholdW > 0 ? `(${signed(dbOf(watts, thresholdW))} dB)` : '';
 
         const card = $('power-card');
         card.classList.toggle('above', known && watts >= thresholdW);
@@ -106,25 +159,32 @@
             : watts >= thresholdW ? 'Above threshold' : 'Below threshold';
     }
 
-    // --- Alignment graph ------------------------------------------------------------------
+    // --- The alignment being shown ------------------------------------------------------------
 
-    const camera = Plot3D.camera();
-    const plot = Plot3D.create($('plot'), camera, { labels: { x: 'X (mm)', y: 'Y (mm)', z: 'Power (mW)' } });
-    // The drawn alignment's threshold, in the graph's display unit.
-    let plotThreshold = null;
-    plot.setColor(z => {
-        if (!(plotThreshold > 0) || z >= plotThreshold) return ABOVE;
-        const f = Math.max(0, Math.min(1, z / plotThreshold));
-        const c = LOW.map((v, i) => Math.round(v + f * (HIGH[i] - v)));
-        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-    });
-    plot.setMessage('Waiting for an alignment…');
-    Plot3D.animate([plot], camera);
+    function fromResult(result, t) {
+        return {
+            key: `result:${t}`,
+            status: result.error ? 'error' : 'done',
+            fiber: result.fiber,
+            threshold_w: result.threshold_w,
+            start: result.start,
+            timeout_s: result.timeout_s,
+            phases: result.phase_names || [],
+            samples: result.points || [],
+            phaseLog: (result.phases || []).filter(p => p.t0 !== undefined),
+            phaseSummary: result.phases || [],
+            profiles: (result.published || {}).profile || [],
+            gradient: (result.published || {}).gradient || [],
+            elapsed: result.duration_s || 0,
+            error: result.error,
+            result: result.error ? null : result,
+        };
+    }
 
-    // The alignment to draw: the one running (its samples since align_start),
-    // else the latest one, frozen. Its align_result summary is kept by the hub
-    // and by this page however old it is, so the graph survives a page reload.
-    function latestAlignment(state) {
+    // The alignment in progress, else the latest one: built from the hub's
+    // events and samples, or from its align_result summary when the page holds
+    // no history of it (e.g. after a reload).
+    function buildRun(state) {
         const events = state.events;
         let start = -1;
         for (let i = events.length - 1; i >= 0; i--) {
@@ -132,100 +192,502 @@
         }
         const results = state.channels.align_result;
         const lastResult = results.length ? results[results.length - 1] : null;
-        if (start < 0) {
-            // Ran before the history this page holds: only the summary is left.
-            return lastResult ? Object.assign({ status: 'done' }, lastResult[1]) : null;
-        }
+        if (start < 0) return lastResult ? fromResult(lastResult[1], lastResult[0]) : null;
+
         const begin = events[start];
-        const end = events.slice(start + 1).find(e => e.name === 'align_end');
-        const points = state.channels.align_sample
-            .filter(([t]) => t >= begin.t && (!end || t <= end.t))
-            .map(([, point]) => point);
-        const run = Object.assign({}, begin.data, { points });
-        if (!end) return Object.assign(run, { status: 'running' });
-        if (end.data.error) return Object.assign(run, { status: 'error', error: end.data.error });
-        // align_result is published right after align_end: until it arrives,
-        // the end event's own data stands in for it.
-        const summary = lastResult && lastResult[0] >= end.t ? lastResult[1] : end.data;
-        return Object.assign(run, summary, { points, status: 'done' });
-    }
+        const after = events.slice(start + 1);
+        const end = after.find(e => e.name === 'align_end');
+        const t1 = end ? end.t : Infinity;
+        const within = ([t]) => t >= begin.t && t <= t1;
+        const values = channel => state.channels[channel].filter(within).map(([, v]) => v);
 
-    // A sample is [x, y, z, alpha, beta, gamma, power_w, kind] (see alignment.py).
-    const POWER = 6;
-    const KIND = 7;
-    const AXIS_NAMES = ['X', 'Y', 'Z', 'α', 'β', 'γ'];
-    // Narrowest plotted span (µm), so a few microns of motion do not fill the plot.
-    const MIN_SPAN_UM = 10;
-
-    // [min, max] of `values`, padded by 10 % and at least MIN_SPAN_UM wide.
-    function span(values) {
-        if (!values.length) return [-MIN_SPAN_UM / 2, MIN_SPAN_UM / 2];
-        let lo = Math.min(...values);
-        let hi = Math.max(...values);
-        const pad = Math.max((hi - lo) * 0.1, (MIN_SPAN_UM - (hi - lo)) / 2, 0);
-        return [lo - pad, hi + pad];
-    }
-
-    function renderAlignment(state) {
-        const run = latestAlignment(state);
-        if (!run || !Array.isArray(run.start)) return;
-        const [ax, ay] = Array.isArray(run.plot_axes) ? run.plot_axes : [0, 2];
-        const readings = (run.points || []).filter(p => Array.isArray(p) && isNum(p[POWER]));
-        // Offsets from the start, in µm. Rotations barely move X/Z: their
-        // readings would pile up on one spot, so they are left out.
-        const points = readings
-            .filter(p => p[KIND] !== 'ang')
-            .map(p => [(p[ax] - run.start[ax]) * 1000, (p[ay] - run.start[ay]) * 1000, p[POWER]]);
-        const values = points.map(p => p[2]);
-        const threshold = isNum(run.threshold_w) ? run.threshold_w : null;
-        const top = Math.max(threshold || 0, ...values) || 1e-3;
-        const bottom = Math.min(0, ...values);
-        const unit = unitFor(top);
-
-        plotThreshold = threshold !== null ? threshold / unit.scale : null;
-        plot.setLabels({ x: `Δ${AXIS_NAMES[ax]} (µm)`, y: `Δ${AXIS_NAMES[ay]} (µm)`, z: `Power (${unit.name})` });
-        plot.setAxes({
-            x: span(points.map(p => p[0])),
-            y: span(points.map(p => p[1])),
-            z: [bottom / unit.scale, (top / unit.scale) * 1.1],
+        const phaseLog = [];
+        after.forEach(e => {
+            if (e.t > t1) return;
+            if (e.name === 'align_phase_start') {
+                phaseLog.push({ name: e.data.phase, index: e.data.index, t0: e.data.t, status: 'running' });
+            } else if (e.name === 'align_phase_end') {
+                const open = phaseLog.filter(p => p.name === e.data.phase && p.status === 'running').pop();
+                if (open) {
+                    Object.assign(open, {
+                        t1: e.data.t, status: e.data.status, reads: e.data.reads,
+                        best_w: e.data.best_w, best_before_w: e.data.best_before_w,
+                    });
+                }
+            }
         });
-        plot.setPoints(points.map(([x, y, w]) => [x, y, w / unit.scale]));
-        plot.setMessage(run.status === 'running' ? 'Alignment started, waiting for the first reading…' : 'No reading recorded.');
-        renderCaption(run, readings.map(p => p[POWER]));
-    }
 
-    function renderCaption(run, values) {
-        const fiber = run.fiber ? `fiber #${run.fiber}` : 'no fiber held';
-        let text;
-        let cls = '';
-        if (run.status === 'running') {
-            const best = values.length ? ` · best ${withUnit(Math.max(...values))}` : '';
-            text = `— ${fiber} · aligning… ${values.length} reading(s)${best}`;
-        } else if (run.status === 'error') {
-            text = `— ${fiber} · interrupted: ${run.error}`;
-            cls = 'ng';
-        } else {
-            // Overrange reads +inf, which arrives here as null.
-            const power = isNum(run.power_w) ? withUnit(run.power_w) : (run.passed ? 'overrange' : 'no valid reading');
-            // The threshold this alignment was judged against: the live one may have changed since.
-            const limit = isNum(run.threshold_w) ? withUnit(run.threshold_w) : 'threshold';
-            text = `— ${fiber} · ${run.passed ? '✓' : '✗'} ${power} ${run.passed ? '≥' : '<'} ${limit}`;
-            if (isNum(run.reads) && isNum(run.duration_s)) text += ` · ${run.reads} readings in ${run.duration_s.toFixed(1)} s`;
-            if (run.timed_out) text += ' · timed out';
-            cls = run.passed ? 'ok' : 'ng';
+        const d = begin.data || {};
+        const run = {
+            key: `run:${begin.t}`,
+            status: end ? (end.data.error ? 'error' : 'done') : 'running',
+            fiber: d.fiber,
+            threshold_w: d.threshold_w,
+            start: d.start,
+            timeout_s: d.timeout_s,
+            phases: d.phases || [],
+            samples: values('align_sample'),
+            phaseLog,
+            phaseSummary: null,
+            profiles: values('align_profile'),
+            gradient: values('align_gradient'),
+            elapsed: end ? end.t - begin.t : (state.now || begin.t) - begin.t,
+            error: end ? end.data.error : null,
+            result: null,
+        };
+        if (end && !end.data.error) {
+            // align_result is published right after align_end: until it
+            // arrives, the end event's own data stands in for it.
+            const summary = lastResult && lastResult[0] >= end.t ? lastResult[1] : null;
+            run.result = summary || { passed: end.data.passed, power_w: end.data.power_w };
+            if (summary) {
+                run.phaseSummary = summary.phases;
+                run.elapsed = summary.duration_s;
+            }
         }
-        const caption = $('align-caption');
-        caption.textContent = text;
-        caption.className = cls;
+        return run;
     }
 
-    // --- Events -----------------------------------------------------------------------------
+    // Each declared phase with its state: pending, running, done, timed out,
+    // failed, skipped or not run.
+    function phaseStates(run) {
+        const names = run.phases.length ? run.phases : [...new Set(run.phaseLog.map(p => p.name))];
+        const started = run.phaseLog.map(p => names.indexOf(p.name));
+        return names.map((name, i) => {
+            const log = run.phaseLog.filter(p => p.name === name).pop();
+            if (log) return Object.assign({ name, index: i }, log);
+            const summary = (run.phaseSummary || []).find(p => p.name === name);
+            if (summary) return Object.assign({ name, index: i }, summary);
+            const later = started.some(j => j > i);
+            return { name, index: i, status: later ? 'skipped' : run.status === 'running' ? 'pending' : 'not run' };
+        });
+    }
+
+    function gainDb(phase) {
+        return phase.best_before_w > 0 && phase.best_w > 0 ? dbOf(phase.best_w, phase.best_before_w) : null;
+    }
+
+    // --- Phase tracker and time budget --------------------------------------------------------
+
+    let selected = null;  // phase name or 'summary', chosen by a click once the run is over
+    let trackerKey = '';
+
+    function renderTracker(run, states) {
+        const running = run.status === 'running';
+        const chips = states.map(p => {
+            let cls = { running: 'active', done: 'done', 'timed out': 'done', failed: 'failed', skipped: 'skipped' }[p.status] || '';
+            let metric = '–';
+            if (p.status === 'running') {
+                const count = p.name === 'Axial search' ? `scan ${run.profiles.length}`
+                    : p.name === 'Gradient ascent' ? `circle ${run.gradient.length}`
+                    : `${run.samples.filter(s => s[PHASE] === p.index).length} readings`;
+                metric = `${count} · ${(run.elapsed - (p.t0 || 0)).toFixed(1)} s`;
+            } else if (p.status === 'done' || p.status === 'timed out' || p.status === 'failed') {
+                const gain = gainDb(p);
+                const what = gain !== null ? `${signed(gain)} dB` : isNum(p.best_w) ? `found ${withUnit(p.best_w)}` : '';
+                metric = `${what}${what ? ' · ' : ''}${((p.t1 || 0) - (p.t0 || 0)).toFixed(1)} s${p.status === 'timed out' ? ' · timed out' : ''}`;
+            } else if (p.status === 'skipped') {
+                metric = 'skipped';
+            }
+            const clickable = !running && (p.status === 'done' || p.status === 'timed out' || p.status === 'failed');
+            if (clickable) cls += ' clickable';
+            if (!running && selected === p.name) cls += ' selected';
+            return { key: p.name, cls, name: SHORT_NAMES[p.name] || p.name, metric, clickable };
+        });
+
+        // The verdict, as the last chip.
+        let vCls = '';
+        let vMetric = running ? '–' : run.status === 'error' ? 'interrupted' : '';
+        if (run.status === 'done' && run.result) {
+            vCls = run.result.passed ? 'pass' : 'fail';
+            vMetric = `${run.result.passed ? '✓' : '✗'} ${withUnit(run.result.power_w)}`;
+        } else if (run.status === 'error') {
+            vCls = 'failed';
+        }
+        if (!running) vCls += ` clickable${selected === null || selected === 'summary' ? ' selected' : ''}`;
+        chips.push({ key: 'summary', cls: vCls, name: 'Verdict', metric: vMetric, clickable: !running });
+
+        const key = JSON.stringify(chips);
+        if (key === trackerKey) return;
+        trackerKey = key;
+        $('tracker').replaceChildren(...chips.map(c => {
+            const li = document.createElement('li');
+            li.className = `chip ${c.cls}`;
+            const name = document.createElement('span');
+            name.className = 'chip-name';
+            name.textContent = c.name;
+            const metric = document.createElement('span');
+            metric.className = 'chip-metric';
+            metric.textContent = c.metric;
+            li.append(name, metric);
+            if (c.clickable) {
+                li.addEventListener('click', () => {
+                    selected = c.key;
+                    trackerKey = '';
+                    if (lastState) render(lastState);
+                });
+            }
+            return li;
+        }));
+    }
+
+    function renderBudget(run) {
+        const caption = $('run-caption');
+        const fiber = run.fiber ? `fiber #${run.fiber}` : 'no fiber held';
+        if (run.status === 'running') {
+            caption.textContent = `— ${fiber} · aligning…`;
+            caption.className = '';
+        } else if (run.status === 'error') {
+            caption.textContent = `— ${fiber} · interrupted: ${run.error}`;
+            caption.className = 'ng';
+        } else {
+            const r = run.result || {};
+            caption.textContent = `— ${fiber} · ${r.passed ? '✓' : '✗'} ${withUnit(r.power_w)} ${r.passed ? '≥' : '<'} ${withUnit(run.threshold_w)}`
+                + (r.timed_out ? ' · timed out' : '');
+            caption.className = r.passed ? 'ok' : 'ng';
+        }
+        const timeout = run.timeout_s || 0;
+        const frac = timeout ? clamp(run.elapsed / timeout, 0, 1) : 0;
+        $('budget-fill').style.width = `${(frac * 100).toFixed(1)}%`;
+        $('budget-fill').classList.toggle('warn', frac > 0.8);
+        $('budget-text').textContent = timeout ? `${run.elapsed.toFixed(1)} s / ${timeout} s` : `${run.elapsed.toFixed(1)} s`;
+    }
+
+    // --- 3D power landscapes ----------------------------------------------------------------------
+
+    // A Plot3D panel showing power over two pose axes: the readings' path, the
+    // surface interpolated from them (height = linear power, colour = dB vs
+    // threshold), the best reading, and optionally a trail on the floor. Axes
+    // fit the data, only grow within one `key`, and animate.
+    function landscape(canvas, cam) {
+        const plot = Plot3D.create(canvas, cam, { fontPx: FONT_PX });
+        let unit = UNITS[1];
+        let threshold = null;
+        let key = null;
+        let ranges = null;
+        let builtAt = 0;
+        let builtFor = '';
+        plot.setColor(z => dbColor(dbOf(z * unit.scale, threshold)));
+
+        function extent(values, minSpan) {
+            let lo = minOf(values);
+            let hi = maxOf(values);
+            if (!isNum(lo) || !isNum(hi)) return [-minSpan / 2, minSpan / 2];
+            const pad = Math.max((hi - lo) * 0.15, (minSpan - (hi - lo)) / 2, 0);
+            return [lo - pad, hi + pad];
+        }
+        const union = (a, b) => [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
+
+        return {
+            plot,
+            update(o) {
+                const pts = o.points;
+                threshold = o.threshold;
+                const r = { x: extent(pts.map(p => p[0]), o.minSpan), y: extent(pts.map(p => p[1]), o.minSpan) };
+                ranges = key === o.key && ranges ? { x: union(ranges.x, r.x), y: union(ranges.y, r.y) } : r;
+                key = o.key;
+                const top = Math.max(threshold || 0, maxOf(pts.map(p => p[2]), 0));
+                unit = unitFor(top || 1e-3);
+                const zTop = ((top || 1e-3) / unit.scale) * 1.1;
+                plot.setLabels({ x: `${o.names[0]} (${o.unit})`, y: `${o.names[1]} (${o.unit})`, z: `Power (${unit.name})` });
+                plot.setAxes({ x: ranges.x, y: ranges.y, z: [0, zTop] }, AXES_ANIM_MS);
+                const pts3 = pts.map(([u, v, w]) => [u, v, w / unit.scale]);
+                plot.setPoints(pts3, { tail: o.tail || 150 });
+
+                const signature = `${o.key}|${ranges.x}|${ranges.y}|${unit.name}`;
+                const now = performance.now();
+                if (signature !== builtFor || now - builtAt > SURFACE_REBUILD_MS) {
+                    plot.setSurface(pts3.length >= 3
+                        ? Landscape.build(pts3, ranges.x, ranges.y, { n: o.n || 40, sigmaCells: o.sigmaCells || 1.6 })
+                        : null);
+                    builtFor = signature;
+                    builtAt = now;
+                }
+                let best = null;
+                pts3.forEach(p => { if (!best || p[2] > best[2]) best = p; });
+                plot.setMarkers(best ? [{ x: best[0], y: best[1], z: best[2], kind: 'best' }] : []);
+                plot.setFloorPath(o.floorPath || []);
+                plot.setMessage(o.message || 'Waiting for readings…');
+            },
+        };
+    }
+
+    // [u, v, power] of `samples`, as offsets from the start pose along two axes.
+    function project(samples, axes, scale, start) {
+        const off = (s, i) => (i >= 3 ? wrapDeg(s[i] - start[i]) : s[i] - start[i]);
+        return samples.filter(s => isNum(s[POWER])).map(s => [off(s, axes[0]) * scale, off(s, axes[1]) * scale, s[POWER]]);
+    }
+
+    const mainCam = Plot3D.camera({ speed: 0.15 });
+    const gradCam = Plot3D.camera({ speed: 0.15 });
+    const mapView = landscape($('plot-map'), mainCam);
+    const summaryView = landscape($('plot-summary'), mainCam);
+    const gradLat = landscape($('plot-grad-lat'), gradCam);
+    const gradAng = landscape($('plot-grad-ang'), gradCam);
+
+    // --- 2D charts ---------------------------------------------------------------------------------
+
+    const trace = Chart2D.create($('chart-trace'), { fontPx: FONT_PX, xLabel: 'time (s)', yLabel: 'dB vs threshold', message: 'Waiting for an alignment…' });
+    const gradientChart = Chart2D.create($('chart-gradient'), { fontPx: FONT_PX - 1, xLabel: 'circle', yLabel: 'slope', message: 'No gradient circles.' });
+    const AXIAL = ['Rx', 'Rz', 'X', 'Z'];
+    const profileCharts = {};
+    AXIAL.forEach(axis => {
+        profileCharts[axis] = Chart2D.create($(`profile-${axis}`), { fontPx: FONT_PX - 1, message: `Waiting for an ${axis} scan…` });
+    });
+
+    Plot3D.animate([mapView.plot, summaryView.plot, trace, gradientChart, ...Object.values(profileCharts)], mainCam);
+    Plot3D.animate([gradLat.plot, gradAng.plot], gradCam);
+
+    function renderTrace(run) {
+        const thr = run.threshold_w;
+        const points = run.samples.filter(s => isNum(s[POWER]) && isNum(s[T])).map(s => [s[T], dbOf(s[POWER], thr)]);
+        let best = -Infinity;
+        const bestLine = points.map(([t, db]) => [t, (best = Math.max(best, db))]);
+        const dbs = points.map(p => p[1]);
+        const lo = Math.max(-45, Math.min(-10, Math.floor((minOf(dbs, 0) - 2) / 5) * 5));
+        const hi = Math.max(5, Math.ceil((maxOf(dbs, 0) + 2) / 5) * 5);
+        const tMax = Math.max(10, run.elapsed, maxOf(points.map(p => p[0]), 0)) * 1.05;
+        const bands = run.phaseLog.map((p, i) => ({
+            x0: p.t0,
+            x1: isNum(p.t1) ? p.t1 : run.elapsed,
+            label: SHORT_NAMES[p.name] || p.name,
+            color: i % 2 ? 'rgba(59, 184, 255, 0.07)' : 'rgba(93, 239, 191, 0.07)',
+        }));
+        const last = points[points.length - 1];
+        trace.setRange({ x: [0, tMax], y: [lo, hi] }, AXES_ANIM_MS);
+        trace.setData({
+            series: [
+                { points, color: SOFT, width: 1, alpha: 0.55 },
+                { points: bestLine, color: ACCENT, width: 2.4 },
+            ],
+            bands,
+            hlines: [{ y: 0, color: ACCENT, dash: [6, 4], label: 'threshold' }],
+            markers: last && run.status === 'running' ? [{ x: last[0], y: last[1], color: YELLOW }] : [],
+        });
+    }
+
+    function renderProfiles(run) {
+        AXIAL.forEach(axis => {
+            const chart = profileCharts[axis];
+            const list = run.profiles.filter(p => p.axis === axis && p.points && p.points.length);
+            if (!list.length) {
+                chart.setData({});
+                return;
+            }
+            const latest = list[list.length - 1];
+            const angular = latest.unit === '°';
+            const k = angular ? 1 : 1000;  // mm → µm, degrees stay degrees
+            const unitLabel = angular ? '°' : 'µm';
+            const shown = list.slice(-PROFILES_SHOWN);
+            const top = Math.max(run.threshold_w || 0, maxOf(shown.flatMap(p => p.points.map(q => q[1])), 0)) || 1e-3;
+            const unit = unitFor(top);
+            const series = shown.map((p, i) => {
+                const newest = i === shown.length - 1;
+                return {
+                    points: p.points.filter(q => isNum(q[1])).map(([s, w]) => [s * k, w / unit.scale]),
+                    color: newest ? ACCENT : SOFT,
+                    alpha: newest ? 1 : 0.12 + (0.45 * (i + 1)) / shown.length,
+                    width: newest ? 2.4 : 1.2,
+                    dots: newest,
+                };
+            });
+            const best = latest.points.reduce((a, b) => (isNum(b[1]) && (!a || b[1] > a[1]) ? b : a), null);
+            const lim = latest.limit * k;
+            chart.setLabels({
+                x: `${axis} (${unitLabel}) · scan ${latest.iteration + 1}${latest.rescan ? ' · rescan' : ''}`,
+                y: `Power (${unit.name})`,
+            });
+            chart.setRange({ x: [-2.08 * lim, 1.08 * lim], y: [0, (top / unit.scale) * 1.1] }, AXES_ANIM_MS);
+            chart.setData({
+                series,
+                vlines: best ? [{ x: best[0] * k, color: YELLOW, dash: [4, 4] }] : [],
+                hlines: run.threshold_w ? [{ y: run.threshold_w / unit.scale, color: ACCENT, dash: [6, 4], label: 'threshold' }] : [],
+            });
+        });
+    }
+
+    function renderGradient(run, index) {
+        const start = run.start;
+        const inPhase = run.samples.filter(s => s[PHASE] === index);
+        const centres = (kind, axes, scale) => run.gradient
+            .filter(g => g.kind === kind && Array.isArray(g.center))
+            .map(g => axes.map(i => (i >= 3 ? wrapDeg(g.center[i] - start[i]) : g.center[i] - start[i]) * scale));
+        const common = { threshold: run.threshold_w, n: 32, sigmaCells: 2.5, tail: 40 };
+        gradLat.update(Object.assign({
+            key: `${run.key}:grad-lat`,
+            points: project(inPhase.filter(s => s[KIND] === 'cart'), [0, 2], 1000, start),
+            names: ['ΔX', 'ΔZ'], unit: 'µm', minSpan: 10,
+            floorPath: centres('cart', [0, 2], 1000),
+            message: 'Waiting for a lateral circle…',
+        }, common));
+        gradAng.update(Object.assign({
+            key: `${run.key}:grad-ang`,
+            points: project(inPhase.filter(s => s[KIND] === 'ang'), [3, 5], 1000, start),
+            names: ['Δα', 'Δγ'], unit: 'm°', minSpan: 10,
+            floorPath: centres('ang', [3, 5], 1000),
+            message: 'Waiting for an angular circle…',
+        }, common));
+        const lastKind = run.gradient.length ? run.gradient[run.gradient.length - 1].kind : null;
+        const running = run.status === 'running';
+        // The circle being run next is the other kind than the last one reported.
+        const activeKind = running ? (lastKind === 'cart' ? 'ang' : 'cart') : null;
+        $('grad-lat-box').classList.toggle('active', activeKind === 'cart');
+        $('grad-ang-box').classList.toggle('active', activeKind === 'ang');
+    }
+
+    function renderSummary(run, states) {
+        summaryView.update({
+            key: `${run.key}:summary`,
+            points: project(run.samples.filter(s => s[KIND] !== 'ang'), [0, 2], 1000, run.start),
+            names: ['ΔX', 'ΔZ'], unit: 'µm', minSpan: 20, threshold: run.threshold_w, n: 44, sigmaCells: 1.8, tail: 1,
+        });
+
+        const verdict = $('verdict');
+        const r = run.result || {};
+        const readings = run.samples.length;
+        if (run.status === 'error') {
+            verdict.className = 'verdict ng';
+            verdict.textContent = 'Alignment interrupted';
+            const small = document.createElement('small');
+            small.textContent = run.error || '';
+            verdict.append(small);
+        } else {
+            verdict.className = `verdict ${r.passed ? 'ok' : 'ng'}`;
+            verdict.textContent = `${r.passed ? '✓ Aligned' : '✗ Below threshold'}: ${withUnit(r.power_w)}`;
+            const small = document.createElement('small');
+            small.textContent = `threshold ${withUnit(run.threshold_w)} · ${run.elapsed.toFixed(1)} s · ${readings} readings`
+                + (r.timed_out ? ' · timed out' : '');
+            verdict.append(small);
+        }
+
+        const gains = states.map(p => gainDb(p)).filter(isNum);
+        const span = Math.max(1, maxOf(gains.map(Math.abs), 1));
+        $('waterfall').replaceChildren(...states.map(p => {
+            const li = document.createElement('li');
+            const gain = gainDb(p);
+            li.className = `wf-row${p.status === 'skipped' || p.status === 'not run' ? ' skipped' : ''}${isNum(gain) && gain < 0 ? ' neg' : ''}`;
+            const name = document.createElement('span');
+            name.textContent = SHORT_NAMES[p.name] || p.name;
+            const bar = document.createElement('span');
+            bar.className = 'wf-bar';
+            const fill = document.createElement('i');
+            fill.style.width = isNum(gain) ? `${(Math.abs(gain) / span) * 100}%` : '0';
+            bar.append(fill);
+            const val = document.createElement('span');
+            val.className = 'wf-val';
+            val.textContent = isNum(gain) ? `${signed(gain)} dB`
+                : isNum(p.best_w) ? withUnit(p.best_w)
+                : p.status;
+            li.append(name, bar, val);
+            return li;
+        }));
+
+        const kinds = { cart: [], ang: [] };
+        run.gradient.forEach((g, i) => { if (kinds[g.kind] && isNum(g.magnitude)) kinds[g.kind].push([i + 1, g.magnitude]); });
+        const all = [...kinds.cart, ...kinds.ang];
+        if (all.length) {
+            const top = maxOf(all.map(p => p[1]));
+            gradientChart.setRange({ x: [0.5, Math.max(2, all.length) + 0.5], y: [0, (top > 0 ? top : 1) * 1.15] }, 0);
+        }
+        gradientChart.setData({
+            series: [
+                { points: kinds.cart, color: ACCENT, width: 2, dots: true },
+                { points: kinds.ang, color: BLUE, width: 2, dots: true },
+            ],
+        });
+    }
+
+    // --- Main panel ------------------------------------------------------------------------------------
+
+    function showPanel(id) {
+        ['panel-map', 'panel-profiles', 'panel-gradient', 'panel-summary'].forEach(p => { $(p).hidden = p !== id; });
+    }
+
+    function renderMain(run, states) {
+        const running = run.status === 'running';
+        let phase = null;
+        if (running) {
+            phase = run.phaseLog.filter(p => p.status === 'running').pop() || null;
+        } else if (selected && selected !== 'summary') {
+            phase = states.find(p => p.name === selected) || null;
+        }
+
+        if (!running && !phase) {
+            showPanel('panel-summary');
+            $('panel-title').textContent = 'Summary';
+            $('panel-sub').textContent = `fiber #${run.fiber || '–'} · ${run.samples.length} readings · ${run.elapsed.toFixed(1)} s`;
+            renderSummary(run, states);
+            return;
+        }
+
+        const name = phase ? phase.name : 'Starting';
+        const view = (phase && PHASE_VIEWS[phase.name]) || DEFAULT_VIEW;
+        const index = phase ? phase.index : null;
+        const samples = index === null ? run.samples : run.samples.filter(s => s[PHASE] === index);
+        const best = maxOf(samples.map(s => s[POWER]));
+        const status = running ? 'running' : phase.status;
+        $('panel-title').textContent = name;
+        $('panel-sub').textContent = `${status} · ${samples.length} readings${isNum(best) ? ` · best ${withUnit(best)}` : ''}`;
+
+        if (view.type === 'profiles') {
+            showPanel('panel-profiles');
+            renderProfiles(run);
+        } else if (view.type === 'gradient') {
+            showPanel('panel-gradient');
+            renderGradient(run, index);
+        } else {
+            showPanel('panel-map');
+            $('panel-title').textContent = `${name} · power over ${view.names[0]} / ${view.names[1]} (${view.unit})`;
+            mapView.update({
+                key: `${run.key}:${name}`,
+                points: project(samples, view.axes, view.scale, run.start),
+                names: view.names, unit: view.unit, minSpan: view.minSpan, threshold: run.threshold_w,
+            });
+        }
+    }
+
+    // --- Live numbers ------------------------------------------------------------------------------------
+
+    function renderNumbers(run) {
+        const last = run.samples[run.samples.length - 1];
+        const start = run.start;
+        const set = (id, text) => { $(id).textContent = text; };
+        if (!last || !start) {
+            ['n-dx', 'n-dz', 'n-da', 'n-dg', 'n-dy', 'n-db', 'n-best', 'n-gain', 'n-reads'].forEach(id => set(id, '—'));
+            return;
+        }
+        const um = i => `${signed((last[i] - start[i]) * 1000)} µm`;
+        const deg = i => `${signed(wrapDeg(last[i] - start[i]), 3)}°`;
+        set('n-dx', um(0));
+        set('n-dz', um(2));
+        set('n-dy', um(1));
+        set('n-da', deg(3));
+        set('n-dg', deg(5));
+        set('n-db', deg(4));
+        let best = null;
+        let first = null;
+        run.samples.forEach(s => {
+            if (!isNum(s[POWER])) return;
+            if (!first) first = s;
+            if (!best || s[POWER] > best[POWER]) best = s;
+        });
+        set('n-best', best
+            ? `${withUnit(best[POWER])} @ ${signed((best[0] - start[0]) * 1000)} / ${signed((best[2] - start[2]) * 1000)} µm`
+            : '—');
+        set('n-gain', best && first && first[POWER] > 0 ? `${signed(dbOf(best[POWER], first[POWER]))} dB` : '—');
+        const tLast = last[T];
+        const rate = isNum(tLast) ? run.samples.filter(s => s[T] > tLast - 1).length : 0;
+        set('n-reads', run.status === 'running' ? `${run.samples.length} · ${rate}/s` : `${run.samples.length}`);
+    }
+
+    // --- Events and hub status -------------------------------------------------------------------------
 
     let epochMs = null;
 
     function describe(event) {
         const data = event.data || {};
         let text = event.name;
+        if (data.phase !== undefined) text += ` · ${data.phase}`;
         if (data.cycle !== undefined) text += ` #${data.cycle}`;
         if (data.fiber !== undefined) text += data.fiber ? ` · fiber #${data.fiber}` : ' · no fiber';
         if (data.error) text += ` — ${data.error}`;
@@ -250,14 +712,6 @@
         }));
     }
 
-    function render(state) {
-        renderPower(state);
-        renderAlignment(state);
-        renderEvents(state);
-    }
-
-    // --- Hub status ---------------------------------------------------------------------------
-
     function refreshManifest() {
         fetch('/api/data')
             .then(r => r.json())
@@ -274,13 +728,37 @@
             .catch(() => { $('view-status').textContent = 'Connection lost — retrying…'; });
     }
 
+    // --- Main loop ------------------------------------------------------------------------------------------
+
+    let lastState = null;
+    let runKey = null;
+
+    function render(state) {
+        lastState = state;
+        renderPower(state);
+        renderEvents(state);
+        const run = buildRun(state);
+        if (!run) return;
+        if (run.key !== runKey) {
+            runKey = run.key;
+            selected = null;
+            trackerKey = '';
+        }
+        const states = phaseStates(run);
+        renderTracker(run, states);
+        renderBudget(run);
+        renderTrace(run);
+        renderNumbers(run);
+        renderMain(run, states);
+    }
+
     refreshManifest();
     setInterval(refreshManifest, 5000);
     refreshContext();
     setInterval(refreshContext, CONTEXT_POLL_MS);
 
     DataHubClient.poll({
-        channels: ['power', 'align_sample', 'align_result'],
+        channels: ['power', 'align_sample', 'align_result', 'align_profile', 'align_gradient'],
         intervalMs: 100,
         historyS: 1800,
         onData: render,
