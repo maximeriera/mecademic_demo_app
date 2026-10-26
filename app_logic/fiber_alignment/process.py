@@ -78,7 +78,8 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
         fiber = context.get_variable("held_fiber", 0)
         robot = prepare_robot(devices, context)
 
-        result = run_alignment(robot, power_meter(devices), context, fiber=fiber, align=algorithm.align)
+        result = run_alignment(robot, power_meter(devices), context, fiber=fiber, align=algorithm.align,
+                               logger=logger)
 
         power_mw = result.power_w * 1e3
         # Overrange reads +inf, which the Variables tab could not display.

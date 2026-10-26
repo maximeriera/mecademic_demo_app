@@ -24,6 +24,7 @@ angles in degrees (XYZ mobile), exactly as the robot reports it. Power is in W.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -46,6 +47,13 @@ SCAN_SAMPLE_PERIOD_S = 0.002
 CHECKPOINT_IDS = range(7000, 8000)
 #: Motion for the return to the best pose after a timeout: slow, no blending.
 RETURN_MOTION = {"acc": 25, "lin_vel": 1, "ang_vel": 5, "blending": 0}
+#: A scan whose robot pose has not changed for this long (s) has stalled: the
+#: robot is not executing it (paused, refused the moves, ...).
+SCAN_STALL_S = 3.0
+#: Pose change (mm or °) that counts as motion for the stall check.
+SCAN_MOTION_EPS = 1e-3
+#: Longest a point-to-point alignment move may take (s).
+MOVE_TIMEOUT_S = 30.0
 
 
 class AlignmentError(RuntimeError):
@@ -132,13 +140,15 @@ class AlignmentResult:
 class AlignmentIO:
     """What the algorithm may do: move the fiber, scan, and read the power."""
 
-    def __init__(self, robot: Any, meter: Any, context: AppContext, settings: AlignmentSettings):
+    def __init__(self, robot: Any, meter: Any, context: AppContext, settings: AlignmentSettings,
+                 logger: Optional[logging.Logger] = None):
         self._robot = robot
         self._meter = meter
         self._context = context
         self._settings = settings
+        self._log = logger or logging.getLogger(__name__)
         #: Where the search started: the centre of the window.
-        self.start: Pose6 = self._pose_from(robot.GetRtTargetCartPos(synchronous_update=True))
+        self.start: Pose6 = self._target_pose()
         self._t0 = time.monotonic()
         self._deadline = self._t0 + settings.timeout_s
         #: Every reading so far.
@@ -172,7 +182,7 @@ class AlignmentIO:
         pose checked against the window is exactly the pose the robot receives.
         """
         self._check()
-        current = frames.pose_matrix(self._pose_from(self._robot.GetRtTargetCartPos(synchronous_update=True)))
+        current = frames.pose_matrix(self._target_pose())
         relative = frames.make_homogeneous_matrix([dx, dy, dz], [drx, dry, drz])
         self._move(self._checked(frames.matrix_pose(current @ relative)))
 
@@ -197,6 +207,8 @@ class AlignmentIO:
             return []
         robot = self._robot
         scanned: List[Sample] = []
+        t0 = time.monotonic()
+        self._log.info(f"Alignment scan ({kind or '-'}): {len(targets)} pose(s) queued")
         try:
             robot.PauseMotion()
             for target in targets:
@@ -204,22 +216,38 @@ class AlignmentIO:
             done = robot.SetCheckpoint(self._next_checkpoint())
             robot.ResumeMotion()
             stopped = False
+            moved_from, moved_at = None, time.monotonic()
             while not done.is_set():
+                # mecademicpy never "sets" a checkpoint the robot discarded
+                # (motion cleared, robot in error or not activated): without
+                # this, the loop would wait for it until the timeout.
+                try:
+                    done.check_interrupted()
+                except Exception as e:
+                    raise AlignmentError(f"The robot dropped the scan ({e}). Robot: {self._robot_state()}") from e
                 self._check()
-                scanned.append(self._read(kind))
+                sample = self._read(kind)
+                scanned.append(sample)
+                if moved_from is None or _moved(sample.pose, moved_from):
+                    moved_from, moved_at = sample.pose, time.monotonic()
+                elif time.monotonic() - moved_at > SCAN_STALL_S:
+                    raise AlignmentError(
+                        f"The robot is not executing the scan: no motion for {SCAN_STALL_S:g} s. "
+                        f"Robot: {self._robot_state()}"
+                    )
                 if stop is not None and stop(scanned):
                     self._clear_motion()
                     stopped = True
                     break
                 time.sleep(SCAN_SAMPLE_PERIOD_S)
-            if not stopped:
-                # A cleared motion (ABORT, robot error) also sets the checkpoint:
-                # that must not pass for a finished scan.
-                self._check()
-                done.wait(timeout=0)
-        except BaseException:
+        except BaseException as e:
             self._clear_motion()
+            self._log.warning(f"Alignment scan ({kind or '-'}) ended by {type(e).__name__} after "
+                              f"{time.monotonic() - t0:.2f} s, {len(scanned)} reading(s)")
             raise
+        best = max((s.power_w for s in scanned if s.power_w == s.power_w), default=float("nan"))
+        self._log.info(f"Alignment scan ({kind or '-'}) {'stopped by the algorithm' if stopped else 'done'}: "
+                       f"{len(scanned)} reading(s) in {time.monotonic() - t0:.2f} s, best {best:.4g} W")
         return scanned
 
     def set_motion(self, acc: Optional[float] = None, lin_vel: Optional[float] = None,
@@ -279,8 +307,16 @@ class AlignmentIO:
         return target
 
     def _move(self, target: Pose6) -> None:
+        self._log.debug(f"Alignment move to {_fmt_pose(target)}")
         self._robot.MoveLin(*target)
-        self._robot.WaitIdle()
+        try:
+            # Bounded: a robot that does not execute the move (paused, refused
+            # it, ...) must not hold the task forever.
+            self._robot.WaitIdle(timeout=MOVE_TIMEOUT_S)
+        except Exception as e:
+            self._clear_motion()
+            raise AlignmentError(f"The robot did not complete a move to {_fmt_pose(target)} "
+                                 f"({type(e).__name__}: {e}). Robot: {self._robot_state()}") from e
         time.sleep(self._settings.settle_s)
 
     def _read(self, kind: Optional[str]) -> Sample:
@@ -298,7 +334,24 @@ class AlignmentIO:
         return sample
 
     def _actual_pose(self) -> Pose6:
-        return self._pose_from(self._robot.GetRtCartPos(synchronous_update=True))
+        return self._query_pose("GetRtCartPos")
+
+    def _target_pose(self) -> Pose6:
+        return self._query_pose("GetRtTargetCartPos")
+
+    def _query_pose(self, command: str) -> Pose6:
+        try:
+            value = getattr(self._robot, command)(synchronous_update=True)
+        except Exception as e:
+            raise AlignmentError(f"{command} failed ({type(e).__name__}: {e}). Robot: {self._robot_state()}") from e
+        return self._pose_from(value)
+
+    def _robot_state(self) -> str:
+        """The robot's status for an error message (activated, homed, sim, error, paused, ...). Never raises."""
+        try:
+            return str(self._robot.GetStatusRobot())
+        except Exception as e:
+            return f"status unavailable ({type(e).__name__})"
 
     @staticmethod
     def _pose_from(value: Any) -> Pose6:
@@ -362,14 +415,19 @@ Algorithm = Callable[[AlignmentIO, AlignmentSettings], None]
 
 
 def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
-                  align: Algorithm) -> AlignmentResult:
+                  align: Algorithm, logger: Optional[logging.Logger] = None) -> AlignmentResult:
     """Run ``align`` from the robot's current pose, then judge the result.
 
     Brackets the run with ``align_start`` / ``align_end`` events and publishes
-    an ``align_result`` summary (with the points) for the custom view.
+    an ``align_result`` summary (with the points) for the custom view. Each
+    phase is logged to ``logger`` (the robot's device log).
     """
+    log = logger or logging.getLogger(__name__)
     settings = AlignmentSettings.from_context(context)
-    io = AlignmentIO(robot, meter, context, settings)
+    io = AlignmentIO(robot, meter, context, settings, logger=log)
+    log.info(f"Alignment of fiber {fiber}: start {_fmt_pose(io.start)}, window ±{settings.range_mm:g} mm / "
+             f"±{settings.range_deg:g}°, threshold {settings.threshold_w:.4g} W, timeout {settings.timeout_s:g} s. "
+             f"Robot: {io._robot_state()}")
     context.mark("align_start", fiber=fiber, threshold_w=settings.threshold_w, start=list(io.start),
                  range_mm=settings.range_mm, range_deg=settings.range_deg, plot_axes=list(PLOT_AXES))
 
@@ -380,6 +438,8 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
         except AlignmentTimeout:
             timed_out = True
             io._check_interrupted()
+            log.warning(f"Alignment timed out after {settings.timeout_s:g} s: back to the best pose read "
+                        f"({io.best.power_w if io.best else float('nan'):.4g} W)")
             io._return_to_best()
         # The verdict: a fresh reading where the algorithm left the fiber.
         io._check_interrupted()
@@ -387,6 +447,7 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
     except Exception as e:
         # An abort lands here too, from WaitIdle() or as AlignmentInterrupted.
         # Close the run on the view, then let the task runner handle it.
+        log.error(f"Alignment of fiber {fiber} failed after {io.elapsed_s():.1f} s: {type(e).__name__}: {e}")
         context.mark("align_end", fiber=fiber, passed=False, error=f"{type(e).__name__}: {e}")
         raise
     finally:
@@ -424,3 +485,13 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
 def _wrap_deg(angle: float) -> float:
     """``angle`` brought into [-180, 180)."""
     return (angle + 180.0) % 360.0 - 180.0
+
+
+def _moved(pose: Pose6, reference: Pose6) -> bool:
+    """True once ``pose`` is more than SCAN_MOTION_EPS (mm or °) away from ``reference``."""
+    return any(abs(_wrap_deg(a - b) if i >= 3 else a - b) > SCAN_MOTION_EPS
+               for i, (a, b) in enumerate(zip(pose, reference)))
+
+
+def _fmt_pose(pose: Sequence[float]) -> str:
+    return "(" + ", ".join(f"{v:.4f}" for v in pose) + ")"
