@@ -25,7 +25,9 @@ from devices import Device
 
 try:
     from .fiber_alignment import gripper, process
-except ImportError:  # pragma: no cover - depends on how the workspace is loaded
+except ImportError as e:  # pragma: no cover - depends on how the workspace is loaded
+    if e.name is not None:
+        raise  # a module is really missing (e.g. a dependency): report that, not the fallback
     from fiber_alignment import gripper, process
 
 
