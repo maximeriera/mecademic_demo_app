@@ -21,6 +21,11 @@
 
     const AUTO_ROTATE_RAD_S = 0.25;
     const IDLE_AFTER_DRAG_MS = 4000;
+    // The camera's pitch until dragged, which a tall box is fitted for.
+    const DEFAULT_PITCH = 0.6;
+    // Height of the drawn box: at least half its floor, up to a cube when the canvas has room.
+    const BOX_Z_MIN = 0.5;
+    const BOX_Z_MAX = 1;
     // Most points of a path drawn per frame before its tail.
     const PATH_POINTS_MAX = 3000;
     // Thickness of the colour bar.
@@ -45,7 +50,7 @@
     }
 
     function camera(options) {
-        return Object.assign({ yaw: -0.65, pitch: 0.6, dragging: false, idleUntil: 0, speed: AUTO_ROTATE_RAD_S }, options);
+        return Object.assign({ yaw: -0.65, pitch: DEFAULT_PITCH, dragging: false, idleUntil: 0, speed: AUTO_ROTATE_RAD_S }, options);
     }
 
     function attachDrag(canvas, cam) {
@@ -155,14 +160,19 @@
             }
 
             // Half-extents of the drawn box: X fixed, Y keeps the real aspect,
-            // Z flattened to half the floor, whatever the z range is.
+            // Z whatever the z range is: as tall as the canvas allows once the
+            // floor fills its width, within BOX_Z_MIN..BOX_Z_MAX.
             const aspect = (axes.y[1] - axes.y[0]) / (axes.x[1] - axes.x[0]);
-            const box = { x: 1, y: Math.max(0.3, Math.min(1.5, aspect)), z: 0.5 };
+            const box = { x: 1, y: Math.max(0.3, Math.min(1.5, aspect)), z: BOX_Z_MIN };
             const cosY = Math.cos(cam.yaw), sinY = Math.sin(cam.yaw);
             const cosP = Math.cos(cam.pitch), sinP = Math.sin(cam.pitch);
             const reach = Math.hypot(box.x, box.y);
-            const margin = fontPx * 8;
-            const scale = Math.min((w - margin) / (2 * reach), (h - fontPx * 5) / (2 * (reach * sinP + box.z * cosP)));
+            const roomW = w - fontPx * 8;
+            const roomH = h - fontPx * 5;
+            const fitW = roomW / (2 * reach);
+            const tallest = (roomH / (2 * fitW) - reach * Math.sin(DEFAULT_PITCH)) / Math.cos(DEFAULT_PITCH);
+            box.z = Math.max(BOX_Z_MIN, Math.min(BOX_Z_MAX, tallest));
+            const scale = Math.min(fitW, roomH / (2 * (reach * sinP + box.z * cosP)));
             const cx = w / 2;
             const cy = h / 2;
 
