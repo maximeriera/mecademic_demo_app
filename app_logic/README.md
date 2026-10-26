@@ -10,7 +10,7 @@ works through the rack in order.
 |---|---|---|
 | 1 | Pick fiber | robot program `fiber<N>_in`, gripper closes, `fiber<N>_out` |
 | 2 | Move to alignment start | robot program `align_start` |
-| 3 | Align fiber | colleague's algorithm: robot moves from Python + power meter |
+| 3 | Align fiber | alignment algorithm (see below): robot moves from Python + power meter |
 | 4 | Retract from alignment | robot program `align_retract` |
 | 5 | Place fiber (into the slot it was picked from) | robot program `fiber<N>_in`, gripper opens, `fiber<N>_out` |
 
@@ -48,17 +48,19 @@ They run at the speeds set in the Variables tab unless they set their own.
 | `fiber_alignment/gripper.py` | SmarAct gripper: open/close are moves of its MCS2 jaw channel |
 | `fiber_alignment/process.py` | The five steps, shared by PROD and the Manual tab |
 | `fiber_alignment/alignment.py` | Contract with the algorithm: 3D moves, scans, readings, window, timeout, verdict |
-| `fiber_alignment/algorithm.py` | The colleague's algorithm (spirals, axial search, gradient circles), ported |
-| `fiber_alignment/frames.py` | His frame math (poses ↔ 4×4 matrices, plane fit) |
+| `fiber_alignment/algorithm.py` | The alignment algorithm (see below), and how the custom view plots each of its phases (`PHASE_VIEWS`) |
+| `fiber_alignment/fit.py` | Its curve fits: Gaussian profiles, parabolas and quadratics in log power |
+| `fiber_alignment/frames.py` | Frame math from the colleague's script (poses ↔ 4×4 matrices) |
 | `custom_view/` | `/view/`: live power vs threshold (green/red), the verdict, and a plot per alignment phase (see below) |
+| `../tests/fiber_alignment/`, `../tools/` | A simulated cell, the tests run on it, and a replay of a run into the custom view (see below) |
 
 ## To do before running on the cell
 
 - [ ] Write the robot programs above in the web portal, taught with `TOOL_TRF` active.
 - [ ] Teach `TOOL_TRF` and the home/shipment joints in `fiber_alignment/poses.py`, then set `POSES_TAUGHT = True`. Until then, every robot move is refused.
 - [ ] `config.yaml`: the robot's IP address. The power meter's `wavelength` (1557 nm, from the colleague's script) should match the source.
-- [ ] `context.yaml`: `power_threshold_mw`, from the peak power measured on the setup, and the four phase thresholds (`spiral_cart_threshold_mw` … `gradient_threshold_mw`) from the robot variables of the colleague's `fiber_variables` program.
-- [ ] Check `align_range_um` / `align_range_deg`: any pose the algorithm asks for beyond them is refused, which faults the alignment.
+- [ ] `context.yaml`: `source_power_mw`, the laser's output measured fiber to meter, and `power_threshold_mw`, 0.5–1 dB under the peak power measured on the setup. With an air gap a perfect alignment loses ~7 % to the two glass/air faces: about 0.93 mW from 1 mW.
+- [ ] Check `align_range_um` / `align_range_deg`: any pose the algorithm asks for beyond them is refused, which faults the alignment. The alignment refuses to start when `acquire_radius_um` does not fit in the window.
 - [ ] Gripper (SmarAct MCS2 at 192.168.0.20): check its jaw channel and `velocity_mm_s` in `config.yaml`, then teach `gripper_open_mm` / `gripper_closed_mm` (Variables tab). The closed position is where the jaws hold the fiber, not beyond it.
 
 ## Testing step by step
@@ -80,6 +82,39 @@ Pick Fiber → Move to Alignment Start → Run Alignment → Retract → Place F
 
 Open `/view/` during Run Alignment to watch it.
 
+Then, on the cell:
+
+1. With `TOOL_TRF` taught, run one alignment and read the `pivot` the Angle
+   card prints under its tilt profiles: about the gap (tens of µm) when the
+   TCP is at the fiber tip. Far more means the TCP is behind or beside the
+   tip: teach it again.
+2. On the Center card, `lag` (half the gap between the two directions of a
+   scan) should stay under 0.5 µm. Above that, the meter takes its readings
+   at other times than alignment.py assumes: the two-way scans still cancel
+   it, the one-way scans of the Angle phase do not.
+3. Start 5 alignments from a pose moved ~300 µm and ~1° off the aligned one
+   (Manual tab), and note their time and final power: the demo's cold start.
+
+## Alignment
+
+`fiber_alignment/algorithm.py` aligns from wherever `align_start` left the
+fiber, even with no light reaching the meter, as long as the optimum is within
+`acquire_radius_um` laterally. It never moves the fiber along its axis: the gap
+stays the taught one. Four phases:
+
+| Phase | What it does |
+|---|---|
+| Acquire | Measures the noise floor. Unless light already reaches the meter (1 % of `source_power_mw`), spirals out in the lateral plane (`acquire_pitch_um` between turns) until a reading passes `signal_detect_uw` and the noise, then moves to the best reading. No light within the radius stops the alignment with "check the laser, the fibers and the align_start pose". |
+| Center | Scans across the light along X then Z, both ways, fits each scan with a Gaussian and moves to its centre, until the centre stops moving. |
+| Angle | For Rx then Rz: five tilts around the current one, re-centred laterally at each, and the tilt whose peak power a parabola picks. Again with half the span while it gains. |
+| Peak | Nine readings at rest on a 3×3 pattern around the centre, a quadratic fit of the log power and a step to its top, until the steps are below the robot's resolution. Ends on the best reading taken at rest. |
+
+Each reading is paired with the robot's pose at the middle of the meter's
+reading (interpolated between the poses read before and after it), so fast
+scans place their readings where they were taken. Scan speeds come from the
+measured time per reading. In simulation, a cold start 450 µm and 2° off
+takes about 50 s, a warm start about 15 s.
+
 ## Custom view (`/view/`)
 
 Laid out for a 1920×1080 screen, read from a distance. It stacks on narrower
@@ -91,17 +126,50 @@ screens.
     a band per phase;
   - the alignment: the verdict, the time spent against `align_timeout_s`,
     and one line per phase with its gain in dB and its duration.
-- **Plots, side by side**: the Cartesian spiral (X/Z in µm), the angular
-  spiral (α/γ in °) and the gradient circles (lateral and angular). Each is
-  a 3D landscape of the power read over the axes that phase moves, and stays
-  on screen after its phase. The running phase's card is outlined in yellow.
-  - The axial search is often skipped. When it runs, its scan profiles take
-    the gradient's card until the gradient starts.
-  - Axes fit the phase's readings.
+- **Plots, side by side**: one card per phase of the algorithm, in order,
+  which stays on screen after its phase. The running phase's card is
+  outlined in yellow. Positions are offsets from the alignment start in the
+  tool frame, the axes the algorithm moves along (X/Z lateral in µm, Rx/Rz
+  in °).
+  - Acquire: a 3D landscape of the power over X/Z along the spiral. Until
+    light is found it is scaled to the level counted as light, marked
+    "light" on the colour bar.
+  - Center: the latest X and Z scans, both directions (green forward, blue
+    backward), the fitted Gaussian and the centre chosen, in yellow.
+  - Angle: the peak power against each tilt with its parabola, and the
+    lateral re-centring scans.
+  - Peak: the readings at rest as a 3D landscape with the centre of each
+    iteration on its floor, and the step each iteration took.
   - Colours span the dB range of the plot. A colour bar gives the values and
     marks the threshold, so small differences near the peak still show.
 
 Everything comes from the hub. A page opened or reloaded after a run redraws it
-from `align_result`. If the algorithm changes, keep its `io.phase()` /
-`io.publish()` calls and its phase names (see `fiber_alignment/algorithm.py`):
-`custom_view/view.js` finds each phase's plot by its name.
+from `align_result`. The page knows no phase by name: the algorithm declares
+its phases and how to plot each (`PHASES`, `PHASE_VIEWS` in
+`fiber_alignment/algorithm.py`), and publishes what the plots need with
+`io.publish()`; `custom_view/__init__.py` documents the data.
+
+## Testing without the cell
+
+`tests/fiber_alignment/sim.py` simulates the cell: a robot executing the
+moves, a power meter reading what a single-mode fiber pair couples at the
+robot's pose (late and smeared while it moves, as a real reading is), on a
+simulated clock. From the repository root:
+
+```
+pip install -r requirements-dev.txt
+python -m pytest tests -q
+```
+
+checks the alignment from cold and warm starts, with a TCP off the fiber tip,
+in the dark, and that what it publishes is what the custom view plots. To
+watch a simulated run in the real custom view:
+
+```
+python tools/view_replay.py            # then open http://127.0.0.1:8765/view/
+python tools/view_replay.py --step &   # or let a browser check it:
+node tools/view_check.mjs              # screenshots in test-results/view/
+```
+
+`view_check.mjs` needs Playwright and its Chromium (`npm i -g playwright`,
+`npx playwright install chromium`).
