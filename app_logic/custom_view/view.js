@@ -375,7 +375,7 @@
     // surface interpolated from them (height = linear power, colour = HEAT
     // over the surface's dB range, with a colour bar), the best reading, and
     // optionally a trail on the floor. Axes fit the data, only grow within
-    // one `key`, and animate. Until its phase runs, it shows only a message.
+    // one `key`, and animate. Until the first reading, it shows only a message.
     function landscape(canvas, cam, message) {
         const plot = Plot3D.create(canvas, cam, { fontPx: FONT_PX });
         let unit = UNITS[1];
@@ -396,10 +396,29 @@
         }
         const union = (a, b) => [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
 
+        // Back to a message only.
+        function clear(text) {
+            key = null;
+            ranges = null;
+            built = { key: null, shape: '', at: 0 };
+            plot.setAxes(null);
+            plot.setPoints([]);
+            plot.setSurface(null);
+            plot.setMarkers([]);
+            plot.setFloorPath([]);
+            plot.setLegend(null);
+            plot.setMessage(text);
+        }
+
         return {
             plot,
+            clear,
             update(o) {
                 const pts = o.points;
+                if (!pts.length) {
+                    clear(o.message || 'Waiting for readings…');
+                    return;
+                }
                 threshold = o.threshold;
                 const r = { x: extent(pts.map(p => p[0]), o.minSpan), y: extent(pts.map(p => p[1]), o.minSpan) };
                 ranges = key === o.key && ranges ? { x: union(ranges.x, r.x), y: union(ranges.y, r.y) } : r;
@@ -437,20 +456,6 @@
                 pts3.forEach(p => { if (!best || p[2] > best[2]) best = p; });
                 plot.setMarkers(best ? [{ x: best[0], y: best[1], z: best[2], kind: 'best' }] : []);
                 plot.setFloorPath(o.floorPath || []);
-                plot.setMessage(o.message || 'Waiting for readings…');
-            },
-            // Back to a message only, e.g. while its phase is pending.
-            clear(text) {
-                key = null;
-                ranges = null;
-                built = { key: null, shape: '', at: 0 };
-                plot.setAxes(null);
-                plot.setPoints([]);
-                plot.setSurface(null);
-                plot.setMarkers([]);
-                plot.setFloorPath([]);
-                plot.setLegend(null);
-                plot.setMessage(text);
             },
         };
     }

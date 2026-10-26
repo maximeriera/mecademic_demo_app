@@ -158,7 +158,7 @@ class AlignmentIO:
         self._context = context
         self._settings = settings
         self._log = logger or logging.getLogger(__name__)
-        #: The algorithm's declared phases, in order (the view's phase tracker).
+        #: The algorithm's declared phases, in order (the view's phase list).
         self.phases: List[str] = list(phases)
         #: Where the search started: the centre of the window.
         self.start: Pose6 = self._target_pose()
@@ -184,8 +184,8 @@ class AlignmentIO:
         """Run one phase of the algorithm (``with io.phase("Cartesian spiral"): ...``).
 
         The phase is shown in the top bar under "Align fiber" and timed on the
-        Production tab (a nested step), followed by the custom view's phase
-        tracker, and summarised in align_result. Readings taken inside it are
+        Production tab (a nested step), listed and plotted by the custom view,
+        and summarised in align_result. Readings taken inside it are
         tagged with it. Name the phases as declared in ``PHASES`` (algorithm.py).
         """
         index = self.phases.index(name) if name in self.phases else -1

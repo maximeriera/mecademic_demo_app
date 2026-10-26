@@ -33,7 +33,8 @@ import numpy as np
 from . import frames
 from .alignment import AlignmentIO, AlignmentSettings, Sample
 
-#: The phases, in order: the custom view's phase tracker and panels follow them.
+#: The phases, in order: the custom view lists them and finds each one's plot by
+#: its name (custom_view/view.js), so rename them there too.
 PHASES = ("Cartesian spiral", "Angular spiral", "Axial search", "Gradient ascent")
 
 # --- Spiral search ------------------------------------------------------------

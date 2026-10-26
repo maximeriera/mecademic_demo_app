@@ -50,7 +50,7 @@ They run at the speeds set in the Variables tab unless they set their own.
 | `fiber_alignment/alignment.py` | Contract with the algorithm: 3D moves, scans, readings, window, timeout, verdict |
 | `fiber_alignment/algorithm.py` | The colleague's algorithm (spirals, axial search, gradient circles), ported |
 | `fiber_alignment/frames.py` | His frame math (poses ↔ 4×4 matrices, plane fit) |
-| `custom_view/` | `/view/`: live power vs threshold (green/red), and the alignment phase by phase (see below) |
+| `custom_view/` | `/view/`: live power vs threshold (green/red), the verdict, and a plot per alignment phase (see below) |
 
 ## To do before running on the cell
 
@@ -85,25 +85,23 @@ Open `/view/` during Run Alignment to watch it.
 Laid out for a 1920×1080 screen, read from a distance. It stacks on narrower
 screens.
 
-- **Power tile**: the live meter reading, green at or above
-  `power_threshold_mw`, red below.
-- **Phase tracker**: one chip per phase of the algorithm. It shows the
-  phase's state and its gain in dB, and a bar shows the time spent against
-  `align_timeout_s`.
-- **Main panel**: follows the running phase.
-  - The spirals and the gradient circles: a 3D landscape of the power read
-    over the two axes that phase moves (X/Z in µm, α/γ in °).
-  - The axial search: the profiles of its scans.
+- **Top row**:
+  - the live meter reading, green at or above `power_threshold_mw`, red below;
+  - the power over time in dB vs the threshold (best so far in green), with
+    a band per phase;
+  - the alignment: the verdict, the time spent against `align_timeout_s`,
+    and one line per phase with its gain in dB and its duration.
+- **Plots, side by side**: the Cartesian spiral (X/Z in µm), the angular
+  spiral (α/γ in °) and the gradient circles (lateral and angular). Each is
+  a 3D landscape of the power read over the axes that phase moves, and stays
+  on screen after its phase. The running phase's card is outlined in yellow.
+  - The axial search is often skipped. When it runs, its scan profiles take
+    the gradient's card until the gradient starts.
   - Axes fit the phase's readings.
   - Colours span the dB range of the plot. A colour bar gives the values and
     marks the threshold, so small differences near the peak still show.
-- **After the verdict**: a summary with the whole explored landscape, the
-  gain per phase and the gradient slope per circle. Click a phase chip to
-  see that phase again.
-- **Side column**: the power over time in dB vs the threshold (best so far
-  in green), and the live offsets from the start pose.
 
 Everything comes from the hub. A page opened or reloaded after a run redraws it
 from `align_result`. If the algorithm changes, keep its `io.phase()` /
-`io.publish()` calls (see `fiber_alignment/algorithm.py`): they feed the
-tracker and the per-phase plots.
+`io.publish()` calls and its phase names (see `fiber_alignment/algorithm.py`):
+`custom_view/view.js` finds each phase's plot by its name.
