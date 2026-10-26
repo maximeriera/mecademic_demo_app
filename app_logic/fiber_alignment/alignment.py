@@ -315,6 +315,7 @@ class AlignmentIO:
             self._robot.WaitIdle(timeout=MOVE_TIMEOUT_S)
         except Exception as e:
             self._clear_motion()
+            self._check_interrupted()  # an ABORT reads as one, not as a failed move
             raise AlignmentError(f"The robot did not complete a move to {_fmt_pose(target)} "
                                  f"({type(e).__name__}: {e}). Robot: {self._robot_state()}") from e
         time.sleep(self._settings.settle_s)
