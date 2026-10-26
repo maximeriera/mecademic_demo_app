@@ -1,4 +1,4 @@
-"""Custom view: live power against the threshold, and the alignment graph, on /view/.
+"""Custom view: live power against the threshold, and the alignment phase by phase, on /view/.
 
 Optional. When this package exists next to ``config.yaml``, the controller
 calls :func:`setup` at every Initialize, then starts the hub. Delete the folder
@@ -10,15 +10,28 @@ What the page reads:
   readout. It runs on its own thread. The Thorlabs driver serializes every
   exchange, so the alignment's own readings, on the task thread, share the
   meter safely.
-* ``align_sample`` / ``align_result`` and the ``align_start`` / ``align_end``
-  events: published by fiber_alignment/alignment.py during the "Align fiber"
-  step only. That is why the graph moves only then.
+* Published by fiber_alignment/alignment.py during the "Align fiber" step
+  only, which is why the plots move only then:
+
+  - ``align_sample``: one per reading, ``[x, y, z, alpha, beta, gamma,
+    power_w, kind, phase, t]``. ``kind`` is the scan ("cart" / "ang", None
+    for the verdict). ``phase`` is the index in the run's phases (-1 outside
+    any). ``t`` is the time since the start (s).
+  - ``align_profile`` / ``align_gradient``: what the algorithm publishes with
+    ``io.publish()``: each axial scan's profile, each gradient circle.
+  - ``align_result``: the summary at the end (phases, published data,
+    decimated readings), from which a page loaded after the run redraws it.
+    The hub keeps only the latest 2000 readings.
+  - Events: ``align_start`` (phases, timeout, start pose, threshold) and
+    ``align_end`` around the run, ``align_phase_start`` / ``align_phase_end``
+    around each phase.
 * The threshold is not on the hub. The page reads ``power_threshold_mw`` from
   /api/context, so an edit in the Variables tab shows at once, even before
   Initialize.
 
 The page must not load anything from a CDN: show-floor networks are not
-reliable. Vendor any chart library into this folder.
+reliable. Its plots are drawn by plot3d.js, chart2d.js and landscape.js, in
+this folder.
 """
 
 import math

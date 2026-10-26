@@ -9,8 +9,8 @@
 //   plot.setSurface({x: [...], y: [...], z: [[...]]}); // mesh on grid nodes, null = hole
 //   plot.setMarkers([{x, y, z, kind: 'best'}]);        // a star on the best point
 //   plot.setFloorPath([[x, y], ...]);                  // a trail drawn on the floor
-//   plot.setLegend({stops: [css, ...], top: 'text', bottom: 'text',
-//                   marks: [{f: 0.6, text: 'threshold'}]});   // colour bar, top right; f in 0..1
+//   plot.setLegend({stops: [css, ...], low: 'text', high: 'text',
+//                   marks: [{f: 0.6, text: 'threshold'}]});   // colour bar, top right; f in 0..1 left to right
 //   Plot3D.animate([plot, ...], camera);              // auto-rotates; drag to orbit
 //
 // Orthographic projection, painter's ordering: fine for a few thousand points.
@@ -21,7 +21,8 @@
     const IDLE_AFTER_DRAG_MS = 4000;
     // Most points of a path drawn per frame before its tail.
     const PATH_POINTS_MAX = 3000;
-    const LEGEND_BAR_PX = 12;
+    // Thickness of the colour bar.
+    const LEGEND_BAR_PX = 10;
 
     function niceTicks(min, max, count) {
         const span = max - min;
@@ -154,10 +155,8 @@
             const cosP = Math.cos(cam.pitch), sinP = Math.sin(cam.pitch);
             const reach = Math.hypot(box.x, box.y);
             const margin = fontPx * 8;
-            // The colour bar keeps a strip on the right.
-            const legendW = legend ? legendWidth(ctx) : 0;
-            const scale = Math.min((w - legendW - margin) / (2 * reach), (h - fontPx * 5) / (2 * (reach * sinP + box.z * cosP)));
-            const cx = (w - legendW) / 2;
+            const scale = Math.min((w - margin) / (2 * reach), (h - fontPx * 5) / (2 * (reach * sinP + box.z * cosP)));
+            const cx = w / 2;
             const cy = h / 2;
 
             // World → [screen x, screen y, depth]; larger depth = farther away.
@@ -228,43 +227,40 @@
             if (surface) drawSurface(ctx, P);
             if (points.length) drawPoints(ctx, P, z0);
             if (markers.length) drawMarkers(ctx, P);
-            if (legend) drawLegend(ctx, w, h);
+            if (legend) drawLegend(ctx, w);
         }
 
-        function legendWidth(ctx) {
-            const texts = [legend.top, legend.bottom, ...(legend.marks || []).map(m => m.text)];
-            return LEGEND_BAR_PX + 16 + Math.max(...texts.map(t => ctx.measureText(t || '').width));
-        }
-
-        // A vertical colour bar in the top right corner: `top` and `bottom`
-        // label its ends, each mark is a tick at f (0 = bottom, 1 = top).
-        function drawLegend(ctx, w, h) {
-            const barH = Math.min(h * 0.4, 180);
-            const x = w - LEGEND_BAR_PX - 2;
-            const y = fontPx * 0.6;
+        // A horizontal colour bar in the top right corner, above where the box
+        // can reach: `low` and `high` label its ends, each mark is a tick at
+        // f (0 = left end, 1 = right end) with its text under it.
+        function drawLegend(ctx, w) {
+            const y = fontPx * 0.4;
+            const barW = Math.min(180, w * 0.3);
+            ctx.textBaseline = 'middle';
+            const x1 = w - ctx.measureText(legend.high || '').width - 10;
+            const x0 = x1 - barW;
             const stops = legend.stops || [];
-            const ramp = ctx.createLinearGradient(0, y + barH, 0, y);
+            const ramp = ctx.createLinearGradient(x0, 0, x1, 0);
             stops.forEach((c, i) => ramp.addColorStop(stops.length > 1 ? i / (stops.length - 1) : 0, c));
             ctx.fillStyle = ramp;
-            ctx.fillRect(x, y, LEGEND_BAR_PX, barH);
+            ctx.fillRect(x0, y, barW, LEGEND_BAR_PX);
             ctx.strokeStyle = style.edge;
             ctx.lineWidth = 1;
-            ctx.strokeRect(x + 0.5, y + 0.5, LEGEND_BAR_PX - 1, barH - 1);
+            ctx.strokeRect(x0 + 0.5, y + 0.5, barW - 1, LEGEND_BAR_PX - 1);
 
             ctx.fillStyle = style.text;
+            ctx.textAlign = 'left';
+            ctx.fillText(legend.high || '', x1 + 6, y + LEGEND_BAR_PX / 2);
             ctx.textAlign = 'right';
+            ctx.fillText(legend.low || '', x0 - 6, y + LEGEND_BAR_PX / 2);
+            ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
-            ctx.fillText(legend.top || '', x - 6, y);
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(legend.bottom || '', x - 6, y + barH);
-            ctx.textBaseline = 'middle';
             (legend.marks || []).forEach(m => {
-                const my = y + (1 - m.f) * barH;
+                const mx = x0 + m.f * barW;
                 ctx.strokeStyle = style.marker;
                 ctx.lineWidth = 2;
-                line2(ctx, [x - 3, my], [x + LEGEND_BAR_PX + 2, my]);
-                // Its label only where it clears the end labels.
-                if (my - y > fontPx * 1.5 && y + barH - my > fontPx * 1.5) ctx.fillText(m.text, x - 6, my);
+                line2(ctx, [mx, y - 3], [mx, y + LEGEND_BAR_PX + 3]);
+                ctx.fillText(m.text, Math.max(x0, Math.min(x1, mx)), y + LEGEND_BAR_PX + 5);
             });
         }
 

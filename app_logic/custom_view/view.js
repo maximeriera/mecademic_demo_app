@@ -445,8 +445,8 @@
                     domain = heatDomain(shown.map(z => z * unit.scale));
                     plot.setLegend(domain && {
                         stops: HEAT,
-                        top: withUnit(domain[1]),
-                        bottom: withUnit(domain[0]),
+                        low: withUnit(domain[0]),
+                        high: withUnit(domain[1]),
                         marks: threshold > domain[0] && threshold < domain[1]
                             ? [{ f: heatFraction(domain, threshold), text: 'threshold' }] : [],
                     });

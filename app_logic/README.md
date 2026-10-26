@@ -50,7 +50,7 @@ They run at the speeds set in the Variables tab unless they set their own.
 | `fiber_alignment/alignment.py` | Contract with the algorithm: 3D moves, scans, readings, window, timeout, verdict |
 | `fiber_alignment/algorithm.py` | The colleague's algorithm (spirals, axial search, gradient circles), ported |
 | `fiber_alignment/frames.py` | His frame math (poses ↔ 4×4 matrices, plane fit) |
-| `custom_view/` | `/view/`: live power vs threshold (green/red), and the power-vs-X/Z graph of the alignment |
+| `custom_view/` | `/view/`: live power vs threshold (green/red), and the alignment phase by phase (see below) |
 
 ## To do before running on the cell
 
@@ -78,4 +78,32 @@ Pick Fiber → Move to Alignment Start → Run Alignment → Retract → Place F
 - HOME backs out of the alignment station first. It never opens the gripper.
   Recovering from an abort at a rack slot is not automated: jog the robot clear.
 
-Open `/view/` during Run Alignment to watch the graph fill.
+Open `/view/` during Run Alignment to watch it.
+
+## Custom view (`/view/`)
+
+Laid out for a 1920×1080 screen, read from a distance. It stacks on narrower
+screens.
+
+- **Power tile**: the live meter reading, green at or above
+  `power_threshold_mw`, red below.
+- **Phase tracker**: one chip per phase of the algorithm. It shows the
+  phase's state and its gain in dB, and a bar shows the time spent against
+  `align_timeout_s`.
+- **Main panel**: follows the running phase.
+  - The spirals and the gradient circles: a 3D landscape of the power read
+    over the two axes that phase moves (X/Z in µm, α/γ in °).
+  - The axial search: the profiles of its scans.
+  - Axes fit the phase's readings.
+  - Colours span the dB range of the plot. A colour bar gives the values and
+    marks the threshold, so small differences near the peak still show.
+- **After the verdict**: a summary with the whole explored landscape, the
+  gain per phase and the gradient slope per circle. Click a phase chip to
+  see that phase again.
+- **Side column**: the power over time in dB vs the threshold (best so far
+  in green), and the live offsets from the start pose.
+
+Everything comes from the hub. A page opened or reloaded after a run redraws it
+from `align_result`. If the algorithm changes, keep its `io.phase()` /
+`io.publish()` calls (see `fiber_alignment/algorithm.py`): they feed the
+tracker and the per-phase plots.
