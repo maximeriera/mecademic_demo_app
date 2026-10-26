@@ -32,6 +32,10 @@ desktop.ini
 # Dev-only dependencies are installed explicitly, never baked into the image
 requirements-dev.txt
 
+# Tests and development tools (simulated cell, view replay)
+tests/
+tools/
+
 # Docs
 README.md
 LICENSE

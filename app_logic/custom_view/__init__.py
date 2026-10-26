@@ -4,34 +4,58 @@ Optional. When this package exists next to ``config.yaml``, the controller
 calls :func:`setup` at every Initialize, then starts the hub. Delete the folder
 and the standard app runs exactly as before.
 
-What the page reads:
+What the page reads (the contract with fiber_alignment/alignment.py and
+algorithm.py; tests/fiber_alignment/test_contract.py checks it):
 
 * ``power``: a source sampling the power meter at POWER_RATE_HZ, for the live
-  readout. It runs on its own thread. The Thorlabs driver serializes every
-  exchange, so the alignment's own readings, on the task thread, share the
-  meter safely.
+  readout. It runs on its own thread. While an alignment streams readings, it
+  repeats the latest of them instead of reading the meter: the tile then shows
+  what the algorithm measured, and the alignment's readings never wait for it.
+* ``align_phases``: published here at setup, the algorithm's phases and how
+  each is plotted (``algorithm.PHASES`` / ``PHASE_VIEWS``), so that the page
+  lays out its cards before the first alignment.
 * Published by fiber_alignment/alignment.py during the "Align fiber" step
   only, which is why the plots move only then:
 
-  - ``align_sample``: one per reading, ``[x, y, z, alpha, beta, gamma,
-    power_w, kind, phase, t]``. ``kind`` is the scan ("cart" / "ang", None
-    for the verdict). ``phase`` is the index in the run's phases (-1 outside
-    any). ``t`` is the time since the start (s).
-  - ``align_profile`` / ``align_gradient``: what the algorithm publishes with
-    ``io.publish()``: each axial scan's profile, each gradient circle.
-  - ``align_result``: the summary at the end (phases, published data,
-    decimated readings), from which a page loaded after the run redraws it.
-    The hub keeps only the latest 2000 readings.
-  - Events: ``align_start`` (phases, timeout, start pose, threshold) and
-    ``align_end`` around the run, ``align_phase_start`` / ``align_phase_end``
-    around each phase.
+  - ``align_sample``: one per reading, ``[x, y, z, rx, ry, rz, power_w, kind,
+    phase, t, still]``. x, y, z (µm) and rx, ry, rz (°) are the robot's
+    offsets from the start in the start's tool frame, the frame the algorithm
+    moves in (y runs along the fiber). ``kind`` is "cart" (lateral moves),
+    "ang" (tilts) or None for the verdict. ``phase`` is the index in the
+    run's phases (-1 outside any), ``t`` the time since the start (s),
+    ``still`` true for a reading taken at rest.
+  - ``align_acquire``: the search for light, at its start and once light
+    shows: ``noise_w``, ``detect_w`` (the level counted as light),
+    ``radius_um``, ``pitch_um``, ``found``, ``warm`` (light at the start: no
+    spiral), and once found ``at`` [x, z] (µm) and ``power_w``.
+  - ``align_profile``: one per 1-D scan. ``axis`` (x, z, rx or rz), ``unit``
+    (µm or °), ``iteration``, ``rescan``, ``span`` [lo, hi], ``passes``
+    [{``dir`` 1 or -1, ``points`` [[coord, power_w], ...]}], ``fit`` (null,
+    or ``model`` "gauss" with ``center``, ``width`` (1/e²), ``peak`` (the
+    fitted power at the centre), ``baseline`` and ``lag`` (µm, what remains
+    of the reading/pose lag), or ``model`` "parabola" with ``center``,
+    ``width`` and ``peak``), ``chosen`` (where the fiber went, or null), and
+    for tilts ``pivot_um`` (how far the lateral centre moves per radian of
+    tilt: about the gap with the TCP at the fiber tip).
+  - ``align_peak``: one per peak-search iteration: ``iter``, ``center`` [x, z],
+    ``radius_um``, ``step`` [dx, dz], ``step_um``, ``newton``, ``power_w``
+    (at the centre) and ``points`` [[x, z, power_w], ...].
+  - ``align_result``: the summary at the end (phases, phase views, published
+    data, decimated readings with every reading at rest, ``best_still``, the
+    final pose), from which a page loaded after the run redraws it. The hub
+    keeps only the latest 2000 readings.
+  - Events: ``align_start`` (phases, ``phase_views``, ``sample_format``,
+    timeout, start pose, threshold, ``source_power_w``) and ``align_end``
+    around the run, ``align_phase_start`` / ``align_phase_end`` around each
+    phase. Each publish also carries ``phase`` and ``t``.
 * The threshold is not on the hub. The page reads ``power_threshold_mw`` from
   /api/context, so an edit in the Variables tab shows at once, even before
   Initialize.
 
-The page must not load anything from a CDN: show-floor networks are not
-reliable. Its plots are drawn by plot3d.js, chart2d.js and landscape.js, in
-this folder.
+The page knows no phase by name: it draws one card per phase, as its view
+says ("map", "profiles" or "peak"). It must not load anything from a CDN:
+show-floor networks are not reliable. Its plots are drawn by plot3d.js,
+chart2d.js and landscape.js, in this folder.
 """
 
 import math
@@ -39,15 +63,19 @@ import math
 from devices.SimulatedDevice import SimulatedDevice
 
 try:
+    from ..fiber_alignment.algorithm import PHASES, PHASE_VIEWS
     from ..fiber_alignment.cell import POWER_METER
 except ImportError as e:  # pragma: no cover - depends on how the workspace is loaded
     if e.name is not None:
         raise  # a module is really missing (e.g. a dependency): report that, not the fallback
+    from fiber_alignment.algorithm import PHASES, PHASE_VIEWS
     from fiber_alignment.cell import POWER_METER
 
 #: Live readout rate. A PM100x with ``averaging: 10`` takes ~30 ms per reading,
 #: so 10 Hz leaves the meter mostly free for the alignment's own readings.
 POWER_RATE_HZ = 10
+#: An alignment reading younger than this (s) stands in for the meter.
+ALIGN_FRESH_S = 0.5
 
 
 def setup(hub, devices):
@@ -67,10 +95,14 @@ def setup(hub, devices):
             f"Set power_unit: \"W\" on it in config.yaml and Initialize again."
         )
 
+    hub.publish("align_phases", {"phases": list(PHASES), "phase_views": PHASE_VIEWS})
+
     def read_power():
-        watts = meter.api.read_power()
+        # During an alignment, its own latest reading: no second reader on the meter.
+        recent = hub.window("align_sample", hub.now() - ALIGN_FRESH_S)
+        watts = recent[-1][1][6] if recent else meter.api.read_power()
         # Overrange reads +inf and an invalid reading NaN: record nothing
         # rather than a value the page cannot use.
-        return watts if math.isfinite(watts) else None
+        return watts if isinstance(watts, float) and math.isfinite(watts) else None
 
     hub.add_source("power", read_power, rate_hz=POWER_RATE_HZ)

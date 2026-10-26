@@ -2,6 +2,7 @@
 //
 //   const chart = Chart2D.create(canvas, {fontPx: 14, xLabel: 't (s)', yLabel: 'dB'});
 //   chart.setRange({x: [x0, x1], y: [y0, y1]}, 300);   // optional ms: animate to it
+//   chart.setRange(null);                               // no axes: only the message
 //   chart.setData({
 //       series:  [{points: [[x, y], ...], color, width, dots}],
 //       bands:   [{x0, x1, label, color}],               // shaded x ranges, e.g. phases
@@ -44,6 +45,11 @@
         let anim = null;
 
         function setRange(value, ms) {
+            if (!value) {
+                range = null;
+                anim = null;
+                return;
+            }
             const target = anim ? anim.to : range;
             const same = target && ['x', 'y'].every(k => target[k][0] === value[k][0] && target[k][1] === value[k][1]);
             if (same) return;
