@@ -9,6 +9,8 @@
 //   plot.setSurface({x: [...], y: [...], z: [[...]]}); // mesh on grid nodes, null = hole
 //   plot.setMarkers([{x, y, z, kind: 'best'}]);        // a star on the best point
 //   plot.setFloorPath([[x, y], ...]);                  // a trail drawn on the floor
+//   plot.setLegend({stops: [css, ...], top: 'text', bottom: 'text',
+//                   marks: [{f: 0.6, text: 'threshold'}]});   // colour bar, top right; f in 0..1
 //   Plot3D.animate([plot, ...], camera);              // auto-rotates; drag to orbit
 //
 // Orthographic projection, painter's ordering: fine for a few thousand points.
@@ -17,6 +19,9 @@
 
     const AUTO_ROTATE_RAD_S = 0.25;
     const IDLE_AFTER_DRAG_MS = 4000;
+    // Most points of a path drawn per frame before its tail.
+    const PATH_POINTS_MAX = 3000;
+    const LEGEND_BAR_PX = 12;
 
     function niceTicks(min, max, count) {
         const span = max - min;
@@ -92,6 +97,7 @@
         let surface = null;
         let markers = [];
         let floorPath = [];
+        let legend = null;
         let message = 'Waiting for data…';
 
         attachDrag(canvas, cam);
@@ -148,8 +154,10 @@
             const cosP = Math.cos(cam.pitch), sinP = Math.sin(cam.pitch);
             const reach = Math.hypot(box.x, box.y);
             const margin = fontPx * 8;
-            const scale = Math.min((w - margin) / (2 * reach), (h - fontPx * 5) / (2 * (reach * sinP + box.z * cosP)));
-            const cx = w / 2;
+            // The colour bar keeps a strip on the right.
+            const legendW = legend ? legendWidth(ctx) : 0;
+            const scale = Math.min((w - legendW - margin) / (2 * reach), (h - fontPx * 5) / (2 * (reach * sinP + box.z * cosP)));
+            const cx = (w - legendW) / 2;
             const cy = h / 2;
 
             // World → [screen x, screen y, depth]; larger depth = farther away.
@@ -220,6 +228,44 @@
             if (surface) drawSurface(ctx, P);
             if (points.length) drawPoints(ctx, P, z0);
             if (markers.length) drawMarkers(ctx, P);
+            if (legend) drawLegend(ctx, w, h);
+        }
+
+        function legendWidth(ctx) {
+            const texts = [legend.top, legend.bottom, ...(legend.marks || []).map(m => m.text)];
+            return LEGEND_BAR_PX + 16 + Math.max(...texts.map(t => ctx.measureText(t || '').width));
+        }
+
+        // A vertical colour bar in the top right corner: `top` and `bottom`
+        // label its ends, each mark is a tick at f (0 = bottom, 1 = top).
+        function drawLegend(ctx, w, h) {
+            const barH = Math.min(h * 0.4, 180);
+            const x = w - LEGEND_BAR_PX - 2;
+            const y = fontPx * 0.6;
+            const stops = legend.stops || [];
+            const ramp = ctx.createLinearGradient(0, y + barH, 0, y);
+            stops.forEach((c, i) => ramp.addColorStop(stops.length > 1 ? i / (stops.length - 1) : 0, c));
+            ctx.fillStyle = ramp;
+            ctx.fillRect(x, y, LEGEND_BAR_PX, barH);
+            ctx.strokeStyle = style.edge;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, y + 0.5, LEGEND_BAR_PX - 1, barH - 1);
+
+            ctx.fillStyle = style.text;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'top';
+            ctx.fillText(legend.top || '', x - 6, y);
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(legend.bottom || '', x - 6, y + barH);
+            ctx.textBaseline = 'middle';
+            (legend.marks || []).forEach(m => {
+                const my = y + (1 - m.f) * barH;
+                ctx.strokeStyle = style.marker;
+                ctx.lineWidth = 2;
+                line2(ctx, [x - 3, my], [x + LEGEND_BAR_PX + 2, my]);
+                // Its label only where it clears the end labels.
+                if (my - y > fontPx * 1.5 && y + barH - my > fontPx * 1.5) ctx.fillText(m.text, x - 6, my);
+            });
         }
 
         function drawSurface(ctx, P) {
@@ -251,25 +297,28 @@
         }
 
         function drawPoints(ctx, P, zFloor) {
-            const projected = points.map(([x, y, z]) => ({ s: P(x, y, z), z }));
-            const first = Math.max(0, projected.length - tail);
+            const first = Math.max(0, points.length - tail);
 
-            // The whole path, faint; then its tail, brighter towards the latest point.
+            // The whole path, faint (every n-th point of a long one); then its
+            // tail, brighter towards the latest point.
+            const stride = Math.max(1, Math.ceil(first / PATH_POINTS_MAX));
             ctx.strokeStyle = style.path;
             ctx.lineWidth = 1;
             ctx.beginPath();
-            projected.slice(0, first + 1).forEach(({ s }, i) => (i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1])));
+            for (let i = 0; i <= first; i = i < first && i + stride > first ? first : i + stride) {
+                const s = P(points[i][0], points[i][1], points[i][2]);
+                i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]);
+            }
             ctx.stroke();
-            const span = projected.length - first;
-            for (let i = first + 1; i < projected.length; i++) {
+            const projected = points.slice(first).map(([x, y, z]) => ({ s: P(x, y, z), z }));
+            for (let i = 1; i < projected.length; i++) {
                 const a = projected[i - 1].s, b = projected[i].s;
-                ctx.strokeStyle = `rgba(${style.tail}, ${(0.15 + 0.75 * (i - first) / span).toFixed(3)})`;
+                ctx.strokeStyle = `rgba(${style.tail}, ${(0.15 + 0.75 * i / projected.length).toFixed(3)})`;
                 ctx.lineWidth = 1.5;
                 line2(ctx, a, b);
             }
 
-            projected
-                .slice(first)
+            [...projected]
                 .sort((a, b) => b.s[2] - a.s[2])
                 .forEach(({ s, z }) => {
                     ctx.fillStyle = color(z);
@@ -333,6 +382,7 @@
             setSurface(value) { surface = value || null; },
             setMarkers(value) { markers = value || []; },
             setFloorPath(value) { floorPath = value || []; },
+            setLegend(value) { legend = value || null; },
             setMessage(text) { message = text; },
             render,
         };

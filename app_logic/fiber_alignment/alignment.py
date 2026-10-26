@@ -551,9 +551,11 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
 
 def _summary(io: AlignmentIO, settings: AlignmentSettings, fiber: int, **outcome: Any) -> Dict[str, Any]:
     """The align_result payload: enough for the custom view to redraw the run after a page reload."""
-    kept = io.samples[::max(1, math.ceil(len(io.samples) / RESULT_POINTS_MAX))]
-    if io.samples and kept[-1] is not io.samples[-1]:
-        kept.append(io.samples[-1])
+    # Every n-th reading, plus the last one and the best one (the view marks it).
+    keep = set(range(0, len(io.samples), max(1, math.ceil(len(io.samples) / RESULT_POINTS_MAX))))
+    keep.add(len(io.samples) - 1)
+    keep.add(next((i for i, s in enumerate(io.samples) if s is io.best), -1))
+    kept = [io.samples[i] for i in sorted(keep) if i >= 0]
     ran = {entry["index"] for entry in io.phase_log}
     phases = [dict(entry) for entry in io.phase_log]
     for index, name in enumerate(io.phases):

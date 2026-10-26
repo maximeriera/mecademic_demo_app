@@ -207,6 +207,19 @@
         .wf-row.neg .wf-bar i { background: var(--color-red); }
         .wf-row.skipped { opacity: 0.5; }
         .wf-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+        .key { margin-left: 10px; white-space: nowrap; }
+        .key::before {
+            content: '';
+            display: inline-block;
+            width: 14px;
+            height: 3px;
+            margin-right: 5px;
+            vertical-align: middle;
+            border-radius: 2px;
+            background: currentColor;
+        }
+        .key.lat { color: var(--color-accent); }
+        .key.ang { color: var(--color-blue, #3bb8ff); }
 
         .side-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
         .trace-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -315,7 +328,7 @@
                         <div class="verdict" id="verdict"></div>
                         <div class="sub-title">Gain per phase</div>
                         <ul class="waterfall" id="waterfall"></ul>
-                        <div class="sub-title">Gradient slope per circle</div>
+                        <div class="sub-title">Gradient slope per circle <span class="key lat">lateral</span> <span class="key ang">angular</span></div>
                         <canvas id="chart-gradient"></canvas>
                     </div>
                 </div>

@@ -19,6 +19,8 @@
     const SURFACE_REBUILD_MS = 250;
     // Earlier axial scans kept on a profile, fading.
     const PROFILES_SHOWN = 6;
+    // Time slices of the power trace, about one per pixel column.
+    const TRACE_SLICES = 1000;
 
     // A sample is [x, y, z, alpha, beta, gamma, power_w, kind, phase, t] (see alignment.py).
     const POWER = 6;
@@ -50,10 +52,14 @@
     const MUTED = token('--color-muted', '#9aa39f');
     const YELLOW = token('--color-yellow', '#ffd447');
     const BLUE = token('--color-blue', '#3bb8ff');
-    // dB vs threshold → colour: blue (DB_FLOOR and below) → amber (just below) → green (at or above).
-    const DB_FLOOR = -30;
-    const LOW = [59, 184, 255];
-    const HIGH = [255, 212, 71];
+    // Power colours of the landscapes: a heat ramp whose lightness rises evenly
+    // (OKLCH L 0.40 → 0.96), dim violet → magenta → coral → amber → pale
+    // yellow. Each plot spreads it over the dB range it shows, so small
+    // differences stay visible, and a colour bar gives the values.
+    const HEAT = ['#3f3399', '#6f2fb7', '#a62cb8', '#d83a95', '#f36069', '#fd8b4a', '#feb251', '#fed756', '#fbf6a6'];
+    // The ramp reaches at most this far under a plot's top reading, and spans at least this (dB).
+    const HEAT_SPAN_DB = 40;
+    const HEAT_MIN_SPAN_DB = 0.2;
 
     const isNum = v => typeof v === 'number' && Number.isFinite(v);
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -61,12 +67,16 @@
     const dbOf = (watts, ref) => (watts > 0 && ref > 0 ? 10 * Math.log10(watts / ref) : -60);
     const signed = (v, digits = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}`;
 
-    function dbColor(db) {
-        if (db >= 0) return ACCENT;
-        const f = clamp((db - DB_FLOOR) / -DB_FLOOR, 0, 1);
-        const c = LOW.map((v, i) => Math.round(v + f * (HIGH[i] - v)));
-        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-    }
+    // HEAT, interpolated into 256 CSS colours.
+    const HEAT_LUT = (() => {
+        const rgb = HEAT.map(hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)));
+        return Array.from({ length: 256 }, (_, k) => {
+            const x = (k / 255) * (rgb.length - 1);
+            const i = Math.min(rgb.length - 2, Math.floor(x));
+            const c = rgb[i].map((v, j) => Math.round(v + (x - i) * (rgb[i + 1][j] - v)));
+            return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+        });
+    })();
 
     function maxOf(values, fallback = -Infinity) {
         let m = fallback;
@@ -79,6 +89,21 @@
         for (const v of values) if (isNum(v) && v < m) m = v;
         return m;
     }
+
+    // [low, high] watts a plot's colours span: the dB range of `watts`, at
+    // most HEAT_SPAN_DB deep and at least HEAT_MIN_SPAN_DB wide.
+    function heatDomain(watts) {
+        const hi = maxOf(watts);
+        if (!(hi > 0)) return null;
+        const lo = Math.max(hi * 10 ** (-HEAT_SPAN_DB / 10), minOf(watts.filter(w => w > 0), hi));
+        const missing = HEAT_MIN_SPAN_DB - 10 * Math.log10(hi / lo);
+        const pad = missing > 0 ? 10 ** (missing / 20) : 1;
+        return [lo / pad, hi * pad];
+    }
+
+    // Where `watts` falls on the ramp of `domain`: 0 at its low end, 1 at its top.
+    const heatFraction = (domain, watts) => (watts > 0 ? Math.log10(watts / domain[0]) / Math.log10(domain[1] / domain[0]) : 0);
+    const heatColor = (domain, watts) => HEAT_LUT[Math.round(clamp(domain ? heatFraction(domain, watts) : 0, 0, 1) * 255)];
 
     // --- Power units --------------------------------------------------------------
 
@@ -171,6 +196,7 @@
             timeout_s: result.timeout_s,
             phases: result.phase_names || [],
             samples: result.points || [],
+            reads: result.reads,
             phaseLog: (result.phases || []).filter(p => p.t0 !== undefined),
             phaseSummary: result.phases || [],
             profiles: (result.published || {}).profile || [],
@@ -182,8 +208,9 @@
     }
 
     // The alignment in progress, else the latest one: built from the hub's
-    // events and samples, or from its align_result summary when the page holds
-    // no history of it (e.g. after a reload).
+    // events and samples, completed by its align_result summary once it ends.
+    // The hub keeps only its latest samples, so a page (re)loaded during or
+    // after a run lacks the start of it, which the summary holds (decimated).
     function buildRun(state) {
         const events = state.events;
         let start = -1;
@@ -227,6 +254,7 @@
             timeout_s: d.timeout_s,
             phases: d.phases || [],
             samples: values('align_sample'),
+            reads: null,
             phaseLog,
             phaseSummary: null,
             profiles: values('align_profile'),
@@ -235,15 +263,20 @@
             error: end ? end.data.error : null,
             result: null,
         };
-        if (end && !end.data.error) {
+        if (end) {
             // align_result is published right after align_end: until it
             // arrives, the end event's own data stands in for it.
             const summary = lastResult && lastResult[0] >= end.t ? lastResult[1] : null;
-            run.result = summary || { passed: end.data.passed, power_w: end.data.power_w };
             if (summary) {
                 run.phaseSummary = summary.phases;
                 run.elapsed = summary.duration_s;
+                run.reads = summary.reads;
+                if (run.samples.length < summary.reads) run.samples = summary.points || [];
+                const published = summary.published || {};
+                if ((published.profile || []).length > run.profiles.length) run.profiles = published.profile;
+                if ((published.gradient || []).length > run.gradient.length) run.gradient = published.gradient;
             }
+            if (!end.data.error) run.result = summary || { passed: end.data.passed, power_w: end.data.power_w };
         }
         return run;
     }
@@ -266,6 +299,9 @@
     function gainDb(phase) {
         return phase.best_before_w > 0 && phase.best_w > 0 ? dbOf(phase.best_w, phase.best_before_w) : null;
     }
+
+    // Readings taken: the summary's count once the run is over, as its points are decimated.
+    const readsOf = run => (isNum(run.reads) ? run.reads : run.samples.length);
 
     // --- Phase tracker and time budget --------------------------------------------------------
 
@@ -356,18 +392,19 @@
     // --- 3D power landscapes ----------------------------------------------------------------------
 
     // A Plot3D panel showing power over two pose axes: the readings' path, the
-    // surface interpolated from them (height = linear power, colour = dB vs
-    // threshold), the best reading, and optionally a trail on the floor. Axes
-    // fit the data, only grow within one `key`, and animate.
+    // surface interpolated from them (height = linear power, colour = HEAT
+    // over the surface's dB range, with a colour bar), the best reading, and
+    // optionally a trail on the floor. Axes fit the data, only grow within
+    // one `key`, and animate.
     function landscape(canvas, cam) {
         const plot = Plot3D.create(canvas, cam, { fontPx: FONT_PX });
         let unit = UNITS[1];
         let threshold = null;
         let key = null;
         let ranges = null;
-        let builtAt = 0;
-        let builtFor = '';
-        plot.setColor(z => dbColor(dbOf(z * unit.scale, threshold)));
+        let built = { key: null, shape: '', at: 0 };
+        let domain = null;  // [low, high] watts the colours span
+        plot.setColor(z => heatColor(domain, z * unit.scale));
 
         function extent(values, minSpan) {
             let lo = minOf(values);
@@ -394,14 +431,26 @@
                 const pts3 = pts.map(([u, v, w]) => [u, v, w / unit.scale]);
                 plot.setPoints(pts3, { tail: o.tail || 150 });
 
-                const signature = `${o.key}|${ranges.x}|${ranges.y}|${unit.name}`;
+                // Rebuilt at once for a new key, else at most every
+                // SURFACE_REBUILD_MS, when the readings or the axes changed.
+                const shape = `${ranges.x}|${ranges.y}|${unit.name}|${pts3.length}`;
                 const now = performance.now();
-                if (signature !== builtFor || now - builtAt > SURFACE_REBUILD_MS) {
-                    plot.setSurface(pts3.length >= 3
+                if (o.key !== built.key || (shape !== built.shape && now - built.at > SURFACE_REBUILD_MS)) {
+                    const surface = pts3.length >= 3
                         ? Landscape.build(pts3, ranges.x, ranges.y, { n: o.n || 40, sigmaCells: o.sigmaCells || 1.6 })
-                        : null);
-                    builtFor = signature;
-                    builtAt = now;
+                        : null;
+                    plot.setSurface(surface);
+                    // The colours span what the surface shows, else the readings.
+                    const shown = surface ? surface.z.flat().filter(isNum) : pts3.map(p => p[2]);
+                    domain = heatDomain(shown.map(z => z * unit.scale));
+                    plot.setLegend(domain && {
+                        stops: HEAT,
+                        top: withUnit(domain[1]),
+                        bottom: withUnit(domain[0]),
+                        marks: threshold > domain[0] && threshold < domain[1]
+                            ? [{ f: heatFraction(domain, threshold), text: 'threshold' }] : [],
+                    });
+                    built = { key: o.key, shape, at: now };
                 }
                 let best = null;
                 pts3.forEach(p => { if (!best || p[2] > best[2]) best = p; });
@@ -428,7 +477,7 @@
     // --- 2D charts ---------------------------------------------------------------------------------
 
     const trace = Chart2D.create($('chart-trace'), { fontPx: FONT_PX, xLabel: 'time (s)', yLabel: 'dB vs threshold', message: 'Waiting for an alignment…' });
-    const gradientChart = Chart2D.create($('chart-gradient'), { fontPx: FONT_PX - 1, xLabel: 'circle', yLabel: 'slope', message: 'No gradient circles.' });
+    const gradientChart = Chart2D.create($('chart-gradient'), { fontPx: FONT_PX - 1, xLabel: 'circle', yLabel: 'relative slope', message: 'No gradient circles.' });
     const AXIAL = ['Rx', 'Rz', 'X', 'Z'];
     const profileCharts = {};
     AXIAL.forEach(axis => {
@@ -438,11 +487,48 @@
     Plot3D.animate([mapView.plot, summaryView.plot, trace, gradientChart, ...Object.values(profileCharts)], mainCam);
     Plot3D.animate([gradLat.plot, gradAng.plot], gradCam);
 
+    // The lowest and highest point of each of `buckets` time slices: a long
+    // trace drawn fast, with its envelope kept.
+    function envelope(points, buckets) {
+        if (points.length <= buckets * 2) return points;
+        const t0 = points[0][0];
+        const span = points[points.length - 1][0] - t0 || 1;
+        const out = [];
+        let slice = -1, lo = null, hi = null;
+        const flush = () => {
+            if (!lo) return;
+            if (lo === hi) out.push(lo);
+            else out.push(...(lo[0] < hi[0] ? [lo, hi] : [hi, lo]));
+        };
+        points.forEach(p => {
+            const k = Math.floor(((p[0] - t0) / span) * buckets);
+            if (k !== slice) {
+                flush();
+                slice = k;
+                lo = hi = p;
+            } else if (p[1] < lo[1]) {
+                lo = p;
+            } else if (p[1] > hi[1]) {
+                hi = p;
+            }
+        });
+        flush();
+        return out;
+    }
+
     function renderTrace(run) {
         const thr = run.threshold_w;
         const points = run.samples.filter(s => isNum(s[POWER]) && isNum(s[T])).map(s => [s[T], dbOf(s[POWER], thr)]);
+        // Best so far, as steps.
+        const bestLine = [];
         let best = -Infinity;
-        const bestLine = points.map(([t, db]) => [t, (best = Math.max(best, db))]);
+        points.forEach(([t, db]) => {
+            if (db <= best) return;
+            if (bestLine.length) bestLine.push([t, best]);
+            best = db;
+            bestLine.push([t, best]);
+        });
+        if (points.length) bestLine.push([points[points.length - 1][0], best]);
         const dbs = points.map(p => p[1]);
         const lo = Math.max(-45, Math.min(-10, Math.floor((minOf(dbs, 0) - 2) / 5) * 5));
         const hi = Math.max(5, Math.ceil((maxOf(dbs, 0) + 2) / 5) * 5);
@@ -457,7 +543,7 @@
         trace.setRange({ x: [0, tMax], y: [lo, hi] }, AXES_ANIM_MS);
         trace.setData({
             series: [
-                { points, color: SOFT, width: 1, alpha: 0.55 },
+                { points: envelope(points, TRACE_SLICES), color: SOFT, width: 1, alpha: 0.55 },
                 { points: bestLine, color: ACCENT, width: 2.4 },
             ],
             bands,
@@ -544,7 +630,7 @@
 
         const verdict = $('verdict');
         const r = run.result || {};
-        const readings = run.samples.length;
+        const readings = readsOf(run);
         if (run.status === 'error') {
             verdict.className = 'verdict ng';
             verdict.textContent = 'Alignment interrupted';
@@ -582,17 +668,18 @@
             return li;
         }));
 
-        const kinds = { cart: [], ang: [] };
-        run.gradient.forEach((g, i) => { if (kinds[g.kind] && isNum(g.magnitude)) kinds[g.kind].push([i + 1, g.magnitude]); });
-        const all = [...kinds.cart, ...kinds.ang];
-        if (all.length) {
-            const top = maxOf(all.map(p => p[1]));
-            gradientChart.setRange({ x: [0.5, Math.max(2, all.length) + 0.5], y: [0, (top > 0 ? top : 1) * 1.15] }, 0);
-        }
+        // Lateral slopes are in power/mm, angular ones in power/°: each kind
+        // is drawn relative to its steepest circle.
+        const slopes = kind => {
+            const list = run.gradient.map((g, i) => [i + 1, g]).filter(([, g]) => g.kind === kind && isNum(g.magnitude));
+            const top = maxOf(list.map(([, g]) => g.magnitude));
+            return list.map(([i, g]) => [i, top > 0 ? g.magnitude / top : 0]);
+        };
+        gradientChart.setRange({ x: [0.5, Math.max(2, run.gradient.length) + 0.5], y: [0, 1.1] }, 0);
         gradientChart.setData({
             series: [
-                { points: kinds.cart, color: ACCENT, width: 2, dots: true },
-                { points: kinds.ang, color: BLUE, width: 2, dots: true },
+                { points: slopes('cart'), color: ACCENT, width: 2, dots: true },
+                { points: slopes('ang'), color: BLUE, width: 2, dots: true },
             ],
         });
     }
@@ -615,7 +702,7 @@
         if (!running && !phase) {
             showPanel('panel-summary');
             $('panel-title').textContent = 'Summary';
-            $('panel-sub').textContent = `fiber #${run.fiber || '–'} · ${run.samples.length} readings · ${run.elapsed.toFixed(1)} s`;
+            $('panel-sub').textContent = `fiber #${run.fiber || '–'} · ${readsOf(run)} readings · ${run.elapsed.toFixed(1)} s`;
             renderSummary(run, states);
             return;
         }
@@ -626,8 +713,9 @@
         const samples = index === null ? run.samples : run.samples.filter(s => s[PHASE] === index);
         const best = maxOf(samples.map(s => s[POWER]));
         const status = running ? 'running' : phase.status;
+        const readings = !running && isNum(phase.reads) ? phase.reads : samples.length;
         $('panel-title').textContent = name;
-        $('panel-sub').textContent = `${status} · ${samples.length} readings${isNum(best) ? ` · best ${withUnit(best)}` : ''}`;
+        $('panel-sub').textContent = `${status} · ${readings} readings${isNum(best) ? ` · best ${withUnit(best)}` : ''}`;
 
         if (view.type === 'profiles') {
             showPanel('panel-profiles');
@@ -677,7 +765,7 @@
         set('n-gain', best && first && first[POWER] > 0 ? `${signed(dbOf(best[POWER], first[POWER]))} dB` : '—');
         const tLast = last[T];
         const rate = isNum(tLast) ? run.samples.filter(s => s[T] > tLast - 1).length : 0;
-        set('n-reads', run.status === 'running' ? `${run.samples.length} · ${rate}/s` : `${run.samples.length}`);
+        set('n-reads', run.status === 'running' ? `${run.samples.length} · ${rate}/s` : `${readsOf(run)}`);
     }
 
     // --- Events and hub status -------------------------------------------------------------------------
