@@ -67,7 +67,7 @@ params:
 
   align_timeout_s:
     type: float
-    default: 300.0
+    default: 100.0
     editable_when_idle: true
     description: The alignment gives up after this long and is judged at the best pose found.
 
@@ -91,19 +91,19 @@ params:
   # few µm apart: ~10 µm and ~5°.
   lateral_width_um:
     type: float
-    default: 100.0
+    default: 200.0
     editable_when_idle: true
     description: Lateral offset (µm) at which the power falls to 1/e² of its peak (the 1/e² radius). A starting guess, re-measured by every alignment.
 
   angle_width_deg:
     type: float
-    default: 0.2
+    default: 0.3
     editable_when_idle: true
     description: Tilt (°) at which the power falls to 1/e of its peak. A starting guess, re-measured by every alignment.
 
   acquire_radius_deg:
     type: float
-    default: 2.0
+    default: 3.0
     editable_when_idle: true
     description: When no light reaches the meter at the start, the search first tilts in a spiral out to this far from the start tilt (°). Must fit inside align_range_deg.
 
@@ -130,7 +130,7 @@ params:
   peak_grid:
     type: int
     # 5: 25 readings at rest per iteration, ~2.5 s; 3: 9 readings, ~1 s.
-    default: 5
+    default: 4
     editable_when_idle: true
     description: Readings per side of the Peak phase's square pattern (odd, 3 to 9). The pattern spans ±0.2 lateral width around the centre whatever its size, so more readings means a finer grid and a better fit, but a slower phase.
 
