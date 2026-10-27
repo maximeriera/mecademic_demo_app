@@ -123,14 +123,14 @@ params:
     type: bool
     # For demos: off, light at the start skips the search and each spiral
     # stops once past the light, which is faster.
-    default: false
+    default: true
     editable_when_idle: true
     description: Run the whole search for first light, even with light at the start - the tilt spiral then the lateral spiral, each to its full radius - to show it. Off, the search stops as soon as it has the light.
 
   peak_grid:
     type: int
     # 5: 25 readings at rest per iteration, ~2.5 s; 3: 9 readings, ~1 s.
-    default: 4
+    default: 5
     editable_when_idle: true
     description: Readings per side of the Peak phase's square pattern (odd, 3 to 9). The pattern spans ±0.2 lateral width around the centre whatever its size, so more readings means a finer grid and a better fit, but a slower phase.
 
