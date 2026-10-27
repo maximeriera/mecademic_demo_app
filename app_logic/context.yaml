@@ -119,6 +119,14 @@ params:
     editable_when_idle: true
     description: Lowest power the search counts as light (µW). Raised automatically above the noise measured at the start.
 
+  acquire_full_search:
+    type: bool
+    # For demos: off, light at the start skips the search and each spiral
+    # stops once past the light, which is faster.
+    default: false
+    editable_when_idle: true
+    description: Run the whole search for first light, even with light at the start - the tilt spiral then the lateral spiral, each to its full radius - to show it. Off, the search stops as soon as it has the light.
+
   # --- Motion (applied at the start of every step) ------------------------------
   joint_vel_pct:
     type: float

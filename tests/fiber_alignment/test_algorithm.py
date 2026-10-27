@@ -12,7 +12,7 @@ import pytest
 from app_logic.fiber_alignment import algorithm
 from app_logic.fiber_alignment.alignment import AlignmentError, AlignmentNoSignal
 
-from .sim import Scenario, simulate
+from .sim import BEAM_WIDTH_UM, Scenario, simulate
 
 #: Starts: (x, z) µm and (rx, rz) ° from the optimum, and how the cell behaves.
 CASES = {
@@ -78,6 +78,88 @@ def test_no_light_tilts_first_then_moves():
     assert searches(run) == ["angle", "angle"]
     run = simulate(CASES["lateral-off"])
     assert searches(run) == ["angle", "lateral", "lateral"]
+
+
+FULL = {"acquire_full_search": True}
+
+
+def spiral_reach(run):
+    """Each spiral's search: (how far its readings went from the start, its radius, its reading spacing)."""
+    acquire = run.context.published("align_acquire")
+    rows = [r for r in run.rows if r[8] == algorithm.PHASES.index("Acquire") and not r[10]]
+    reach = {}
+    for search in dict.fromkeys(a["search"] for a in acquire if a["search"]):
+        payloads = [a for a in acquire if a["search"] == search]
+        u, v = (algorithm.LOCAL_INDEX[a] for a in algorithm.PHASE_VIEWS["Acquire"]["search_axes"][search])
+        far = max(math.hypot(r[u], r[v]) for r in rows if payloads[0]["t"] <= r[9] <= payloads[-1]["t"])
+        reach[search] = (far, payloads[0]["radius"], payloads[0]["pitch"] / algorithm.SPIRAL_READINGS_PER_PITCH)
+    return reach
+
+
+def test_a_full_search_runs_both_spirals_to_their_radius_even_with_light_at_the_start():
+    run = simulate(Scenario(offset=CASES["cell-run"].offset, params=FULL))
+    assert run.error is None, run.error
+    assert run.rows[0][6] >= 1e-6, "no light at the start"
+    assert searches(run) == ["angle", "angle", "lateral", "lateral"]
+    assert all(a["full"] and a["warm"] for a in run.context.published("align_acquire"))
+    for search, (far, radius, spacing) in spiral_reach(run).items():
+        assert far >= radius - spacing, f"the {search} spiral stopped at {far:.3g} of {radius:g}"
+    assert run.result.passed
+    assert run.result.power_w >= 0.97 * run.optics.best_power_w()
+
+
+def test_a_full_search_from_no_light_aligns_too():
+    run = simulate(Scenario(offset=CASES["angle-off"].offset, seed=3, params=FULL))
+    assert run.error is None, run.error
+    assert run.rows[0][6] < 1e-6
+    assert searches(run) == ["angle", "angle", "lateral", "lateral"]
+    assert all(far >= radius - spacing for far, radius, spacing in spiral_reach(run).values())
+    assert run.result.power_w >= 0.97 * run.optics.best_power_w()
+    # Off, the tilt spiral stops once past the light, well inside its radius.
+    far, radius, _ = spiral_reach(simulate(CASES["angle-off"]))["angle"]
+    assert far < 0.6 * radius
+    # In the dark, it still stops with the error.
+    run = simulate(Scenario(dark=True, params=FULL))
+    assert isinstance(run.error, AlignmentNoSignal)
+    assert searches(run) == ["angle", "lateral"]
+
+
+def test_a_full_search_goes_back_to_the_light_the_lateral_spiral_missed(monkeypatch):
+    original = algorithm.spiral
+
+    def blind_lateral(io, state, search, info, full=False):
+        if search != "lateral":
+            return original(io, state, search, info, full)
+        detect, state.detect_w = state.detect_w, math.inf  # sees no light
+        try:
+            return original(io, state, search, info, full)
+        finally:
+            state.detect_w = detect
+
+    monkeypatch.setattr(algorithm, "spiral", blind_lateral)
+    run = simulate(Scenario(offset=CASES["cell-run"].offset, params=FULL))
+    assert run.error is None, run.error
+    assert searches(run) == ["angle", "angle", "lateral"]
+    rows = [r for r in run.rows if r[8] == algorithm.PHASES.index("Acquire")]
+    still = [r for r in rows if r[10]]
+    # The tilt spiral's best, then the same pose again once the lateral spiral is over.
+    assert len(still) == 2 and still[-1][9] > max(r[9] for r in rows if not r[10])
+    tilt = run.context.published("align_acquire")[1]["at"]
+    for r in still:
+        assert [r[3], r[5]] == pytest.approx(tilt, abs=1e-3) and math.hypot(r[0], r[2]) < 1e-3
+    assert run.result.power_w >= 0.97 * run.optics.best_power_w()
+
+
+def test_the_peak_pattern_spans_a_fifth_of_the_width():
+    run = simulate(CASES["cell-run"])
+    widths = {}
+    for p in run.context.published("align_profile"):
+        if p["axis"] in ("x", "z") and p["chosen"] is not None:
+            widths[p["axis"]] = p["fit"]["width"]  # the latest width measured: the one the Peak phase uses
+    mean = 0.5 * (widths["x"] + widths["z"])
+    assert mean == pytest.approx(BEAM_WIDTH_UM, rel=0.1)
+    radii = [p["radius_um"] for p in run.context.published("align_peak")]
+    assert radii and all(r == pytest.approx(0.2 * mean, rel=1e-3) for r in radii)  # ±48 µm on the cell's ends
 
 
 def test_the_walk_shows_the_tcp_off_the_tip():

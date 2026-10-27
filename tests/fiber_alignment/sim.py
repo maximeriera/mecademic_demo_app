@@ -442,6 +442,7 @@ DEFAULT_PARAMS = {
     "acquire_radius_deg": 2.0,
     "acquire_radius_um": 500.0,
     "signal_detect_uw": 1.0,
+    "acquire_full_search": False,
 }
 #: Bare single-mode fibers 20 µm apart: what changes for them.
 SMF = {"gap_um": 20.0, "params": {"lateral_width_um": 10.0, "angle_width_deg": 5.0}}

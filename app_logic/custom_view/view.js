@@ -355,8 +355,9 @@
         const type = viewOf(run, phase.name).type;
         if (type === 'profiles') return `scan ${inPhase(run.published.profile, phase).length}`;
         if (type === 'peak') return `iter ${inPhase(run.published.peak, phase).length}`;
-        const found = inPhase(run.published.acquire, phase).some(a => a.found);
-        return found ? 'light found' : `${run.samples.filter(s => s[PHASE] === phase.index).length} readings`;
+        const acquire = inPhase(run.published.acquire, phase);
+        const last = acquire[acquire.length - 1];
+        return last && last.found ? 'light found' : `${run.samples.filter(s => s[PHASE] === phase.index).length} readings`;
     }
 
     // One row per phase: its state, what it gained (or is doing) and how long it took.
@@ -624,7 +625,15 @@
                     minTop: last && isNum(last.detect_w) ? last.detect_w : 0,
                 });
                 const how = SEARCH_NAMES[search] || 'search';
-                const light = !last ? null : last.warm ? 'light at the start' : last.found ? `light found · ${how}` : how;
+                let light = !last ? null : last.found ? `light found · ${how}` : how;
+                if (last && last.full) {
+                    // A full search runs both spirals to the end, light at the start or not.
+                    const first = acquire.find(a => a.found);
+                    light = `full search · ${!last.found ? how : last.warm ? 'light at the start'
+                        : `light found · ${SEARCH_NAMES[first.search] || 'search'}`}`;
+                } else if (last && last.warm) {
+                    light = 'light at the start';
+                }
                 return phaseNumbers(run, phase, light && phase.status === 'running' && !last.found
                     ? `${light} · ${samples.length} readings` : light);
             },

@@ -16,7 +16,8 @@ the custom view as PHASE_VIEWS declares:
 1. Acquire: the noise floor at the start. Unless light already reaches the
    meter, a spiral in tilt (Rx/Rz) around the start, then, still dark, a
    spiral in the lateral plane, each until light shows; then the move to the
-   best reading.
+   best reading. With ``acquire_full_search`` (for demos), both spirals run
+   to their full radius, whatever the start reads.
 2. Center: two-way scans across the light along x then z, each fitted with a
    Gaussian over the noise floor; the fiber moves to the fitted centre until
    it no longer shifts. The two directions also measure what is left of the
@@ -139,7 +140,9 @@ ANGLE_MIN_GAIN_DB = 0.1
 
 # --- Peak --------------------------------------------------------------------------------------
 #: Pattern radius: PEAK_RADIUS_WIDTHS × the mean width, at least PEAK_RADIUS_MIN_UM.
-PEAK_RADIUS_WIDTHS = 0.5
+#: Each step is clipped to it. At 0.2 width the edge points still read ~8 %
+#: under the centre: plenty for the fit.
+PEAK_RADIUS_WIDTHS = 0.2
 PEAK_RADIUS_MIN_UM = 1.0
 #: The search stops on a step under max(PEAK_MIN_STEP_UM, PEAK_MIN_STEP_WIDTHS widths)
 #: (about the robot's resolution, or nothing that matters), a gain under PEAK_MIN_GAIN_DB,
@@ -248,7 +251,11 @@ def generate_archimedean_spiral(center=(0.0, 0.0), max_radius=0.5, spiral_pitch=
 
 
 def acquire(io: AlignmentIO, state: _State) -> None:
-    """The noise floor; unless light shows already, a tilt spiral, then a lateral one; ends on the best reading."""
+    """The noise floor; unless light shows already, a tilt spiral, then a lateral one; ends on the best reading.
+
+    With ``full_search``, both spirals run to their full radius, light at the
+    start or not, each ending on its best reading: the whole search, for a demo.
+    """
     s = state.settings
     _averaging(io, state, SCAN_AVERAGING)
     _range(io, state, None)
@@ -260,23 +267,33 @@ def acquire(io: AlignmentIO, state: _State) -> None:
     else:
         state.baseline_w = noise if math.isfinite(noise) else 0.0
         state.detect_w = max(s.signal_detect_w, noise + NOISE_SIGMAS * sigma) if math.isfinite(noise) else s.signal_detect_w
-    info = {"noise_w": noise, "sigma_w": sigma, "detect_w": state.detect_w, "warm": warm}
-    if warm:
+    info = {"noise_w": noise, "sigma_w": sigma, "detect_w": state.detect_w, "warm": warm, "full": s.full_search}
+    if warm and not s.full_search:
         state.peak_w = noise
         io.publish("acquire", {**info, "search": None, "found": True, "at": [0.0, 0.0], "power_w": noise})
         return
-    for search in ("angle", "lateral"):
-        if spiral(io, state, search, info):
+    if s.full_search:
+        found = [spiral(io, state, search, info, full=True) for search in ("angle", "lateral")]
+        if any(found):
+            if not found[-1]:
+                # The light the tilt spiral found, too faint for the lateral one.
+                _goto(io, state)
+                state.peak_w = _still(io, state, "ang")
             return
+    else:
+        for search in ("angle", "lateral"):
+            if spiral(io, state, search, info):
+                return
     raise AlignmentNoSignal(
         f"No light above {state.detect_w:.3g} W (noise {noise:.3g} W) tilting ±{s.acquire_radius_deg:g}° "
         f"nor moving ±{s.acquire_radius_mm * 1e3:g} µm around the start: check the laser, the fibers "
         f"and the align_start pose.")
 
 
-def spiral(io: AlignmentIO, state: _State, search: str, info: Dict) -> bool:
+def spiral(io: AlignmentIO, state: _State, search: str, info: Dict, full: bool = False) -> bool:
     """A spiral in tilt ("angle": rx/rz) or in the lateral plane ("lateral": x/z) around pos, until light shows.
 
+    It stops once past the light's peak; ``full``, it runs to its radius.
     Ends on its best reading, at rest. False if it found no light.
     """
     s = state.settings
@@ -290,6 +307,9 @@ def spiral(io: AlignmentIO, state: _State, search: str, info: Dict) -> bool:
     io.publish("acquire", {**payload, "found": False})
     centre = (state.pos[axes[0]], state.pos[axes[1]])
     path = generate_archimedean_spiral(centre, max_radius=radius, spiral_pitch=pitch, point_spacing=spacing)
+    # Scan readings, in auto range: the light may be anywhere from nothing to the peak.
+    _averaging(io, state, SCAN_AVERAGING)
+    _range(io, state, None)
     if search == "angle":
         _motion(io, state, acc=MOVE_MOTION["acc"], ang_vel=_scan_ang_speed(io, spacing), blending=100)
     else:
@@ -302,7 +322,8 @@ def spiral(io: AlignmentIO, state: _State, search: str, info: Dict) -> bool:
         # An overrange (+inf) is light too.
         if sample.power_w >= state.detect_w and (found["best"] is None or sample.power_w > found["best"].power_w):
             found["best"] = sample
-        stopped["done"] = found["best"] is not None and sample.power_w < PAST_PEAK * found["best"].power_w
+        stopped["done"] = (not full and found["best"] is not None
+                           and sample.power_w < PAST_PEAK * found["best"].power_w)
         return stopped["done"]
 
     # The path starts where the fiber is.

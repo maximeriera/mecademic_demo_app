@@ -22,10 +22,12 @@ AXES = {"x", "y", "z", "rx", "ry", "rz"}
 KINDS = {"cart", "ang", None}
 
 
-#: Cold starts: one found by the tilt spiral, one by the lateral spiral after it.
+#: Cold starts: one found by the tilt spiral, one by the lateral spiral after
+#: it; and a full search (acquire_full_search) with light at the start.
 SCENARIOS = {
     "angle": Scenario(offset=(40, 30, 1.2, -0.4), seed=11),
     "lateral": Scenario(offset=(600, 0, 0.1, 0.0), seed=12, params={"acquire_radius_um": 800.0}),
+    "full": Scenario(offset=(50, 0, 0.45, 0.0), seed=13, params={"acquire_full_search": True}),
 }
 
 
@@ -87,7 +89,8 @@ def test_payloads_go_to_phases_whose_card_plots_them(run):
     for p in run.context.published("align_acquire"):
         view = algorithm.PHASE_VIEWS[names[p["phase"]]]
         assert view["type"] == "map"
-        assert {"noise_w", "detect_w", "found", "warm", "search"} <= set(p)
+        assert {"noise_w", "detect_w", "found", "warm", "full", "search"} <= set(p)
+        assert isinstance(p["full"], bool)
         if p["search"] is not None:
             # The card plots each search over the axes declared for it.
             assert p["search"] in view["search_axes"]

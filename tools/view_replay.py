@@ -1,6 +1,7 @@
 """Replay a simulated alignment into the real custom view, for a browser to watch.
 
-    python tools/view_replay.py [--offset X Z RX RZ] [--optics beam|smf] [--speed 4] [--port 8765] [--dark] [--step]
+    python tools/view_replay.py [--offset X Z RX RZ] [--optics beam|smf] [--speed 4] [--port 8765] [--dark]
+                                [--full-search] [--step]
 
 Runs one alignment on the simulated cell (tests/fiber_alignment/sim.py), then
 serves the page in app_logic/custom_view/ and its /static/ files with the hub
@@ -169,8 +170,9 @@ class Replay:
                 "duration_s": run.result.duration_s,
             },
             "best_still": summary.get("best_still") if summary else None,
-            # The search the Acquire card ends on (None: light at the start).
+            # The search the Acquire card ends on (None: light at the start), and whether it ran in full.
             "acquire_search": ([a.get("search") for a in run.context.published("align_acquire")] or [None])[-1],
+            "full_search": bool(run.context.params.get("acquire_full_search")),
             "source_power_w": summary.get("source_power_w") if summary else None,
             "counts": per_phase,
         }
@@ -254,6 +256,8 @@ def main(argv=None) -> None:
     parser.add_argument("--optics", choices=("beam", "smf"), default="beam",
                         help="beam: collimated ends like the cell's; smf: bare single-mode fibers")
     parser.add_argument("--dark", action="store_true", help="no light: the search fails")
+    parser.add_argument("--full-search", action="store_true",
+                        help="acquire_full_search: both searches run to their full radius, even with light at the start")
     parser.add_argument("--speed", type=float, default=4.0, help="replay speed, × real time")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--seed", type=int, default=11)
@@ -261,7 +265,7 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
 
     scenario = Scenario(offset=tuple(args.offset), optics=args.optics, pivot_um=tuple(args.pivot), dark=args.dark,
-                        seed=args.seed)
+                        seed=args.seed, params={"acquire_full_search": args.full_search})
     run = simulate(scenario)
     threshold_mw = run.context.params["power_threshold_mw"]
     replay = Replay(run, args.speed, threshold_mw, step=args.step)

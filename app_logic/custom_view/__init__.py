@@ -25,11 +25,13 @@ algorithm.py; tests/fiber_alignment/test_contract.py checks it):
     run's phases (-1 outside any), ``t`` the time since the start (s),
     ``still`` true for a reading taken at rest.
   - ``align_acquire``: the search for light: ``noise_w``, ``detect_w`` (the
-    level counted as light), ``warm`` (light at the start: no search),
-    ``found``, and ``search``: null after a warm start, else "angle" (a spiral
-    in rx/rz) or "lateral" (a spiral in x/z), published as each spiral starts
-    and once it finds light, with its ``radius``, ``pitch`` and ``unit`` (° or
-    µm), and once found ``at`` (the spiral's two axes) and ``power_w``.
+    level counted as light), ``warm`` (light at the start: no search, unless
+    ``full``), ``full`` (acquire_full_search: both spirals run to their full
+    radius), ``found``, and ``search``: null after a warm start, else "angle"
+    (a spiral in rx/rz) or "lateral" (a spiral in x/z), published as each
+    spiral starts and as it ends on the light, with its ``radius``, ``pitch``
+    and ``unit`` (° or µm), and once found ``at`` (the spiral's two axes) and
+    ``power_w``.
   - ``align_profile``: one per 1-D scan. ``axis`` (x, z, rx or rz), ``unit``
     (µm or °), ``iteration``, ``rescan``, ``span`` [lo, hi], ``passes``
     [{``dir`` 1 or -1, ``points`` [[coord, power_w], ...]}], ``fit`` (null,

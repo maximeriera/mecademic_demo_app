@@ -146,6 +146,9 @@ class AlignmentSettings:
     acquire_radius_mm: float
     #: Lowest power counted as light (W). The algorithm raises it above the noise it measures.
     signal_detect_w: float
+    #: Run both searches for first light to their full radius, even with light
+    #: at the start: shows the whole search (demo).
+    full_search: bool
 
     @classmethod
     def from_context(cls, context: AppContext) -> "AlignmentSettings":
@@ -165,6 +168,7 @@ class AlignmentSettings:
             acquire_radius_deg=float(context.get_param("acquire_radius_deg", 2.0)),
             acquire_radius_mm=float(context.get_param("acquire_radius_um", 500.0)) * 1e-3,
             signal_detect_w=float(context.get_param("signal_detect_uw", 1.0)) * 1e-6,
+            full_search=bool(context.get_param("acquire_full_search", False)),
         )
 
 

@@ -48,6 +48,7 @@ They run at the speeds set in the Variables tab unless they set their own.
 | `fiber_alignment/gripper.py` | SmarAct gripper: open/close are moves of its MCS2 jaw channel |
 | `fiber_alignment/process.py` | The five steps, shared by PROD and the Manual tab |
 | `fiber_alignment/alignment.py` | Contract with the algorithm: 3D moves, scans, readings, window, timeout, verdict |
+| `ALIGNMENT.md` | A brief on the alignment: for presenters, then the technical details |
 | `fiber_alignment/algorithm.py` | The alignment algorithm (see below), and how the custom view plots each of its phases (`PHASE_VIEWS`) |
 | `fiber_alignment/fit.py` | Its curve fits: Gaussian profiles, parabolas and quadratics in log power |
 | `fiber_alignment/frames.py` | Frame math from the colleague's script (poses ↔ 4×4 matrices) |
@@ -99,6 +100,10 @@ Then, on the cell:
 
 ## Alignment
 
+[`ALIGNMENT.md`](ALIGNMENT.md) explains it at more length: what to tell an
+audience and how to read the screen, then each phase, param and failure
+message in detail.
+
 `fiber_alignment/algorithm.py` aligns from wherever `align_start` left the
 fiber, even with no light reaching the meter, as long as the optimum is within
 `acquire_radius_deg` in tilt and `acquire_radius_um` laterally. It never moves
@@ -113,17 +118,18 @@ mostly a matter of angle. Four phases:
 
 | Phase | What it does |
 |---|---|
-| Acquire | Measures the noise floor. Any light at the start (above `signal_detect_uw` and the noise) goes straight to Center. Otherwise a spiral in tilt (Rx/Rz, out to `acquire_radius_deg`), then, still dark, a lateral spiral (out to `acquire_radius_um`), each stopping once past the light; then to the best reading. Still no light stops the alignment with "check the laser, the fibers and the align_start pose". |
+| Acquire | Measures the noise floor. Any light at the start (above `signal_detect_uw` and the noise) goes straight to Center. Otherwise a spiral in tilt (Rx/Rz, out to `acquire_radius_deg`), then, still dark, a lateral spiral (out to `acquire_radius_um`), each stopping once past the light; then to the best reading. Still no light stops the alignment with "check the laser, the fibers and the align_start pose". With `acquire_full_search` (for demos), both spirals run to their full radius, even with light at the start. |
 | Center | Scans across the light along X then Z, both ways, fits each scan with a Gaussian over the noise floor and moves to its centre, until the centre stops moving. A window that misses the centre moves towards it by half its span at most; failing that, the fiber goes to the best reading, never to an extrapolated centre. A window without light widens. |
 | Angle | For Rx then Rz: tilts stepping away from the current one (half an angle width at first) while the power rises, each re-centred along the lateral axis the tilt walks the beam on; a parabola through the best tilt and its neighbours picks the tilt. A tilt without light is a reading of no power, not an error. Again with half the step while it gains. |
-| Peak | Nine readings at rest on a 3×3 pattern around the centre, a quadratic fit of the log power and a step to its top, until the steps are small. Ends on the best reading taken at rest. |
+| Peak | Nine readings at rest on a 3×3 pattern of ±0.2 lateral width around the centre (~±50 µm on the cell's ends), a quadratic fit of the log power and a step to its top (at most the pattern's radius), until the steps are small. Ends on the best reading taken at rest. |
 
 Each reading is paired with the robot's pose at the middle of the meter's
 reading (interpolated between the poses read before and after it), so fast
 scans place their readings where they were taken. Scan speeds come from the
 measured time per reading. In simulation, with optics like the cell's, the
 alignment of 2026-10-27 (~80 µW at the start) takes about 17 s, and a cold
-start needing the tilt or the lateral spiral about 19 s.
+start needing the tilt or the lateral spiral about 18–19 s. A full search
+adds about 2 s.
 
 ## Custom view (`/view/`)
 
@@ -144,7 +150,8 @@ screens.
   - Acquire: a 3D landscape of the power along the search spiral, over
     Rx/Rz for the tilt spiral and X/Z for the lateral one (the readings at the
     start when light was already there). Until light is found it is scaled
-    to the level counted as light, marked "light" on the colour bar.
+    to the level counted as light, marked "light" on the colour bar. Its line
+    reads "full search · …" when `acquire_full_search` is on.
   - Center: the latest X and Z scans, both directions (green forward, blue
     backward), the fitted Gaussian and the centre chosen, in yellow.
   - Angle: the power against each tilt with its parabola and the beam's
@@ -174,15 +181,18 @@ python -m pytest tests -q
 ```
 
 checks the alignment from the cell's run of 2026-10-27, from a few µW, from
-no light (tilt or lateral search), on single-mode fibers with a TCP off the
-tip, in the dark, and that what it publishes is what the custom view plots. To
-watch a simulated run in the real custom view:
+no light (tilt or lateral search), with the full search, on single-mode
+fibers with a TCP off the tip, in the dark, and that what it publishes is
+what the custom view plots. To watch a simulated run in the real custom view:
 
 ```
 python tools/view_replay.py            # then open http://127.0.0.1:8765/view/
 python tools/view_replay.py --step &   # or let a browser check it:
 node tools/view_check.mjs              # screenshots in test-results/view/
 ```
+
+`--full-search` replays a full search (with `--offset 50 0 0.45 0`, from
+light at the start), `--dark` a run with no light.
 
 `view_check.mjs` needs Playwright and its Chromium (`npm i -g playwright`,
 `npx playwright install chromium`).
