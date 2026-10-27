@@ -10,7 +10,8 @@
 // 3. The verdict shows the alignment's final power, pass or fail, and the
 //    coupling against the source; every phase is listed as done.
 // 4. Each card's line shows what the phase did (light found, scans,
-//    iterations), and the peak card's best is the best reading at rest.
+//    iterations), the Acquire map is over the axes of the search that found
+//    the light, and the peak card's best is the best reading at rest.
 // 5. A page loaded after the run shows the same cards and numbers.
 // 6. No error in the console.
 // Saves a screenshot halfway through each phase and one of the end, for review.
@@ -77,6 +78,7 @@ async function snapshot(page) {
                 view: card.dataset.view,
                 active: card.classList.contains('active'),
                 sub: card.querySelector('.panel-sub').textContent,
+                axes: card.querySelector('canvas').dataset.axes || null,
                 ink: [...card.querySelectorAll('canvas')].map(inked),
             })),
             verdict: document.getElementById('verdict').textContent,
@@ -153,6 +155,10 @@ async function main() {
             const counts = final.counts[card.phase] || {};
             if (card.view === 'map') {
                 check(/light (found|at the start)/.test(card.sub), `${card.phase}: "${card.sub}" says where the light was found`);
+                // The map follows the search that found the light, over the axes declared for it.
+                const view = declared.phase_views[card.phase] || {};
+                const axes = ((final.acquire_search && view.search_axes && view.search_axes[final.acquire_search]) || view.axes || ['x', 'z']).join(',');
+                check(card.axes === axes, `${card.phase}: the map is over ${card.axes} (the ${final.acquire_search || 'start'} search: ${axes})`);
             } else if (card.view === 'profiles') {
                 const scans = plural(counts.profile || 0, 'scan');
                 check(card.sub.startsWith(scans), `${card.phase}: "${card.sub}" counts its ${scans}`);

@@ -588,10 +588,13 @@
     }
 
     // A "map" card: the phase's readings as a 3D landscape over two axes.
-    // The light detection level, when the phase publishes one ("acquire"), is
-    // marked on the colour bar.
+    // When the phase searches ("acquire" payloads with a "search"), the
+    // landscape follows the latest search, over the axes the view declares
+    // for it ("search_axes"), with that search's readings only. The light
+    // detection level is marked on the colour bar.
+    const SEARCH_NAMES = { angle: 'tilt search', lateral: 'lateral search' };
+
     function renderMap(view, name) {
-        const axes = (view.axes || DEFAULT_VIEW.axes).map(a => AXES[a] || AXES.x);
         const canvas = document.createElement('canvas');
         const waiting = `Waiting for ${name}…`;
         const plot = landscape(canvas, cam, waiting);
@@ -605,17 +608,25 @@
                 }
                 const acquire = inPhase(run.published.acquire, phase);
                 const last = acquire[acquire.length - 1];
+                const search = last && last.search;
+                const keys = (search && view.search_axes && view.search_axes[search]) || view.axes || DEFAULT_VIEW.axes;
+                const axes = keys.map(a => AXES[a] || AXES.x);
+                // The test reads which axes are shown.
+                canvas.dataset.axes = keys.join(',');
+                const since = search ? minOf(acquire.filter(a => a.search === search).map(a => a.t)) : -Infinity;
+                const samples = run.samples.filter(s => s[PHASE] === phase.index && s[T] >= since);
                 plot.update({
-                    key: `${run.key}:${name}`,
-                    points: project(run.samples.filter(s => s[PHASE] === phase.index), axes),
-                    names: axes.map(a => a.name), unit: axes[0].unit, minSpan: axes[0].unit === '°' ? 0.02 : 20,
+                    key: `${run.key}:${name}:${keys.join(',')}`,
+                    points: project(samples, axes),
+                    names: axes.map(a => a.name), unit: axes[0].unit, minSpan: axes[0].unit === '°' ? 0.05 : 20,
                     threshold: run.threshold_w,
                     marks: last && isNum(last.detect_w) ? [{ watts: last.detect_w, text: 'light' }] : [],
                     minTop: last && isNum(last.detect_w) ? last.detect_w : 0,
                 });
-                const light = !last ? null : last.warm ? 'light at the start' : last.found ? 'light found' : 'searching for light';
+                const how = SEARCH_NAMES[search] || 'search';
+                const light = !last ? null : last.warm ? 'light at the start' : last.found ? `light found · ${how}` : how;
                 return phaseNumbers(run, phase, light && phase.status === 'running' && !last.found
-                    ? `${light} · ${run.samples.filter(s => s[PHASE] === phase.index).length} readings` : light);
+                    ? `${light} · ${samples.length} readings` : light);
             },
         };
     }
@@ -638,7 +649,7 @@
         let text = `${spec.name} (${spec.unit}) · ${spec.unit === '°' ? 'round' : 'scan'} ${p.iteration + 1}`;
         if (p.rescan) text += ' · rescan';
         if (p.fit && isNum(p.fit.lag)) text += ` · lag ${Math.abs(p.fit.lag) < 0.005 ? '0.00' : p.fit.lag.toFixed(2)} µm`;
-        if (isNum(p.pivot_um)) text += ` · pivot ${Math.round(p.pivot_um)} µm`;
+        if (isNum(p.walk_um_per_deg)) text += ` · walk ${Math.round(p.walk_um_per_deg)} µm/°`;
         return text;
     }
 

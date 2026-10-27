@@ -60,7 +60,8 @@ They run at the speeds set in the Variables tab unless they set their own.
 - [ ] Teach `TOOL_TRF` and the home/shipment joints in `fiber_alignment/poses.py`, then set `POSES_TAUGHT = True`. Until then, every robot move is refused.
 - [ ] `config.yaml`: the robot's IP address. The power meter's `wavelength` (1557 nm, from the colleague's script) should match the source.
 - [ ] `context.yaml`: `source_power_mw`, the laser's output measured fiber to meter, and `power_threshold_mw`, 0.5–1 dB under the peak power measured on the setup. With an air gap a perfect alignment loses ~7 % to the two glass/air faces: about 0.93 mW from 1 mW.
-- [ ] Check `align_range_um` / `align_range_deg`: any pose the algorithm asks for beyond them is refused, which faults the alignment. The alignment refuses to start when `acquire_radius_um` does not fit in the window.
+- [ ] Check `align_range_um` / `align_range_deg`: any pose the algorithm asks for beyond them is refused, which faults the alignment. The alignment refuses to start when `acquire_radius_um` or `acquire_radius_deg` does not fit in the window.
+- [ ] `lateral_width_um` / `angle_width_deg`: how wide the coupling is, as starting guesses (every alignment re-measures them). The defaults come from the cell's collimated ends (alignment of 2026-10-27: ~240 µm, ~0.3°).
 - [ ] Gripper (SmarAct MCS2 at 192.168.0.20): check its jaw channel and `velocity_mm_s` in `config.yaml`, then teach `gripper_open_mm` / `gripper_closed_mm` (Variables tab). The closed position is where the jaws hold the fiber, not beyond it.
 
 ## Testing step by step
@@ -84,36 +85,45 @@ Open `/view/` during Run Alignment to watch it.
 
 Then, on the cell:
 
-1. With `TOOL_TRF` taught, run one alignment and read the `pivot` the Angle
-   card prints under its tilt profiles: about the gap (tens of µm) when the
-   TCP is at the fiber tip. Far more means the TCP is behind or beside the
-   tip: teach it again.
+1. Run one alignment and note what the fits measured: the 1/e² width on the
+   Center card's profiles, the tilt width from the Angle card's parabolas
+   (`angle_width_deg` is where the power falls to 1/e), and the `walk` under
+   the tilt profiles: how far the beam moves sideways per degree of tilt, in
+   effect the distance between the fiber ends (175 µm/° for 10 mm). Set
+   `lateral_width_um` / `angle_width_deg` close to the widths measured.
 2. On the Center card, `lag` (half the gap between the two directions of a
-   scan) should stay under 0.5 µm. Above that, the meter takes its readings
-   at other times than alignment.py assumes: the two-way scans still cancel
-   it, the one-way scans of the Angle phase do not.
-3. Start 5 alignments from a pose moved ~300 µm and ~1° off the aligned one
-   (Manual tab), and note their time and final power: the demo's cold start.
+   scan) shows how late the readings land along a scan. Every centring scan
+   runs both ways, which cancels it.
+3. Start 5 alignments from a pose with no light (tilted ~1°, Manual tab) and
+   5 from one with a few µW, and note their time and final power.
 
 ## Alignment
 
 `fiber_alignment/algorithm.py` aligns from wherever `align_start` left the
 fiber, even with no light reaching the meter, as long as the optimum is within
-`acquire_radius_um` laterally. It never moves the fiber along its axis: the gap
-stays the taught one. Four phases:
+`acquire_radius_deg` in tilt and `acquire_radius_um` laterally. It never moves
+the fiber along its axis: the gap stays the taught one.
+
+Every scale (scan spans, steps, spiral pitches) follows how wide the coupling
+is: `lateral_width_um` (the 1/e² radius against a lateral offset) and
+`angle_width_deg` (the 1/e half-width against a tilt) are starting guesses,
+and each fit re-measures them. The cell's collimated ends tolerate a few
+hundred µm laterally but a few tenths of a degree in tilt: first light is
+mostly a matter of angle. Four phases:
 
 | Phase | What it does |
 |---|---|
-| Acquire | Measures the noise floor. Unless light already reaches the meter (1 % of `source_power_mw`), spirals out in the lateral plane (`acquire_pitch_um` between turns) until a reading passes `signal_detect_uw` and the noise, then moves to the best reading. No light within the radius stops the alignment with "check the laser, the fibers and the align_start pose". |
-| Center | Scans across the light along X then Z, both ways, fits each scan with a Gaussian and moves to its centre, until the centre stops moving. |
-| Angle | For Rx then Rz: five tilts around the current one, re-centred laterally at each, and the tilt whose peak power a parabola picks. Again with half the span while it gains. |
-| Peak | Nine readings at rest on a 3×3 pattern around the centre, a quadratic fit of the log power and a step to its top, until the steps are below the robot's resolution. Ends on the best reading taken at rest. |
+| Acquire | Measures the noise floor. Any light at the start (above `signal_detect_uw` and the noise) goes straight to Center. Otherwise a spiral in tilt (Rx/Rz, out to `acquire_radius_deg`), then, still dark, a lateral spiral (out to `acquire_radius_um`), each stopping once past the light; then to the best reading. Still no light stops the alignment with "check the laser, the fibers and the align_start pose". |
+| Center | Scans across the light along X then Z, both ways, fits each scan with a Gaussian over the noise floor and moves to its centre, until the centre stops moving. A window that misses the centre moves towards it by half its span at most; failing that, the fiber goes to the best reading, never to an extrapolated centre. A window without light widens. |
+| Angle | For Rx then Rz: tilts stepping away from the current one (half an angle width at first) while the power rises, each re-centred along the lateral axis the tilt walks the beam on; a parabola through the best tilt and its neighbours picks the tilt. A tilt without light is a reading of no power, not an error. Again with half the step while it gains. |
+| Peak | Nine readings at rest on a 3×3 pattern around the centre, a quadratic fit of the log power and a step to its top, until the steps are small. Ends on the best reading taken at rest. |
 
 Each reading is paired with the robot's pose at the middle of the meter's
 reading (interpolated between the poses read before and after it), so fast
 scans place their readings where they were taken. Scan speeds come from the
-measured time per reading. In simulation, a cold start 450 µm and 2° off
-takes about 50 s, a warm start about 15 s.
+measured time per reading. In simulation, with optics like the cell's, the
+alignment of 2026-10-27 (~80 µW at the start) takes about 17 s, and a cold
+start needing the tilt or the lateral spiral about 19 s.
 
 ## Custom view (`/view/`)
 
@@ -131,13 +141,14 @@ screens.
   outlined in yellow. Positions are offsets from the alignment start in the
   tool frame, the axes the algorithm moves along (X/Z lateral in µm, Rx/Rz
   in °).
-  - Acquire: a 3D landscape of the power over X/Z along the spiral. Until
-    light is found it is scaled to the level counted as light, marked
-    "light" on the colour bar.
+  - Acquire: a 3D landscape of the power along the search spiral, over
+    Rx/Rz for the tilt spiral and X/Z for the lateral one (the readings at the
+    start when light was already there). Until light is found it is scaled
+    to the level counted as light, marked "light" on the colour bar.
   - Center: the latest X and Z scans, both directions (green forward, blue
     backward), the fitted Gaussian and the centre chosen, in yellow.
-  - Angle: the peak power against each tilt with its parabola, and the
-    lateral re-centring scans.
+  - Angle: the power against each tilt with its parabola and the beam's
+    walk per degree, and the lateral re-centring scans.
   - Peak: the readings at rest as a 3D landscape with the centre of each
     iteration on its floor, and the step each iteration took.
   - Colours span the dB range of the plot. A colour bar gives the values and
@@ -152,17 +163,19 @@ its phases and how to plot each (`PHASES`, `PHASE_VIEWS` in
 ## Testing without the cell
 
 `tests/fiber_alignment/sim.py` simulates the cell: a robot executing the
-moves, a power meter reading what a single-mode fiber pair couples at the
-robot's pose (late and smeared while it moves, as a real reading is), on a
-simulated clock. From the repository root:
+moves (answering pose queries the way the cell does), a power meter reading
+what the fiber ends couple at the robot's pose (collimated ends like the
+cell's, or bare single-mode fibers; late and smeared while the robot moves,
+as a real reading is), on a simulated clock. From the repository root:
 
 ```
 pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
 
-checks the alignment from cold and warm starts, with a TCP off the fiber tip,
-in the dark, and that what it publishes is what the custom view plots. To
+checks the alignment from the cell's run of 2026-10-27, from a few µW, from
+no light (tilt or lateral search), on single-mode fibers with a TCP off the
+tip, in the dark, and that what it publishes is what the custom view plots. To
 watch a simulated run in the real custom view:
 
 ```

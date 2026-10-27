@@ -9,8 +9,9 @@ algorithm.py to run unchanged, fast and deterministically:
   pause/resume, checkpoints and clear, like the real motion queue. It answers
   pose queries as the cell does: ``GetRtCartPos`` only (the synchronous
   ``GetRtTargetCartPos`` times out there), and never while motion is paused.
-* :class:`FakeMeter` reads the power a single-mode fiber pair would couple at
-  the robot's pose, averaged over the time a reading takes while the robot
+* :class:`FakeMeter` reads the power the fiber ends would couple at the
+  robot's pose (:class:`Optics`: collimated ends like the cell's, or bare
+  single-mode fibers), averaged over the time a reading takes while the robot
   moves: a reading taken during a scan is smeared and late, as on the cell.
 * :class:`FakeContext` publishes to a real :class:`core.DataHub` and records the
   timeline in simulated time, for the replay tool (tools/view_replay.py).
@@ -41,6 +42,13 @@ MODE_RADIUS_UM = 5.2
 WAVELENGTH_UM = 1.557
 #: Two glass/air faces, about 3.5 % reflected each.
 FRESNEL = 0.93
+#: The cell's collimated ends, as its alignment of 2026-10-27 showed them: the
+#: 1/e² radius of the power against a lateral offset (µm), its 1/e half-width
+#: against a tilt (°), and the distance between the ends (µm), over which a
+#: tilt walks the beam sideways.
+BEAM_WIDTH_UM = 240.0
+BEAM_ANGLE_DEG = 0.3
+BEAM_GAP_UM = 10000.0
 
 
 class SimClock:
@@ -238,13 +246,21 @@ class Optics:
 
     The optimum is the start pose moved by ``offset`` (x, z in µm, rx, rz in
     degrees, in the start's tool frame): what the alignment has to find. The
-    held fiber points along its tool +y, at ``gap_um`` from the fixed fiber's
-    facet at the optimum. ``pivot_um`` is how far the real fiber tip is from
-    the taught TCP, in the tool frame: rotations then also move the tip.
+    held fiber points along its tool +y, at ``gap_um`` from the fixed end at
+    the optimum; a tilt walks its beam sideways over that distance.
+    ``pivot_um`` is how far the real fiber tip is from the taught TCP, in the
+    tool frame: rotations then also move the tip.
+
+    ``model`` "beam": collimated ends, a Gaussian in the lateral offset where
+    the beam lands (``width_um``) times a Gaussian in the tilt (``angle_deg``).
+    "smf": bare single-mode fibers, both widths from the mode and the gap.
     """
 
     offset: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    gap_um: float = 20.0
+    model: str = "beam"
+    gap_um: float = BEAM_GAP_UM
+    width_um: float = BEAM_WIDTH_UM
+    angle_deg: float = BEAM_ANGLE_DEG
     source_w: float = 1e-3
     pivot_um: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     start: Tuple[float, ...] = START_POSE
@@ -275,10 +291,13 @@ class Optics:
         """Fraction of the source coupled with the robot at ``pose``."""
         x, y, z, rx, rz = self.tip_offset(pose)
         gap = max(self.gap_um - y, 0.0)
-        z_r = math.pi * MODE_RADIUS_UM ** 2 / WAVELENGTH_UM
-        # Where the held fiber's beam lands on the fixed facet: a tilt walks it sideways.
+        # Where the held fiber's beam lands on the fixed end: a tilt walks it sideways.
         x_land = x - gap * math.sin(math.radians(rz))
         z_land = z + gap * math.sin(math.radians(rx))
+        if self.model == "beam":
+            return (FRESNEL * math.exp(-2.0 * (x_land ** 2 + z_land ** 2) / self.width_um ** 2)
+                    * math.exp(-(rx ** 2 + rz ** 2) / self.angle_deg ** 2))
+        z_r = math.pi * MODE_RADIUS_UM ** 2 / WAVELENGTH_UM
         width_sq = MODE_RADIUS_UM ** 2 * (2.0 + (gap / z_r) ** 2)
         gap_loss = 1.0 / (1.0 + (gap / (2.0 * z_r)) ** 2)
         tilt_rad = math.radians(math.hypot(rx, rz))
@@ -418,10 +437,14 @@ DEFAULT_PARAMS = {
     "align_timeout_s": 300.0,
     "align_settle_s": 0.05,
     "source_power_mw": 1.0,
+    "lateral_width_um": 200.0,
+    "angle_width_deg": 0.3,
+    "acquire_radius_deg": 2.0,
     "acquire_radius_um": 500.0,
-    "acquire_pitch_um": 20.0,
     "signal_detect_uw": 1.0,
 }
+#: Bare single-mode fibers 20 µm apart: what changes for them.
+SMF = {"gap_um": 20.0, "params": {"lateral_width_um": 10.0, "angle_width_deg": 5.0}}
 
 
 @dataclass
@@ -429,7 +452,9 @@ class Scenario:
     """One simulated alignment: where the optimum is, and how the cell behaves."""
 
     offset: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
-    gap_um: float = 20.0
+    #: "beam" (the cell's collimated ends) or "smf" (bare single-mode fibers, see SMF).
+    optics: str = "beam"
+    gap_um: Optional[float] = None
     pivot_um: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     dark: bool = False
     latency_s: float = 0.0015
@@ -464,12 +489,14 @@ class Run:
 def simulate(scenario: Scenario, align=None, phases=None, phase_views=None) -> Run:
     """Run one alignment in ``scenario`` on a simulated clock. Never raises: see ``Run.error``."""
     clock = SimClock()
-    optics = Optics(offset=scenario.offset, gap_um=scenario.gap_um, pivot_um=scenario.pivot_um)
+    smf = scenario.optics == "smf"
+    gap = scenario.gap_um if scenario.gap_um is not None else (SMF["gap_um"] if smf else BEAM_GAP_UM)
+    optics = Optics(offset=scenario.offset, model=scenario.optics, gap_um=gap, pivot_um=scenario.pivot_um)
     robot = FakeRobot(clock, pose_query_s=scenario.pose_query_s)
     meter = FakeMeter(clock, robot, optics, dark=scenario.dark, latency_s=scenario.latency_s,
                       sample_s=scenario.sample_s, noise_w=0.5e-9 if scenario.noise else 0.0,
                       noise_rel=1e-3 if scenario.noise else 0.0, seed=scenario.seed)
-    context = FakeContext(clock, {**DEFAULT_PARAMS, **scenario.params})
+    context = FakeContext(clock, {**DEFAULT_PARAMS, **(SMF["params"] if smf else {}), **scenario.params})
 
     def check_gap(pose):
         if optics.gap(pose) <= 0.0:

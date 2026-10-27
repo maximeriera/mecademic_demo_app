@@ -136,9 +136,14 @@ class AlignmentSettings:
     settle_s: float
     #: Power of the source (W): what a perfect coupling would read.
     source_power_w: float
-    #: Cold-start spiral around the start: its radius and pitch (mm).
+    #: Starting guesses of how wide the coupling is, re-measured as the
+    #: alignment goes: the 1/e² radius of the power against a lateral offset
+    #: (mm), and its 1/e half-width against a tilt (degrees).
+    lateral_width_mm: float
+    angle_width_deg: float
+    #: How far the searches for first light go from the start: tilt (degrees), lateral (mm).
+    acquire_radius_deg: float
     acquire_radius_mm: float
-    acquire_pitch_mm: float
     #: Lowest power counted as light (W). The algorithm raises it above the noise it measures.
     signal_detect_w: float
 
@@ -155,8 +160,10 @@ class AlignmentSettings:
             timeout_s=float(context.get_param("align_timeout_s", 300.0)),
             settle_s=float(context.get_param("align_settle_s", 0.05)),
             source_power_w=mw("source_power_mw", 1.0),
+            lateral_width_mm=float(context.get_param("lateral_width_um", 200.0)) * 1e-3,
+            angle_width_deg=float(context.get_param("angle_width_deg", 0.3)),
+            acquire_radius_deg=float(context.get_param("acquire_radius_deg", 2.0)),
             acquire_radius_mm=float(context.get_param("acquire_radius_um", 500.0)) * 1e-3,
-            acquire_pitch_mm=float(context.get_param("acquire_pitch_um", 20.0)) * 1e-3,
             signal_detect_w=float(context.get_param("signal_detect_uw", 1.0)) * 1e-6,
         )
 

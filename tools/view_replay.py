@@ -1,6 +1,6 @@
 """Replay a simulated alignment into the real custom view, for a browser to watch.
 
-    python tools/view_replay.py [--offset X Z RX RZ] [--speed 4] [--port 8765] [--dark] [--step]
+    python tools/view_replay.py [--offset X Z RX RZ] [--optics beam|smf] [--speed 4] [--port 8765] [--dark] [--step]
 
 Runs one alignment on the simulated cell (tests/fiber_alignment/sim.py), then
 serves the page in app_logic/custom_view/ and its /static/ files with the hub
@@ -169,6 +169,8 @@ class Replay:
                 "duration_s": run.result.duration_s,
             },
             "best_still": summary.get("best_still") if summary else None,
+            # The search the Acquire card ends on (None: light at the start).
+            "acquire_search": ([a.get("search") for a in run.context.published("align_acquire")] or [None])[-1],
             "source_power_w": summary.get("source_power_w") if summary else None,
             "counts": per_phase,
         }
@@ -244,10 +246,13 @@ def make_handler(replay: Replay):
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--offset", type=float, nargs=4, default=(160.0, -120.0, 1.0, -0.8),
+    # Default: the cell's optics, no light at the start until the tilt spiral finds it.
+    parser.add_argument("--offset", type=float, nargs=4, default=(40.0, 30.0, 1.2, -0.4),
                         metavar=("X", "Z", "RX", "RZ"), help="optimum from the start: µm, µm, °, °")
     parser.add_argument("--pivot", type=float, nargs=3, default=(0.0, 0.0, 0.0), metavar=("X", "Y", "Z"),
                         help="fiber tip from the taught TCP, in the tool frame (µm)")
+    parser.add_argument("--optics", choices=("beam", "smf"), default="beam",
+                        help="beam: collimated ends like the cell's; smf: bare single-mode fibers")
     parser.add_argument("--dark", action="store_true", help="no light: the search fails")
     parser.add_argument("--speed", type=float, default=4.0, help="replay speed, × real time")
     parser.add_argument("--port", type=int, default=8765)
@@ -255,7 +260,8 @@ def main(argv=None) -> None:
     parser.add_argument("--step", action="store_true", help="pause halfway through each phase until resumed")
     args = parser.parse_args(argv)
 
-    scenario = Scenario(offset=tuple(args.offset), pivot_um=tuple(args.pivot), dark=args.dark, seed=args.seed)
+    scenario = Scenario(offset=tuple(args.offset), optics=args.optics, pivot_um=tuple(args.pivot), dark=args.dark,
+                        seed=args.seed)
     run = simulate(scenario)
     threshold_mw = run.context.params["power_threshold_mw"]
     replay = Replay(run, args.speed, threshold_mw, step=args.step)

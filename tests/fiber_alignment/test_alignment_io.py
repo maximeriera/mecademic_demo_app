@@ -60,15 +60,15 @@ def test_scan_readings_sit_on_the_path_despite_the_reading_time():
         return [p["fit"]["lag"] for p in run.context.published("align_profile")
                 if p["fit"] and p["fit"].get("lag") is not None]
 
-    assert max(abs(lag) for lag in two_way_lags(patch=False)) < 0.05
-    assert min(abs(lag) for lag in two_way_lags(patch=True)) > 0.2
+    # Interpolated, what remains is a twentieth of the lag at most.
+    assert max(abs(lag) for lag in two_way_lags(patch=False)) < 0.05 * min(abs(lag) for lag in two_way_lags(patch=True))
 
 
 def test_the_verdict_goes_back_to_the_best_reading_at_rest():
     def wander(io, settings):
         with io.phase("Wander"):
             io.read_still("cart")                   # at the optimum
-            io.move_to(io.pose_at(x=30.0))          # far off it
+            io.move_to(io.pose_at(x=150.0))         # far off it (the beam is ~240 µm wide)
     run = simulate(Scenario(), align=wander, phases=("Wander",), phase_views={})
     assert run.error is None
     assert run.result.power_w > 0.97 * run.optics.best_power_w()

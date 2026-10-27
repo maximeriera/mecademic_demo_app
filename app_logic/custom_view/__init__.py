@@ -24,10 +24,12 @@ algorithm.py; tests/fiber_alignment/test_contract.py checks it):
     "ang" (tilts) or None for the verdict. ``phase`` is the index in the
     run's phases (-1 outside any), ``t`` the time since the start (s),
     ``still`` true for a reading taken at rest.
-  - ``align_acquire``: the search for light, at its start and once light
-    shows: ``noise_w``, ``detect_w`` (the level counted as light),
-    ``radius_um``, ``pitch_um``, ``found``, ``warm`` (light at the start: no
-    spiral), and once found ``at`` [x, z] (µm) and ``power_w``.
+  - ``align_acquire``: the search for light: ``noise_w``, ``detect_w`` (the
+    level counted as light), ``warm`` (light at the start: no search),
+    ``found``, and ``search``: null after a warm start, else "angle" (a spiral
+    in rx/rz) or "lateral" (a spiral in x/z), published as each spiral starts
+    and once it finds light, with its ``radius``, ``pitch`` and ``unit`` (° or
+    µm), and once found ``at`` (the spiral's two axes) and ``power_w``.
   - ``align_profile``: one per 1-D scan. ``axis`` (x, z, rx or rz), ``unit``
     (µm or °), ``iteration``, ``rescan``, ``span`` [lo, hi], ``passes``
     [{``dir`` 1 or -1, ``points`` [[coord, power_w], ...]}], ``fit`` (null,
@@ -35,8 +37,8 @@ algorithm.py; tests/fiber_alignment/test_contract.py checks it):
     fitted power at the centre), ``baseline`` and ``lag`` (µm, what remains
     of the reading/pose lag), or ``model`` "parabola" with ``center``,
     ``width`` and ``peak``), ``chosen`` (where the fiber went, or null), and
-    for tilts ``pivot_um`` (how far the lateral centre moves per radian of
-    tilt: about the gap with the TCP at the fiber tip).
+    for tilts ``walk_um_per_deg`` (how far the beam walks along the lateral
+    axis per degree of tilt: in effect the distance between the fiber ends).
   - ``align_peak``: one per peak-search iteration: ``iter``, ``center`` [x, z],
     ``radius_um``, ``step`` [dx, dz], ``step_um``, ``newton``, ``power_w``
     (at the centre) and ``points`` [[x, z, power_w], ...].
