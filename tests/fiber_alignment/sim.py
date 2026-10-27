@@ -6,7 +6,9 @@ algorithm.py to run unchanged, fast and deterministically:
 * :class:`SimClock` stands in for ``alignment.time``: it moves only when the
   code sleeps, reads the meter or queries the robot.
 * :class:`FakeRobot` executes queued ``MoveLin`` moves at constant speed, with
-  pause/resume, checkpoints and clear, like the real motion queue.
+  pause/resume, checkpoints and clear, like the real motion queue. It answers
+  pose queries as the cell does: ``GetRtCartPos`` only (the synchronous
+  ``GetRtTargetCartPos`` times out there), and never while motion is paused.
 * :class:`FakeMeter` reads the power a single-mode fiber pair would couple at
   the robot's pose, averaged over the time a reading takes while the robot
   moves: a reading taken during a scan is smeared and late, as on the cell.
@@ -94,6 +96,8 @@ class FakeRobot:
         self.lin_vel = 10.0
         self.ang_vel = 45.0
         self.moves: List[Tuple[float, ...]] = []
+        # Every pose query: (command, motion paused at the time).
+        self.pose_queries: List[Tuple[str, bool]] = []
         self.on_pose = None  # called with every pose the robot passes through (collision check)
 
     # --- Motion queue -------------------------------------------------------------
@@ -153,6 +157,10 @@ class FakeRobot:
     # --- Real-time data -----------------------------------------------------------
 
     def GetRtCartPos(self) -> List[float]:
+        self.pose_queries.append(("GetRtCartPos", self._paused))
+        if self._paused:
+            # Not something the cell was ever asked: the alignment must not do it.
+            raise TimeoutError("Timeout waiting for interruptable event (pose queried while motion is paused)")
         # The robot answers halfway through the query.
         self.clock.advance(self.pose_query_s / 2)
         self._advance()
@@ -160,7 +168,10 @@ class FakeRobot:
         self.clock.advance(self.pose_query_s / 2)
         return pose
 
-    GetRtTargetCartPos = GetRtCartPos
+    def GetRtTargetCartPos(self) -> List[float]:
+        # As on the cell: the synchronous target query never gets its answer.
+        self.pose_queries.append(("GetRtTargetCartPos", self._paused))
+        raise TimeoutError("Timeout waiting for interruptable event")
 
     def GetStatusRobot(self) -> str:
         return "FakeRobot(activated, homed)"

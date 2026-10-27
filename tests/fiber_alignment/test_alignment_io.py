@@ -25,6 +25,17 @@ def _check_frame(io):
     assert list(io.pose_at(x=100.0)[:3]) == pytest.approx(expected, abs=1e-9)
 
 
+def test_poses_are_read_as_the_cell_answers_them():
+    # On the cell, GetRtTargetCartPos times out ("timeout waiting for
+    # interruptable event"): every pose is a GetRtCartPos, and none is asked
+    # while the robot's motion is paused.
+    run = simulate(Scenario(offset=(120, -80, 0.8, -0.5)))
+    assert run.error is None, run.error
+    assert run.robot.pose_queries
+    assert {name for name, _ in run.robot.pose_queries} == {"GetRtCartPos"}
+    assert not any(paused for _, paused in run.robot.pose_queries)
+
+
 def test_interpolate_takes_angles_the_short_way():
     before = _Stamped(0.0, (0.0, 0.0, 0.0, 179.0, 0.0, -10.0))
     after = _Stamped(1.0, (1.0, 2.0, 3.0, -179.0, 0.0, 10.0))

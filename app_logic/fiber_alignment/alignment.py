@@ -355,12 +355,14 @@ class AlignmentIO:
         t0 = time.monotonic()
         self._log.info(f"Alignment scan ({kind or '-'}): {len(targets)} pose(s) queued")
         try:
+            # Where the robot rests before the scan: the first reading's
+            # "before". Read before the pause: the robot is never queried
+            # while its motion is paused.
+            before = self._stamped_pose()
             robot.PauseMotion()
             for target in targets:
                 robot.MoveLin(*target)
             done = robot.SetCheckpoint(self._next_checkpoint())
-            # The robot is still here: the first reading's "before".
-            before = self._stamped_pose()
             robot.ResumeMotion()
             stopped = False
             moved_from, moved_at = None, time.monotonic()
@@ -530,8 +532,10 @@ class AlignmentIO:
 
     def _query_pose(self, command: str) -> Pose6:
         try:
-            # Synchronous by default in mecademicpy: a fresh reply from the robot.
-            value = getattr(self._robot, command)()
+            # value = getattr(self._robot, command)(synchronous_update=True)
+            # GetRtCartPos for every pose: the synchronous target query
+            # times out on the cell ("timeout waiting for interruptable event").
+            value = self._robot.GetRtCartPos()
         except Exception as e:
             raise AlignmentError(f"{command} failed ({type(e).__name__}: {e}). Robot: {self._robot_state()}") from e
         return self._pose_from(value)
