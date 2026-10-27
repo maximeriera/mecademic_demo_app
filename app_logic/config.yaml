@@ -263,6 +263,6 @@ devices:
   power_meter:
     type: "thorlabs_pm"
     # resource: "USB0::0x1313::0x8078::P0000000::INSTR"  # omit to auto-detect the only meter attached
-    wavelength: 1557                 # nm, from the colleague's alignment script — check against the source
+    wavelength: 1550                 # nm, from the colleague's alignment script — check against the source
     averaging: 10                    # ~30 ms per reading on a PM100x
     power_unit: "W"                  # required: the alignment and the custom view work in watts

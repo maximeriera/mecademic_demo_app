@@ -67,12 +67,12 @@ class FiberSlot:
 # --- Tool --------------------------------------------------------------------
 
 #: Tool reference frame (SetTrf), with the TCP at the tip of the held fiber.
-TOOL_TRF = Pose(0.0, 10.70, 9.0, 0.0, 0.0, 0.0)  # TODO teach
+TOOL_TRF = Pose(-5.35, -9.26647182049, 9, 0 , 0 , 150)
 
 # --- Joint positions -----------------------------------------------------------
 
-HOME_JOINTS: Tuple[float, ...] = (0.0, -20.0, 20.0, 0.0, 30.0, 0.0)  # TODO teach
-SHIPMENT_JOINTS: Tuple[float, ...] = (0.0, -60.0, 60.0, 0.0, 90.0, 0.0)  # TODO teach
+HOME_JOINTS: Tuple[float, ...] = (0.0, -30.0, 20.0, 0.0, 30.0, 0.0)  # TODO teach
+SHIPMENT_JOINTS: Tuple[float, ...] = (0, 0, 0, 0, 0, 0)
 
 # --- Robot programs -------------------------------------------------------------
 
@@ -87,6 +87,8 @@ FIBER_SLOTS: Tuple[FiberSlot, ...] = (
 
 ALIGN_START_PROGRAM = "align_start"
 ALIGN_RETRACT_PROGRAM = "align_retract"
+
+INIT_PROGRAM = "init"
 
 
 if [slot.number for slot in FIBER_SLOTS] != list(range(1, len(FIBER_SLOTS) + 1)):

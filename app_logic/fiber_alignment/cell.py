@@ -55,6 +55,7 @@ def prepare_robot(devices: Dict[str, Device], context: AppContext) -> Any:
     # No corner cutting: every move must reach its pose exactly, e.g. a
     # straight descent onto a slot.
     robot.SetBlending(0)
+    robot.StartProgram(poses.INIT_PROGRAM)
     return robot
 
 
