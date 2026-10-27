@@ -26,9 +26,10 @@ the custom view as PHASE_VIEWS declares:
    power rises, each re-centred along the lateral axis the tilt walks the
    beam on. A parabola through the log of the power at the best tilt and its
    two neighbours gives the tilt to keep.
-4. Peak: a 3×3 pattern of readings at rest around the centre, a quadratic fit
-   of the log power and a Newton step to its top, until the steps are small;
-   then to the best reading taken at rest.
+4. Peak: a square pattern of readings at rest around the centre (``peak_grid``
+   per side, 5 by default), a quadratic fit of the log power and a Newton step
+   to its top, until the steps are small; then to the best reading taken at
+   rest.
 
 Positions are offsets from the start in the start's tool frame (see
 ``io.local`` / ``io.pose_at``): x and z lateral (µm), y along the fiber (never
@@ -61,9 +62,12 @@ PHASES = ("Acquire", "Center", "Angle", "Peak")
 #: over two axes (for Acquire, the axes of the search that ran: "search_axes"),
 #: "profiles" the latest 1-D scan per axis (one plot per slot), "peak" the
 #: pattern readings and the steps of the peak search. Axes are io.local's:
-#: x, y, z (µm), rx, ry, rz (°).
+#: x, y, z (µm), rx, ry, rz (°). A map "until_end" goes on plotting the
+#: readings of the later phases, to the end of the run, with the best power
+#: seen at each spot: the landscape rises as the alignment climbs.
 PHASE_VIEWS = {
-    "Acquire": {"type": "map", "axes": ["x", "z"], "search_axes": {"angle": ["rx", "rz"], "lateral": ["x", "z"]}},
+    "Acquire": {"type": "map", "axes": ["x", "z"], "search_axes": {"angle": ["rx", "rz"], "lateral": ["x", "z"]},
+                "until_end": True},
     "Center": {"type": "profiles", "slots": ["x", "z"]},
     "Angle": {"type": "profiles", "slots": ["rx", "rz", "x", "z"]},
     "Peak": {"type": "peak", "axes": ["x", "z"]},
@@ -151,8 +155,9 @@ PEAK_MIN_STEP_UM = 0.5
 PEAK_MIN_STEP_WIDTHS = 0.01
 PEAK_MIN_GAIN_DB = 0.05
 PEAK_ITERATIONS = 6
-#: The 3×3 pattern in pattern radii, in an order that needs no long moves.
-PATTERN = ((-1, -1), (0, -1), (1, -1), (1, 0), (0, 0), (-1, 0), (-1, 1), (0, 1), (1, 1))
+#: Readings per side of the pattern (the peak_grid param): odd, so that the
+#: centre is one of them, and within these bounds.
+PEAK_GRID_BOUNDS = (3, 9)
 
 #: Index of each axis in io.local's offsets.
 LOCAL_INDEX = {"x": 0, "z": 2, "rx": 3, "rz": 5}
@@ -197,6 +202,10 @@ def align(io: AlignmentIO, settings: AlignmentSettings) -> None:
         raise AlignmentError(
             f"acquire_radius_deg ({settings.acquire_radius_deg:g}) needs {ANGLE_MARGIN_DEG:g}° of room inside "
             f"align_range_deg ({settings.range_deg:g}): lower it, or widen the window.")
+    lo, hi = PEAK_GRID_BOUNDS
+    if not (lo <= settings.peak_grid <= hi and settings.peak_grid % 2 == 1):
+        raise AlignmentError(f"peak_grid ({settings.peak_grid}) must be odd, from {lo} to {hi}: the centre of "
+                             f"the Peak pattern is one of its readings.")
     lateral = settings.lateral_width_mm * 1e3
     state = _State(settings, width={"x": lateral, "z": lateral}, angle_width=settings.angle_width_deg,
                    scan_range_w=SCAN_RANGE * settings.source_power_w)
@@ -578,20 +587,30 @@ def tilt_search(io: AlignmentIO, state: _State, axis: str, round_: int) -> None:
 
 # --- Peak -----------------------------------------------------------------------------------
 
+def pattern(n: int) -> List[Tuple[float, float]]:
+    """An n×n grid in pattern radii (-1 to 1), row by row, each row the other way round: no long moves."""
+    steps = [-1.0 + 2.0 * i / (n - 1) for i in range(n)]
+    return [(u, v) for j, v in enumerate(steps) for u in (steps if j % 2 == 0 else steps[::-1])]
+
+
 def peak(io: AlignmentIO, state: _State) -> None:
-    """Newton steps on a quadratic fit of log power over a 3×3 pattern at rest; ends on the best reading at rest."""
+    """Newton steps on a quadratic fit of log power over a square pattern at rest; ends on the best reading at rest.
+
+    The pattern has peak_grid readings per side and spans ± the radius.
+    """
     mean_width = 0.5 * (state.width["x"] + state.width["z"])
     radius = max(PEAK_RADIUS_MIN_UM, PEAK_RADIUS_WIDTHS * mean_width)
     min_step = max(PEAK_MIN_STEP_UM, PEAK_MIN_STEP_WIDTHS * mean_width)
+    grid = pattern(state.settings.peak_grid)
     _range(io, state, None)
     previous = None
     for iteration in range(PEAK_ITERATIONS):
         cx, cz = state.pos["x"], state.pos["z"]
         readings = []
-        for i, j in PATTERN:
-            _goto(io, state, x=cx + i * radius, z=cz + j * radius)
-            readings.append((i * radius, j * radius, _still(io, state, "cart")))
-        middle = readings[PATTERN.index((0, 0))][2]
+        for u, v in grid:
+            _goto(io, state, x=cx + u * radius, z=cz + v * radius)
+            readings.append((u * radius, v * radius, _still(io, state, "cart")))
+        middle = readings[grid.index((0.0, 0.0))][2]
         (du, dz), newton = fit.quad2d_step(readings, radius)
         step = math.hypot(du, dz)
         io.publish("peak", {

@@ -468,7 +468,7 @@
                 const now = performance.now();
                 if (o.key !== built.key || (shape !== built.shape && now - built.at > SURFACE_REBUILD_MS)) {
                     const surface = pts3.length >= 3
-                        ? Landscape.build(pts3, ranges.x, ranges.y, { n: o.n || 40, sigmaCells: o.sigmaCells || 1.6 })
+                        ? Landscape.build(pts3, ranges.x, ranges.y, { n: o.n || 40, sigmaCells: o.sigmaCells || 1.6, combine: o.combine || 'mean' })
                         : null;
                     plot.setSurface(surface);
                     // The colours span what the surface shows, else the readings
@@ -592,7 +592,9 @@
     // When the phase searches ("acquire" payloads with a "search"), the
     // landscape follows the latest search, over the axes the view declares
     // for it ("search_axes"), with that search's readings only. The light
-    // detection level is marked on the colour bar.
+    // detection level is marked on the colour bar. A map "until_end" goes on
+    // with the readings of the later phases, to the end of the run, and its
+    // surface shows the best power seen at each spot.
     const SEARCH_NAMES = { angle: 'tilt search', lateral: 'lateral search' };
 
     function renderMap(view, name) {
@@ -615,7 +617,10 @@
                 // The test reads which axes are shown.
                 canvas.dataset.axes = keys.join(',');
                 const since = search ? minOf(acquire.filter(a => a.search === search).map(a => a.t)) : -Infinity;
-                const samples = run.samples.filter(s => s[PHASE] === phase.index && s[T] >= since);
+                // "until_end": the later phases' readings (and the verdict's) too.
+                const shown = s => s[PHASE] === phase.index || (view.until_end && (s[PHASE] > phase.index || s[PHASE] < 0));
+                const samples = run.samples.filter(s => s[T] >= since && shown(s));
+                canvas.dataset.points = String(samples.length);
                 plot.update({
                     key: `${run.key}:${name}:${keys.join(',')}`,
                     points: project(samples, axes),
@@ -623,6 +628,8 @@
                     threshold: run.threshold_w,
                     marks: last && isNum(last.detect_w) ? [{ watts: last.detect_w, text: 'light' }] : [],
                     minTop: last && isNum(last.detect_w) ? last.detect_w : 0,
+                    // Readings at the same spot from different phases: the best power seen there.
+                    combine: view.until_end ? 'max' : 'mean',
                 });
                 const how = SEARCH_NAMES[search] || 'search';
                 let light = !last ? null : last.found ? `light found · ${how}` : how;
@@ -771,7 +778,8 @@
                     key: `${run.key}:${name}`,
                     points: project(run.samples.filter(s => s[PHASE] === phase.index && s[STILL]), axes),
                     names: axes.map(a => a.name), unit: axes[0].unit, minSpan: 4,
-                    threshold: run.threshold_w, n: 24, sigmaCells: 2.2, tail: 9,
+                    // The latest pattern stands out, whatever its size.
+                    threshold: run.threshold_w, n: 24, sigmaCells: 2.2, tail: last && last.points ? last.points.length : 9,
                     floorPath: trail,
                 });
                 const pts = steps.map((p, i) => [i + 1, p.step_um]).filter(p => isNum(p[1]));

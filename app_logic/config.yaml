@@ -132,10 +132,10 @@ context_file: "context.yaml"
 # ============================================================
 # FIBER ALIGNMENT CELL
 # ============================================================
-# A Mecademic robot takes one of N fibers (connected to a light source) from
-# its rack, brings it in front of a fixed fiber connected to the power meter,
-# aligns it until the power reaches a threshold, backs out and puts it back
-# where it was. README.md in this folder maps the files and lists what is left
+# A Mecademic robot takes one of N receiving fibers (read by the power meter)
+# from its rack, brings it in front of a fixed fiber that emits the laser (fixed
+# for safety: the robot only moves the receiving end), aligns it until the power
+# reaches a threshold, backs out and puts it back where it was. README.md in this folder maps the files and lists what is left
 # to fill in (poses, gripper positions, alignment algorithm).
 #
 # The device names below are also declared in fiber_alignment/cell.py: rename
@@ -259,7 +259,7 @@ devices:
     reference: "if_needed"
     velocity_mm_s: 1.0               # TODO: tune — slow enough not to snap the fiber
 
-  # --- Power meter, connected to the fixed fiber ---
+  # --- Power meter: reads the light the held (receiving) fiber collects ---
   power_meter:
     type: "thorlabs_pm"
     # resource: "USB0::0x1313::0x8078::P0000000::INSTR"  # omit to auto-detect the only meter attached

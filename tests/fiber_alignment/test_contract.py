@@ -20,6 +20,8 @@ from .sim import START_POSE, Scenario, simulate
 VIEW_JS = Path(__file__).resolve().parents[2] / "app_logic" / "custom_view" / "view.js"
 AXES = {"x", "y", "z", "rx", "ry", "rz"}
 KINDS = {"cart", "ang", None}
+#: What a phase view may declare (algorithm.PHASE_VIEWS).
+VIEW_KEYS = {"type", "axes", "slots", "search_axes", "until_end"}
 
 
 #: Cold starts: one found by the tilt spiral, one by the lateral spiral after
@@ -43,13 +45,19 @@ def is_num(v):
 
 
 def test_every_phase_declares_a_view_the_page_draws():
-    renderers = set(re.findall(r"^\s*(\w+): render\w+,\s*$", VIEW_JS.read_text(encoding="utf-8"), re.M))
+    source = VIEW_JS.read_text(encoding="utf-8")
+    renderers = set(re.findall(r"^\s*(\w+): render\w+,\s*$", source, re.M))
     assert set(algorithm.PHASE_VIEWS) == set(algorithm.PHASES)
     for name, view in algorithm.PHASE_VIEWS.items():
         assert view["type"] in renderers, f"{name}: no renderer for {view['type']!r} in view.js"
+        # Every option a view declares is one the page reads.
+        assert set(view) <= VIEW_KEYS, f"{name}: unknown view options {set(view) - VIEW_KEYS}"
+        assert all(f"view.{key}" in source for key in view), f"{name}: view.js ignores one of {sorted(view)}"
         assert set(view.get("axes", [])) <= AXES and set(view.get("slots", [])) <= AXES
         for axes in view.get("search_axes", {}).values():
             assert len(axes) == 2 and set(axes) <= AXES
+    # The Acquire map goes on through the later phases.
+    assert algorithm.PHASE_VIEWS["Acquire"].get("until_end") is True
 
 
 def test_align_start_announces_the_phases_and_the_row_format(run):

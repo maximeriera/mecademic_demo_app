@@ -11,11 +11,13 @@ and `fiber_alignment/alignment.py` (moves, readings, safety, verdict).
 
 ### What the robot does
 
-The robot holds a fiber that carries infrared laser light (1557 nm, about
-1 mW). Facing it, across a small gap, is a fixed fiber connected to a power
-meter. Both fiber ends have collimating optics: the light crosses the gap as a
-beam about half a millimetre wide. The robot moves the fiber it holds, sideways
-and in angle, until as much light as possible goes into the fixed fiber.
+The robot holds the receiving fiber, connected to a power meter. Facing it,
+across a small gap, a fixed fiber emits infrared laser light (1557 nm, about
+1 mW). The laser stays fixed for safety: its beam always points the same way,
+and the robot only ever moves the passive, receiving end. Both fiber ends have
+collimating optics: the light crosses the gap as a beam about half a
+millimetre wide. The robot moves the receiver, sideways and in angle, until it
+collects as much of that light as possible.
 
 The light is invisible and there is no camera. The robot only has one number
 to go by: the power the meter reads, up to about a hundred times a second.
@@ -25,16 +27,17 @@ reflected at the two glass/air faces. On screen, that is −0.31 dB vs source.
 
 ### Why it is hard
 
-- **Four settings at once.** The robot can shift the fiber sideways (X, Z) and
-  tilt it (Rx, Rz). It never moves the fiber along its axis: the gap stays as
+- **Four settings at once.** The robot can shift the receiver sideways (X, Z)
+  and tilt it (Rx, Rz). It never moves it along its axis: the gap stays as
   taught, so the two ends can never touch.
 - **Lopsided tolerances.** Sideways, the beam forgives a few hundred µm. In
   angle, 0.3° already loses two thirds of the light. More than about 0.7° off,
   nothing reaches the meter: it reads noise, and there is no slope to climb.
   So finding the light is mostly a matter of angle.
-- **Angle and position are linked.** Tilting the fiber also moves the spot
-  where its beam lands, by about 175 µm per degree for ends 10 mm apart. Each
-  tilt has to be re-centred before it can be judged.
+- **Angle and position are linked.** Tilting the receiver about its tip also
+  moves the sideways position where it collects best, by about 175 µm per
+  degree for ends 10 mm apart. Each tilt has to be re-centred before it can be
+  judged.
 - **A flat top.** Near the best pose, being 20 µm or 0.05° off costs only 1 to
   3 %. The last phase finds the top from the shape of the power around it,
   not by feel.
@@ -46,14 +49,14 @@ is outlined in yellow.
 
 | Phase | What the robot does | What the card shows |
 |---|---|---|
-| **Acquire**: find the light | It measures the meter's noise. If light already reaches the meter, it goes straight to Center (unless the full search is on: see below). Otherwise it spirals out in angle (up to 2°), then, still in the dark, sideways (up to 500 µm). It stops once it has passed the light, then goes back to the brightest point. | A 3D landscape of the power along the spiral, over Rx/Rz for the tilt spiral and over X/Z for the sideways one. The "light" mark on the colour bar is the level that counts as light. |
+| **Acquire**: find the light | It measures the meter's noise. If light already reaches the meter, it goes straight to Center (unless the full search is on: see below). Otherwise it spirals out in angle (up to 2°), then, still in the dark, sideways (up to 500 µm). It stops once it has passed the light, then goes back to the brightest point. | A 3D landscape of the power along the spiral, over Rx/Rz for the tilt spiral and over X/Z for the sideways one. The "light" mark on the colour bar is the level that counts as light. It keeps filling during the later phases: their readings join the map, which shows the best power seen at each spot, so the landscape rises to the final peak as the robot climbs. |
 | **Center**: centre on the beam | It sweeps across the beam along X, then along Z, both ways. It fits a bell curve to each sweep and moves to its top, until the top stops moving. | The latest X and Z sweeps (green forward, blue backward), the fitted bell curve, and the chosen centre in yellow. |
-| **Angle**: square the angle | For Rx, then Rz, it tries tilts stepping away from the current one while the power rises, re-centring at each tilt. A curve through the best tilts picks the angle. It repeats with finer steps while that still gains. | Top: the power against each tilt, with the fitted curve and the beam's "walk" in µm per degree. Bottom: the sideways re-centring sweeps. |
-| **Peak**: the last few µm | It takes nine readings at rest on a small grid (±0.2 beam width, about ±50 µm). It fits a dome to them and steps to its top, until the steps are tiny. It ends on the best reading taken at rest. | The grid readings as a 3D landscape, the centre of each iteration on its floor, and the step each iteration took. |
+| **Angle**: square the angle | For Rx, then Rz, it tries tilts stepping away from the current one while the power rises, re-centring at each tilt. A curve through the best tilts picks the angle. It repeats with finer steps while that still gains. | Top: the power against each tilt, with the fitted curve and the "walk": how far the best position moves per degree of tilt. Bottom: the sideways re-centring sweeps. |
+| **Peak**: the last few µm | It takes readings at rest on a small square grid, 5×5 by default (±0.2 beam width, about ±50 µm). It fits a dome to them and steps to its top, until the steps are tiny. It ends on the best reading taken at rest. | The grid readings as a 3D landscape, the centre of each iteration on its floor, and the step each iteration took. |
 
 When the start is tilted, Angle brings by far the largest gain (+6 to
 +18 dB in simulation); when it is only off sideways, Center does. The whole
-alignment takes about 17 to 25 s on the simulated cell. On the real cell, it
+alignment takes about 18 to 26 s on the simulated cell. On the real cell, it
 scales with how fast the meter and the robot answer.
 
 ### The top row
@@ -93,8 +96,8 @@ false for production.
 ### Frame and axes
 
 Every position is an offset from the alignment start, the pose `align_start`
-leaves the fiber in. Offsets are in the start's tool frame (`TOOL_TRF`, whose
-TCP must be the fiber tip):
+leaves the receiver in. Offsets are in the start's tool frame (`TOOL_TRF`,
+whose TCP must be the tip of the receiving fiber the robot holds):
 
 - X and Z: lateral, in µm.
 - Y: along the fiber, never moved.
@@ -169,15 +172,20 @@ offsets. The rows published on `align_sample` use them too.
   gives a new angle width.
 - **The walk.** The slope of the re-centred position against the tilt
   (µm/°) is published as "walk". It is in effect the distance from the
-  rotation centre to where the beam lands: ~175 µm/° for ends 10 mm apart.
+  rotation centre (the TCP, at the receiver's tip) to the emitter's end, per
+  radian: ~175 µm/° for ends 10 mm apart.
 - **Then.** Both lateral axes are re-centred.
 
 **Peak** (`peak`)
 
-- **The pattern.** A 3×3 grid of readings at rest (10 samples averaged
-  each), of radius 0.2 × the mean lateral width (`PEAK_RADIUS_WIDTHS`): about
-  ±48 µm on the cell's ends. Its edge points read ~8 % under its centre,
-  plenty for the fit.
+- **The pattern.** A square grid of `peak_grid` × `peak_grid` readings at
+  rest (5×5 by default, 10 samples averaged each), taken row by row, each row
+  the other way round so that no move is long.
+  - It spans ±0.2 × the mean lateral width (`PEAK_RADIUS_WIDTHS`): about
+    ±48 µm on the cell's ends, so a 5×5 grid has a reading every ~24 µm.
+  - Its edge points read ~8 % under its centre, plenty for the fit.
+  - A 5×5 iteration takes about 2.5 s, a 3×3 one about 1 s; one iteration is
+    usually enough.
 - **The step.** A quadratic fit of log power gives a Newton step to the top
   (a gradient step if the fit has no maximum), clipped to the radius.
 - **When it stops.** On a step under max(0.5 µm, 0.01 width), a gain under
@@ -205,6 +213,7 @@ offsets. The rows published on `align_sample` use them too.
 | `acquire_radius_um` | 500 | How far the lateral spiral goes. |
 | `signal_detect_uw` | 1.0 | Lowest power counted as light, raised to noise + 8σ. |
 | `acquire_full_search` | false | Run both spirals in full, even with light at the start (demo). |
+| `peak_grid` | 5 | Readings per side of the Peak pattern: odd, 3 to 9 (anything else is refused before the robot moves). More readings give a finer grid and a better fit, but a slower phase. |
 | `align_range_um` | 2000 | Window: how far X, Y, Z may go from the start. It must leave 100 µm beyond `acquire_radius_um`. |
 | `align_range_deg` | 8.0 | Window: how far the three angles may turn. It must leave 0.5° beyond `acquire_radius_deg`. |
 | `align_timeout_s` | 300 | After this, back to the best reading at rest, and judged there. |
@@ -278,8 +287,8 @@ to detect:
    card's profiles, and the tilt width from the Angle card's parabolas. Set
    `lateral_width_um` and `angle_width_deg` close to them.
 2. **Walk.** The "walk" under the tilt plots should match the distance
-   between the fiber ends. If it is much larger, the TCP is not at the fiber
-   tip: tilts swing the tip around. Teach `TOOL_TRF` again.
+   between the fiber ends. If it is much larger, the TCP is not at the
+   receiver's tip: tilts swing the tip around. Teach `TOOL_TRF` again.
 3. **Lag.** The Center card's `lag` shows how late readings land along a
    scan. Two-way scans cancel it, but a large value means slow readings.
 4. **Threshold.** Note the peak power of a good alignment, then set
@@ -302,7 +311,7 @@ python -m pytest tests -q
 The tests cover:
 - the cell's run of 2026-10-27, a few µW at the start, and no light (tilt
   or lateral search);
-- the full search;
+- the full search, and the Peak grid;
 - single-mode fibers, with a TCP off the tip;
 - the dark;
 - that what the alignment publishes is what the view plots.

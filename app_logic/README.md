@@ -1,10 +1,12 @@
 # Fiber alignment demo
 
-A Mecademic robot takes one of N fibers (connected to a light source) from its
-rack. It brings the fiber in front of a fixed fiber connected to a Thorlabs
-power meter and aligns it until the power reaches a threshold. Then it backs
-out and puts the fiber back where it was. Each PROD cycle handles one fiber and
-works through the rack in order.
+A Mecademic robot takes one of N receiving fibers from its rack (the light they
+collect goes to a Thorlabs power meter). It brings the fiber in front of a
+fixed fiber that emits the laser light, and aligns it until the power reaches
+a threshold. Then it backs out and puts the fiber back where it was. The laser
+stays fixed for safety: its beam always points the same way, and the robot
+only ever moves the receiving end. Each PROD cycle handles one fiber and works
+through the rack in order.
 
 | # | Step (as shown in the UI) | How |
 |---|---|---|
@@ -89,8 +91,8 @@ Then, on the cell:
 1. Run one alignment and note what the fits measured: the 1/e² width on the
    Center card's profiles, the tilt width from the Angle card's parabolas
    (`angle_width_deg` is where the power falls to 1/e), and the `walk` under
-   the tilt profiles: how far the beam moves sideways per degree of tilt, in
-   effect the distance between the fiber ends (175 µm/° for 10 mm). Set
+   the tilt profiles: how far the best position moves sideways per degree of
+   tilt, in effect the distance between the fiber ends (175 µm/° for 10 mm). Set
    `lateral_width_um` / `angle_width_deg` close to the widths measured.
 2. On the Center card, `lag` (half the gap between the two directions of a
    scan) shows how late the readings land along a scan. Every centring scan
@@ -121,15 +123,15 @@ mostly a matter of angle. Four phases:
 | Acquire | Measures the noise floor. Any light at the start (above `signal_detect_uw` and the noise) goes straight to Center. Otherwise a spiral in tilt (Rx/Rz, out to `acquire_radius_deg`), then, still dark, a lateral spiral (out to `acquire_radius_um`), each stopping once past the light; then to the best reading. Still no light stops the alignment with "check the laser, the fibers and the align_start pose". With `acquire_full_search` (for demos), both spirals run to their full radius, even with light at the start. |
 | Center | Scans across the light along X then Z, both ways, fits each scan with a Gaussian over the noise floor and moves to its centre, until the centre stops moving. A window that misses the centre moves towards it by half its span at most; failing that, the fiber goes to the best reading, never to an extrapolated centre. A window without light widens. |
 | Angle | For Rx then Rz: tilts stepping away from the current one (half an angle width at first) while the power rises, each re-centred along the lateral axis the tilt walks the beam on; a parabola through the best tilt and its neighbours picks the tilt. A tilt without light is a reading of no power, not an error. Again with half the step while it gains. |
-| Peak | Nine readings at rest on a 3×3 pattern of ±0.2 lateral width around the centre (~±50 µm on the cell's ends), a quadratic fit of the log power and a step to its top (at most the pattern's radius), until the steps are small. Ends on the best reading taken at rest. |
+| Peak | Readings at rest on a square pattern of ±0.2 lateral width around the centre (~±50 µm on the cell's ends), `peak_grid` per side (5 by default: 25 readings, ~2.5 s), a quadratic fit of the log power and a step to its top (at most the pattern's radius), until the steps are small. Ends on the best reading taken at rest. |
 
 Each reading is paired with the robot's pose at the middle of the meter's
 reading (interpolated between the poses read before and after it), so fast
 scans place their readings where they were taken. Scan speeds come from the
 measured time per reading. In simulation, with optics like the cell's, the
-alignment of 2026-10-27 (~80 µW at the start) takes about 17 s, and a cold
-start needing the tilt or the lateral spiral about 18–19 s. A full search
-adds about 2 s.
+alignment of 2026-10-27 (~80 µW at the start) takes about 18 s, and a cold
+start needing the tilt or the lateral spiral about 19–20 s. A full search
+adds about 2 s; a 3×3 Peak pattern (`peak_grid` 3) saves about 1.5 s.
 
 ## Custom view (`/view/`)
 
@@ -151,7 +153,9 @@ screens.
     Rx/Rz for the tilt spiral and X/Z for the lateral one (the readings at the
     start when light was already there). Until light is found it is scaled
     to the level counted as light, marked "light" on the colour bar. Its line
-    reads "full search · …" when `acquire_full_search` is on.
+    reads "full search · …" when `acquire_full_search` is on. It keeps filling
+    through the later phases, over the same axes, with the best power seen at
+    each spot: the landscape rises to the final peak.
   - Center: the latest X and Z scans, both directions (green forward, blue
     backward), the fitted Gaussian and the centre chosen, in yellow.
   - Angle: the power against each tilt with its parabola and the beam's

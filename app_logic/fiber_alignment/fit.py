@@ -117,9 +117,9 @@ def quad2d_step(points: Sequence[Tuple[float, float, float]], radius: float) -> 
     """The step from the origin towards the maximum of a quadratic fitted to ln P.
 
     ``points`` are ``(u, v, power)`` around the origin (at least 6 positive
-    readings, e.g. a 3×3 pattern). When the fit has a maximum, the step goes
-    there (Newton), clipped to ``radius``. Otherwise it goes ``radius`` up the
-    fitted slope. Returns ``((du, dv), newton)``.
+    readings, e.g. a 3×3 or 5×5 pattern). When the fit has a maximum, the
+    step goes there (Newton), clipped to ``radius``. Otherwise it goes
+    ``radius`` up the fitted slope. Returns ``((du, dv), newton)``.
     """
     pts = np.asarray([pt for pt in points if all(math.isfinite(c) for c in pt) and pt[2] > 0], dtype=float)
     if len(pts) < 6:

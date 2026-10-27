@@ -148,6 +148,12 @@ class Replay:
                 hub.publish("power", self.run.result.power_w if self.run.result else last_power)
             time.sleep(1.0 / POWER_RATE_HZ)
 
+    def _acquire_map_points(self) -> int:
+        acquire = self.run.context.published("align_acquire")
+        search = acquire[-1].get("search") if acquire else None
+        since = min(a["t"] for a in acquire if a.get("search") == search) if search else -math.inf
+        return sum(1 for row in self.run.rows if row[9] >= since)
+
     def status(self) -> dict:
         run = self.run
         summary = run.context.published("align_result")[-1] if run.context.published("align_result") else None
@@ -173,6 +179,8 @@ class Replay:
             # The search the Acquire card ends on (None: light at the start), and whether it ran in full.
             "acquire_search": ([a.get("search") for a in run.context.published("align_acquire")] or [None])[-1],
             "full_search": bool(run.context.params.get("acquire_full_search")),
+            # What the Acquire map plots by the end ("until_end"): every reading from its last search's start.
+            "acquire_map_points": self._acquire_map_points(),
             "source_power_w": summary.get("source_power_w") if summary else None,
             "counts": per_phase,
         }

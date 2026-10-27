@@ -246,10 +246,12 @@ class Optics:
 
     The optimum is the start pose moved by ``offset`` (x, z in µm, rx, rz in
     degrees, in the start's tool frame): what the alignment has to find. The
-    held fiber points along its tool +y, at ``gap_um`` from the fixed end at
-    the optimum; a tilt walks its beam sideways over that distance.
-    ``pivot_um`` is how far the real fiber tip is from the taught TCP, in the
-    tool frame: rotations then also move the tip.
+    held fiber is the receiver (the fixed end emits): it points along its tool
+    +y, at ``gap_um`` from the fixed end at the optimum. The coupling is the
+    same either way round (reciprocity), so it is computed as if the held fiber
+    sent its own beam to the fixed end: a tilt walks that beam sideways over
+    the gap. ``pivot_um`` is how far the real fiber tip is from the taught
+    TCP, in the tool frame: rotations then also move the tip.
 
     ``model`` "beam": collimated ends, a Gaussian in the lateral offset where
     the beam lands (``width_um``) times a Gaussian in the tilt (``angle_deg``).
@@ -291,7 +293,7 @@ class Optics:
         """Fraction of the source coupled with the robot at ``pose``."""
         x, y, z, rx, rz = self.tip_offset(pose)
         gap = max(self.gap_um - y, 0.0)
-        # Where the held fiber's beam lands on the fixed end: a tilt walks it sideways.
+        # Where the held fiber's own beam (by reciprocity) lands on the fixed end: a tilt walks it sideways.
         x_land = x - gap * math.sin(math.radians(rz))
         z_land = z + gap * math.sin(math.radians(rx))
         if self.model == "beam":
@@ -443,6 +445,7 @@ DEFAULT_PARAMS = {
     "acquire_radius_um": 500.0,
     "signal_detect_uw": 1.0,
     "acquire_full_search": False,
+    "peak_grid": 5,
 }
 #: Bare single-mode fibers 20 µm apart: what changes for them.
 SMF = {"gap_um": 20.0, "params": {"lateral_width_um": 10.0, "angle_width_deg": 5.0}}

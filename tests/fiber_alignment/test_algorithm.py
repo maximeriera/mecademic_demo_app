@@ -162,6 +162,29 @@ def test_the_peak_pattern_spans_a_fifth_of_the_width():
     assert radii and all(r == pytest.approx(0.2 * mean, rel=1e-3) for r in radii)  # ±48 µm on the cell's ends
 
 
+@pytest.mark.parametrize("grid", [3, 5])
+def test_the_peak_pattern_is_a_square_of_peak_grid_readings_taken_without_long_moves(grid):
+    run = simulate(Scenario(offset=CASES["cell-run"].offset, params={"peak_grid": grid}))
+    assert run.error is None, run.error
+    half = grid // 2
+    for p in run.context.published("align_peak"):
+        (cx, cz), spacing = p["center"], 2 * p["radius_um"] / (grid - 1)
+        expected = sorted((cx + i * spacing, cz + j * spacing) for i in range(-half, half + 1) for j in range(-half, half + 1))
+        got = sorted((x, z) for x, z, _ in p["points"])
+        assert len(got) == grid * grid
+        assert [c for pt in got for c in pt] == pytest.approx([c for pt in expected for c in pt], abs=2e-3)
+        # In reading order, each point is next to the one before.
+        steps = [math.dist(a[:2], b[:2]) for a, b in zip(p["points"], p["points"][1:])]
+        assert max(steps) <= spacing + 2e-3
+
+
+@pytest.mark.parametrize("grid", [1, 4, 11])
+def test_a_peak_grid_without_a_centre_or_out_of_bounds_is_refused_before_moving(grid):
+    run = simulate(Scenario(params={"peak_grid": grid}))
+    assert isinstance(run.error, AlignmentError) and "peak_grid" in str(run.error)
+    assert run.robot.moves == []
+
+
 def test_the_walk_shows_the_tcp_off_the_tip():
     run = simulate(CASES["smf-tcp-behind-tip"])
     walks = [p["walk_um_per_deg"] for p in run.context.published("align_profile") if p["axis"] in ("rx", "rz")]

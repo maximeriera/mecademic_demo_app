@@ -6,7 +6,8 @@
 //
 // 1. One card per declared phase, in order, of the declared type, before the
 //    first alignment already.
-// 2. While a phase runs, its card is the active one and draws its readings.
+// 2. While a phase runs, its card is the active one and draws its readings,
+//    and a map declared "until_end" (Acquire) keeps taking new readings.
 // 3. The verdict shows the alignment's final power, pass or fail, and the
 //    coupling against the source; every phase is listed as done.
 // 4. Each card's line shows what the phase did (light found, a full search,
@@ -79,6 +80,7 @@ async function snapshot(page) {
                 active: card.classList.contains('active'),
                 sub: card.querySelector('.panel-sub').textContent,
                 axes: card.querySelector('canvas').dataset.axes || null,
+                points: card.querySelector('canvas').dataset.points || null,
                 ink: [...card.querySelectorAll('canvas')].map(inked),
             })),
             verdict: document.getElementById('verdict').textContent,
@@ -113,6 +115,7 @@ async function main() {
 
     // 2. Halfway through each phase (the replay waits there with --step).
     const stepped = [];
+    const mapCounts = {};  // readings on each "until_end" map, at the latest pause
     for (const [i, name] of declared.phases.entries()) {
         const status = await until(async () => {
             const s = await api('/api/replay');
@@ -125,6 +128,13 @@ async function main() {
         const card = shown.cards[i];
         check(card.active && shown.cards.filter(c => c.active).length === 1, `${name}: its card is the active one`);
         check(Math.max(...card.ink) > INKED, `${name}: its card draws readings (ink ${card.ink.map(v => v.toFixed(3)).join('/')})`);
+        // A map "until_end" keeps taking the readings of the later phases.
+        shown.cards.forEach((c, k) => {
+            if (!(declared.phase_views[c.phase] || {}).until_end || k > i) return;
+            const count = Number(c.points);
+            if (k < i) check(count > mapCounts[c.phase], `${c.phase}: its map keeps updating during ${name} (${mapCounts[c.phase]} → ${count} readings)`);
+            mapCounts[c.phase] = count;
+        });
         await page.screenshot({ path: path.join(OUT, `${i + 1}-${name.toLowerCase()}.png`) });
         await api('/api/replay/resume');
     }
@@ -160,6 +170,10 @@ async function main() {
                 const view = declared.phase_views[card.phase] || {};
                 const axes = ((final.acquire_search && view.search_axes && view.search_axes[final.acquire_search]) || view.axes || ['x', 'z']).join(',');
                 check(card.axes === axes, `${card.phase}: the map is over ${card.axes} (the ${final.acquire_search || 'start'} search: ${axes})`);
+                if (view.until_end) {
+                    check(Number(card.points) === final.acquire_map_points,
+                        `${card.phase}: the map plots every reading to the end of the run (${card.points} of ${final.acquire_map_points})`);
+                }
             } else if (card.view === 'profiles') {
                 const scans = plural(counts.profile || 0, 'scan');
                 check(card.sub.startsWith(scans), `${card.phase}: "${card.sub}" counts its ${scans}`);

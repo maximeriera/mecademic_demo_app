@@ -7,14 +7,17 @@
 // (kernel width in grid cells), so the surface follows the measurements and
 // stays empty where the scan never went. Readings are first binned on a grid
 // BIN times finer than the surface, so a long run costs little more than a
-// short one.
+// short one. A bin holds the mean of its readings, or with {combine: 'max'}
+// the best of them: readings taken at the same spot at different times (or
+// tilts) then show the best power seen there.
 (function (global) {
     'use strict';
 
     const BIN = 2;
 
     function build(points, xRange, yRange, options) {
-        const opts = Object.assign({ n: 40, sigmaCells: 1.6, minWeight: 0.15 }, options);
+        const opts = Object.assign({ n: 40, sigmaCells: 1.6, minWeight: 0.15, combine: 'mean' }, options);
+        const best = opts.combine === 'max';
         const n = opts.n;
         const [x0, x1] = xRange;
         const [y0, y1] = yRange;
@@ -36,8 +39,14 @@
             const bi = Math.round((x - x0) * fx * BIN);
             const bj = Math.round((y - y0) * fy * BIN);
             if (bi < 0 || bi >= m || bj < 0 || bj >= m) continue;
-            binSum[bj * m + bi] += v;
-            binCount[bj * m + bi] += 1;
+            const k = bj * m + bi;
+            if (best) {
+                if (!binCount[k] || v > binSum[k]) binSum[k] = v;
+                binCount[k] = 1;
+            } else {
+                binSum[k] += v;
+                binCount[k] += 1;
+            }
         }
 
         // Bins → nodes, through the Gaussian kernel.
