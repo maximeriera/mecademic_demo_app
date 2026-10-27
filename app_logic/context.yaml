@@ -91,13 +91,13 @@ params:
   # few µm apart: ~10 µm and ~5°.
   lateral_width_um:
     type: float
-    default: 200.0
+    default: 100.0
     editable_when_idle: true
     description: Lateral offset (µm) at which the power falls to 1/e² of its peak (the 1/e² radius). A starting guess, re-measured by every alignment.
 
   angle_width_deg:
     type: float
-    default: 0.3
+    default: 0.2
     editable_when_idle: true
     description: Tilt (°) at which the power falls to 1/e of its peak. A starting guess, re-measured by every alignment.
 
