@@ -5,7 +5,8 @@
 //   node tools/view_check.mjs [--url http://127.0.0.1:8765] [--out test-results/view]
 //
 // 1. One card per declared phase, in order, of the declared type, before the
-//    first alignment already.
+//    first alignment already; the 3D landscape cards wider than a column of
+//    charts, and every phase row inside the alignment card.
 // 2. While a phase runs, its card is the active one and draws its readings,
 //    and a map declared "until_end" (Acquire) keeps taking new readings.
 // 3. The verdict shows the alignment's final power, pass or fail, and the
@@ -73,10 +74,16 @@ async function snapshot(page) {
             for (let i = 3; i < data.length; i += 16) if (data[i] > 0) n++;
             return n / (data.length / 16);
         };
+        // The alignment card clips what overflows it: its last phase row must end inside it.
+        const runCard = document.querySelector('.run-card');
+        const rows = runCard.querySelectorAll('#phase-list li');
+        const inside = runCard.getBoundingClientRect().bottom - parseFloat(getComputedStyle(runCard).borderBottomWidth);
         return {
+            phasesFit: !rows.length || rows[rows.length - 1].getBoundingClientRect().bottom <= inside + 0.5,
             cards: [...document.querySelectorAll('#plots .plot-card')].map(card => ({
                 phase: card.dataset.phase,
                 view: card.dataset.view,
+                width: card.getBoundingClientRect().width,
                 active: card.classList.contains('active'),
                 sub: card.querySelector('.panel-sub').textContent,
                 axes: card.querySelector('canvas').dataset.axes || null,
@@ -112,6 +119,11 @@ async function main() {
         `one card per phase, in order: ${shown.cards.map(c => c.phase).join(', ')}`);
     check(shown.cards.every(c => c.view === (declared.phase_views[c.phase] || { type: 'map' }).type),
         `each card of its declared type: ${shown.cards.map(c => `${c.phase}=${c.view}`).join(', ')}`);
+    // The 3D landscapes get more room than a column of charts.
+    const column = Math.min(...shown.cards.filter(c => c.view === 'profiles').map(c => c.width));
+    shown.cards.filter(c => c.view === 'map' || c.view === 'peak').forEach(c => {
+        check(c.width >= 1.3 * column, `${c.phase}: its landscape card is wider than a column of charts (${Math.round(c.width)} px vs ${Math.round(column)} px)`);
+    });
 
     // 2. Halfway through each phase (the replay waits there with --step).
     const stepped = [];
@@ -128,6 +140,7 @@ async function main() {
         const card = shown.cards[i];
         check(card.active && shown.cards.filter(c => c.active).length === 1, `${name}: its card is the active one`);
         check(Math.max(...card.ink) > INKED, `${name}: its card draws readings (ink ${card.ink.map(v => v.toFixed(3)).join('/')})`);
+        check(shown.phasesFit, `${name}: every phase row fits in the alignment card`);
         // A map "until_end" keeps taking the readings of the later phases.
         shown.cards.forEach((c, k) => {
             if (!(declared.phase_views[c.phase] || {}).until_end || k > i) return;
@@ -157,6 +170,7 @@ async function main() {
         check(/dB vs source/.test(shown.verdictSub), `coupling against the source shown: "${shown.verdictSub}"`);
         check(shown.phases.length === declared.phases.length && shown.phases.every(p => p.state === 'done'),
             `every phase listed as done: ${shown.phases.map(p => p.text).join(' | ')}`);
+        check(shown.phasesFit, 'every phase row fits in the alignment card');
         check(shown.cards.every(c => !c.active), 'no card active after the run');
         check(shown.cards.every(c => Math.max(...c.ink) > INKED), `every card keeps its plot (ink ${shown.cards.map(c => Math.max(...c.ink).toFixed(3)).join('/')})`);
 

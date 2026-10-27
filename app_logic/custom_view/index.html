@@ -77,7 +77,7 @@
 
         /* --- Row 1: live power, power over time, the alignment and its verdict --- */
         .head-row {
-            height: clamp(250px, 25vh, 300px);
+            height: clamp(196px, 19vh, 230px);
             display: grid;
             grid-template-columns: minmax(300px, 0.9fr) minmax(0, 3fr) minmax(380px, 1.25fr);
             gap: 10px;
@@ -122,7 +122,7 @@
         .run-card { display: flex; flex-direction: column; min-height: 0; }
         .trace-card canvas { flex: 1; min-height: 0; }
 
-        .run-card { gap: 6px; overflow: hidden; }
+        .run-card { gap: 4px; overflow: hidden; }
         .run-card .card-title { margin-bottom: 0; }
         .verdict,
         .verdict-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -142,7 +142,7 @@
             padding: 0;
             display: flex;
             flex-direction: column;
-            gap: 3px;
+            gap: 2px;
             font-size: 0.9em;
             font-variant-numeric: tabular-nums;
             color: var(--color-muted);
@@ -161,12 +161,13 @@
         .phases .failed { color: var(--color-red); }
 
         /* --- Row 2: one card per phase, side by side ---------------------------- */
-        /* view.js sets --cols: one column per card, two for a wide one. */
+        /* view.js sets --plot-columns: one track per card, as wide as its plots
+           ask (a 3D landscape half again as wide as a column of charts). */
         .plots-row {
             flex: 1;
             min-height: 0;
             display: grid;
-            grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+            grid-template-columns: var(--plot-columns, repeat(4, minmax(0, 1fr)));
             gap: 10px;
         }
         .plot-card {
@@ -175,7 +176,6 @@
             min-height: 0;
             transition: border-color 0.3s ease, box-shadow 0.3s ease;
         }
-        .plot-card.wide { grid-column: span 2; }
         /* The phase running now. */
         .plot-card.active {
             border-color: var(--color-yellow);

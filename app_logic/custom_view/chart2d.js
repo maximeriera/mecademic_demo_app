@@ -169,10 +169,12 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
                 if (l.label) {
+                    // Above the line, or under it when the line runs too close to the top.
+                    const above = y - pad.t >= fontPx + 2;
                     ctx.fillStyle = l.color || style.text;
                     ctx.textAlign = 'right';
-                    ctx.textBaseline = 'bottom';
-                    ctx.fillText(l.label, pad.l + pw - 4, y - 3);
+                    ctx.textBaseline = above ? 'bottom' : 'top';
+                    ctx.fillText(l.label, pad.l + pw - 4, above ? y - 3 : y + 3);
                 }
             });
             (data.vlines || []).forEach(l => {

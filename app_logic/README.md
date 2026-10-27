@@ -138,14 +138,16 @@ adds about 2 s; a 3×3 Peak pattern (`peak_grid` 3) saves about 1.5 s.
 Laid out for a 1920×1080 screen, read from a distance. It stacks on narrower
 screens.
 
-- **Top row**:
+- **Top row** (about a fifth of the screen's height):
   - the live meter reading, green at or above `power_threshold_mw`, red below;
   - the power over time in dB vs the threshold (best so far in green), with
     a band per phase;
   - the alignment: the verdict, the time spent against `align_timeout_s`,
     and one line per phase with its gain in dB and its duration.
 - **Plots, side by side**: one card per phase of the algorithm, in order,
-  which stays on screen after its phase. The running phase's card is
+  which stays on screen after its phase. The cards with a 3D landscape
+  (Acquire, Peak) are half again as wide as a column of charts
+  (`LANDSCAPE_WIDTH` in `custom_view/view.js`). The running phase's card is
   outlined in yellow. Positions are offsets from the alignment start in the
   tool frame, the axes the algorithm moves along (X/Z lateral in µm, Rx/Rz
   in °).

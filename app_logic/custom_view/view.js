@@ -46,6 +46,8 @@
     const PUBLISHED = ['acquire', 'profile', 'peak'];
     // How a phase the algorithm declares no view for is plotted.
     const DEFAULT_VIEW = { type: 'map', axes: ['x', 'z'] };
+    // Width of a card holding a 3D landscape (map, peak), against 1 for a column of charts.
+    const LANDSCAPE_WIDTH = 1.5;
 
     const $ = id => document.getElementById(id);
     const css = getComputedStyle(document.documentElement);
@@ -550,7 +552,8 @@
         if (points.length) bestLine.push([points[points.length - 1][0], best]);
         const dbs = points.map(p => p[1]);
         const lo = Math.max(-45, Math.min(-10, Math.floor((minOf(dbs, 0) - 2) / 5) * 5));
-        const hi = Math.max(5, Math.ceil((maxOf(dbs, 0) + 2) / 5) * 5);
+        // 10 dB over the threshold at least: room for the phase names and the threshold's label above its line.
+        const hi = Math.max(10, Math.ceil((maxOf(dbs, 0) + 2) / 5) * 5);
         const tMax = Math.max(10, run.elapsed, maxOf(points.map(p => p[0]), 0)) * 1.05;
         const bands = run.phaseLog.map((p, i) => ({
             x0: p.t0,
@@ -602,6 +605,7 @@
         const waiting = `Waiting for ${name}…`;
         const plot = landscape(canvas, cam, waiting);
         return {
+            width: LANDSCAPE_WIDTH,
             nodes: [canvas],
             drawn: [plot.plot],
             update(run, phase) {
@@ -714,7 +718,7 @@
     }
 
     // A "profiles" card: one chart per declared slot (axis), each with the
-    // phase's latest scans along it. Four slots take two columns.
+    // phase's latest scans along it. More than two slots take two columns.
     function renderProfiles(view) {
         const slots = (view.slots || []).filter(axis => AXES[axis]);
         const grid = document.createElement('div');
@@ -726,7 +730,7 @@
             return { axis, chart: Chart2D.create(canvas, { fontPx: FONT_PX - 1, message: `Waiting for ${AXES[axis].name} scans…` }) };
         });
         return {
-            span: slots.length > 2 ? 2 : 1,
+            width: slots.length > 2 ? 2 : 1,
             nodes: [grid],
             drawn: charts.map(c => c.chart),
             update(run, phase) {
@@ -759,6 +763,7 @@
             fontPx: FONT_PX - 1, xLabel: 'iteration', yLabel: `step (${axes[0].unit})`, message: 'No step yet',
         });
         return {
+            width: LANDSCAPE_WIDTH,
             nodes: [body],
             drawn: [plot.plot, chart],
             update(run, phase) {
@@ -812,8 +817,9 @@
             el.className = 'card plot-card';
             el.dataset.phase = name;
             el.dataset.view = view.type;
-            const span = body.span || 1;
-            if (span > 1) el.classList.add('wide');
+            // Its share of the row; two columns' worth stacks as a wide card on narrow screens.
+            const width = body.width || 1;
+            if (width >= 2) el.classList.add('wide');
             const head = document.createElement('div');
             head.className = 'panel-head';
             const title = document.createElement('span');
@@ -823,11 +829,11 @@
             sub.className = 'panel-sub';
             head.append(title, sub);
             el.append(head, ...body.nodes);
-            return { name, el, sub, span, drawn: body.drawn, update: body.update };
+            return { name, el, sub, width, drawn: body.drawn, update: body.update };
         });
         const row = $('plots');
         row.replaceChildren(...cards.map(c => c.el));
-        row.style.setProperty('--cols', String(Math.max(1, cards.reduce((n, c) => n + c.span, 0))));
+        row.style.setProperty('--plot-columns', cards.map(c => `minmax(0, ${c.width}fr)`).join(' ') || 'minmax(0, 1fr)');
         drawn.splice(1, drawn.length - 1, ...cards.flatMap(c => c.drawn));
     }
 
