@@ -156,8 +156,14 @@ manual_actions:
     confirm_title: "Confirm Move to Alignment"
     confirm_message: "Move the held fiber to the alignment start? Check that the area around the fixed fiber is clear."
 
+  - key: "random_offset"
+    label: "Random Offset"
+    description: "At the alignment station, move the fiber by a random offset in its tool frame (MoveLinRelTrf): X/Z up to random_offset_um, Rx/Rz up to random_offset_deg. Never along the fiber."
+    confirm_title: "Confirm Random Offset"
+    confirm_message: "Move the fiber by a random offset at the alignment station?"
+
   - key: "align_fiber"
-    label: "Run Alignment"
+    label: "Alignment"
     description: "Run the alignment algorithm from the current pose (spirals, axial search, gradient circles). The custom view graph updates live."
     confirm_title: "Confirm Alignment"
     confirm_message: "Run the alignment from the current pose?"
@@ -224,6 +230,8 @@ manual_actions:
 # The step names below are reported by fiber_alignment/process.py. "Retract
 # from alignment" is conditional in home and shipment: it only runs when the
 # robot was left at the alignment station, so they usually show step 2 of 2.
+# prod.py declares the prod_cycle sequence again at every cycle, for the mode
+# it runs (process.CYCLE_STEPS, or ALIGN_ONLY_STEPS with prod_align_only).
 sequences:
   prod_cycle:
     - Pick fiber

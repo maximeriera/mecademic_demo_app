@@ -19,6 +19,23 @@ through the rack in order.
 A fiber that does not reach the threshold is still put back and counted in
 `failed_count`, and the loop moves on to the next fiber.
 
+**Alignment-only production** (`prod_align_only` on, Variables tab): PROD
+only aligns the fiber already in the gripper, over and over, each time from
+a random start. Nothing is picked or placed, and `next_fiber` stays as it is.
+
+| # | Step | How |
+|---|---|---|
+| 1 | Move to alignment start | robot program `align_start` |
+| 2 | Random offset | `MoveLinRelTrf`: X/Z up to `random_offset_um` (300 µm), Rx/Rz up to `random_offset_deg` (1°), drawn evenly over a disc; never along or about the fiber (Y) |
+| 3 | Align fiber | the alignment, from the offset pose |
+| 4 | Retract from alignment | robot program `align_retract` |
+
+`aligned_count` / `failed_count` then give the success rate. A search that
+finds no light counts as failed and the fiber still retracts; it does not
+fault the cell. Turn `use_remembered_pose` off for these runs, or each
+alignment goes straight back to where the last one ended. The Manual tab
+has the same Random Offset step as a button.
+
 ## Robot programs
 
 Every absolute move is a program stored on the robot (Mecademic web portal),
@@ -41,14 +58,14 @@ They run at the speeds set in the Variables tab unless they set their own.
 |---|---|
 | `config.yaml` | Devices (`meca_robot`, `fiber_gripper`, `power_meter`), Manual tab buttons, step sequences |
 | `context.yaml` | Params (threshold, alignment settings, speeds, `manual_fiber`; all persisted) and variables (cell state, each fiber's remembered pose, results) |
-| `prod.py` | PROD cycle: `run_cycle(next_fiber)`, counters, next fiber |
+| `prod.py` | PROD cycle: `run_cycle(next_fiber)`, or `run_align_only_cycle()` with `prod_align_only`; counters, next fiber |
 | `home.py`, `shipment.py` | Back out of the alignment station if needed, then a joint position |
 | `calib.py` | Nothing to calibrate yet |
 | `manual_actions.py` | One Manual tab button per step, plus gripper open/close and a full cycle |
 | `fiber_alignment/poses.py` | **Data**: robot program names, tool frame, home/shipment joints |
 | `fiber_alignment/cell.py` | Device names, `ProcessError`, robot setup (frame, speeds), `run_program()` |
 | `fiber_alignment/gripper.py` | SmarAct gripper: open/close are moves of its MCS2 jaw channel |
-| `fiber_alignment/process.py` | The five steps, shared by PROD and the Manual tab |
+| `fiber_alignment/process.py` | The process steps (and Random offset), shared by PROD and the Manual tab |
 | `fiber_alignment/alignment.py` | Contract with the algorithm: 3D moves, scans, readings, window, timeout, verdict |
 | `ALIGNMENT.md` | A brief on the alignment: for presenters, then the technical details |
 | `fiber_alignment/algorithm.py` | The alignment algorithm (see below), and how the custom view plots each of its phases (`PHASE_VIEWS`) |
@@ -87,6 +104,8 @@ Pick Fiber → Move to Alignment Start → Run Alignment → Retract → Place F
   (`fiber_poses`, written after every alignment that ends in light). Reset
   it in the Variables tab after moving a fiber in its slot or changing the
   rack; a remembered pose taken with another `TOOL_TRF` is ignored anyway.
+  With `use_remembered_pose` off, every alignment searches from where it
+  starts; the poses are still kept.
 - HOME backs out of the alignment station first. It never opens the gripper.
   Recovering from an abort at a rack slot is not automated: jog the robot clear.
 
@@ -104,8 +123,10 @@ Then, on the cell:
    scan) shows how late the readings land along a scan. Every centring scan
    runs both ways, which cancels it.
 3. Start 5 alignments from a pose with no light (tilted ~1°, Manual tab) and
-   5 from one with a few µW, and note their time and final power. Reset
-   `fiber_poses` first, or the remembered pose skips the search.
+   5 from one with a few µW, and note their time and final power. Turn
+   `use_remembered_pose` off first, or the remembered pose skips the search.
+   For many such runs, start PROD with `prod_align_only` on: each cycle
+   starts from `align_start` moved by a random offset.
 4. Align each fiber once from the rack. The next time it is picked, the
    Acquire card should read "light at the remembered pose".
 
@@ -116,7 +137,7 @@ audience and how to read the screen, then each phase, param and failure
 message in detail.
 
 `fiber_alignment/algorithm.py` aligns from where this fiber aligned last
-(`fiber_poses`), else from wherever `align_start` left the fiber, even with
+(`fiber_poses`, unless `use_remembered_pose` is off), else from wherever `align_start` left the fiber, even with
 no light reaching the meter, as long as the optimum is within
 `acquire_radius_deg` in tilt and about `acquire_ring_um` laterally. It never
 moves the fiber along its axis: the gap stays the taught one.

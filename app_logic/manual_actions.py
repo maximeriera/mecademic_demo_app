@@ -5,6 +5,9 @@ so the process can be tested one step at a time, in order:
 
     Pick Fiber → Move to Alignment Start → Run Alignment → Retract → Place Fiber
 
+Random Offset, between Move to Alignment Start and Run Alignment, gives the
+alignment a random start, as the alignment-only production does.
+
 Pick Fiber and Full Cycle use the fiber set by the ``manual_fiber`` param
 (Variables tab). Place Fiber always returns the held fiber to its own slot. A
 step asked for in the wrong state (e.g. Place Fiber with nothing held) faults
@@ -38,6 +41,10 @@ def pick_fiber(devices: Dict[str, Device], context: AppContext):
 
 def move_to_alignment(devices: Dict[str, Device], context: AppContext):
     process.move_to_alignment_start(devices, context)
+
+
+def random_offset(devices: Dict[str, Device], context: AppContext):
+    process.random_offset(devices, context)
 
 
 def align_fiber(devices: Dict[str, Device], context: AppContext):
@@ -83,6 +90,7 @@ def get_manual_actions():
     return {
         "pick_fiber": pick_fiber,
         "move_to_alignment": move_to_alignment,
+        "random_offset": random_offset,
         "align_fiber": align_fiber,
         "retract_fiber": retract_fiber,
         "place_fiber": place_fiber,

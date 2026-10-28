@@ -1,7 +1,10 @@
-"""The five steps of the fiber alignment process.
+"""The steps of the fiber alignment process.
 
-Shared by the PROD cycle (prod.py) and the Manual tab (manual_actions.py), so a
-step tested by hand is exactly the step production runs. Each function:
+Pick, Move to alignment start, Align, Retract and Place make the PROD cycle;
+with ``prod_align_only``, PROD runs Move to alignment start, Random offset,
+Align and Retract instead (``run_align_only_cycle``). Shared by the PROD cycle
+(prod.py) and the Manual tab (manual_actions.py), so a step tested by hand is
+exactly the step production runs. Each function:
 
 * reports itself as one step, whose name matches ``sequences:`` in config.yaml;
 * checks the cell state first and raises ProcessError, before anything moves,
@@ -19,14 +22,21 @@ moves the robot from Python.
 from __future__ import annotations
 
 import math
-from typing import Dict
+import random
+from typing import Dict, Optional, Tuple
 
 from core import AppContext
 from devices import Device
 
 from . import algorithm, gripper, memory, poses
-from .alignment import AlignmentResult, AlignmentSettings, run_alignment
+from .alignment import AlignmentNoSignal, AlignmentResult, AlignmentSettings, run_alignment
 from .cell import ROBOT, ProcessError, power_meter, prepare_robot, run_program
+
+#: The steps of a PROD cycle, in order (the same as ``sequences: prod_cycle`` in
+#: config.yaml), and those of the alignment-only cycle. prod.py declares the
+#: one it runs, for "step 2 of 4" on the Production tab.
+CYCLE_STEPS = ["Pick fiber", "Move to alignment start", "Align fiber", "Retract from alignment", "Place fiber"]
+ALIGN_ONLY_STEPS = ["Move to alignment start", "Random offset", "Align fiber", "Retract from alignment"]
 
 
 def pick_fiber(devices: Dict[str, Device], context: AppContext, number: int) -> None:
@@ -70,8 +80,9 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
 
     The search stays within ``align_range_um`` / ``align_range_deg`` of where it
     starts. It only makes sense at the alignment station, with a fiber. It
-    starts the search where this fiber aligned last (see memory.py), and
-    remembers where it ends, whenever that is in the light.
+    starts the search where this fiber aligned last (see memory.py), unless
+    ``use_remembered_pose`` is off, and remembers where it ends, whenever that
+    is in the light.
     """
     with context.step("Align fiber"):
         logger = devices[ROBOT].logger
@@ -80,9 +91,14 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
         fiber = context.get_variable("held_fiber", 0)
         robot = prepare_robot(devices, context)
 
+        if context.get_param("use_remembered_pose", True):
+            seed = memory.remembered_pose(context, fiber, logger)
+        else:
+            seed = None
+            logger.info("use_remembered_pose is off: the search starts from the current pose.")
         result = run_alignment(robot, power_meter(devices), context, fiber=fiber, align=algorithm.align,
                                logger=logger, phases=algorithm.PHASES, phase_views=algorithm.PHASE_VIEWS,
-                               seed=memory.remembered_pose(context, fiber, logger))
+                               seed=seed)
 
         # In the light, even under the threshold: a better start for this fiber than align_start.
         if math.isfinite(result.power_w) and result.power_w >= AlignmentSettings.from_context(context).signal_detect_w:
@@ -95,6 +111,35 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
         log(f"Fiber {fiber}: alignment {'passed' if result.passed else 'FAILED'} at {power_mw:.4g} mW "
             f"({result.reads} readings, {result.duration_s:.1f} s{', timed out' if result.timed_out else ''}).")
         return result
+
+
+def random_offset(devices: Dict[str, Device], context: AppContext) -> Tuple[float, float, float, float]:
+    """Move the fiber by a random offset in its tool frame (``MoveLinRelTrf``), at the alignment station.
+
+    Laterally (X/Z) up to ``random_offset_um``, in tilt (Rx/Rz) up to
+    ``random_offset_deg``, each drawn evenly over a disc of that radius.
+    Never along or about the fiber axis (Y): the gap stays the one
+    ``align_start`` taught. Returns (x µm, z µm, rx °, rz °).
+    """
+    with context.step("Random offset"):
+        if not context.get_variable("at_alignment", False):
+            raise ProcessError("The robot is not at the alignment station: Move to Alignment Start first.")
+        x, z = _in_disc(max(0.0, float(context.get_param("random_offset_um", 300.0))))
+        rx, rz = _in_disc(max(0.0, float(context.get_param("random_offset_deg", 1.0))))
+        robot = prepare_robot(devices, context)
+
+        devices[ROBOT].logger.info(f"Random offset (tool frame): x {x:+.1f} µm, z {z:+.1f} µm, "
+                                   f"rx {rx:+.3f}°, rz {rz:+.3f}°")
+        robot.MoveLinRelTrf(x * 1e-3, 0.0, z * 1e-3, rx, 0.0, rz)
+        robot.WaitIdle()
+        return x, z, rx, rz
+
+
+def _in_disc(radius: float) -> Tuple[float, float]:
+    """A point drawn evenly over a disc of ``radius`` around 0."""
+    r = radius * math.sqrt(random.random())
+    angle = 2.0 * math.pi * random.random()
+    return r * math.cos(angle), r * math.sin(angle)
 
 
 def retract_from_alignment(devices: Dict[str, Device], context: AppContext) -> None:
@@ -137,4 +182,23 @@ def run_cycle(devices: Dict[str, Device], context: AppContext, number: int) -> A
     result = align_fiber(devices, context)
     retract_from_alignment(devices, context)
     place_fiber(devices, context)
+    return result
+
+
+def run_align_only_cycle(devices: Dict[str, Device], context: AppContext) -> Optional[AlignmentResult]:
+    """Move the held fiber to the alignment start, off by a random offset, align it, and retract.
+
+    For running the alignment over and over from random starts: nothing is
+    picked or placed. A search that finds no light is not a fault here: it is
+    logged, the fiber still retracts, and the result is None (prod.py counts
+    it as failed). Any other error stops the cycle as usual.
+    """
+    move_to_alignment_start(devices, context)
+    random_offset(devices, context)
+    try:
+        result: Optional[AlignmentResult] = align_fiber(devices, context)
+    except AlignmentNoSignal as e:
+        devices[ROBOT].logger.warning(f"Alignment-only cycle: no light found ({e}). Retracting for the next cycle.")
+        result = None
+    retract_from_alignment(devices, context)
     return result

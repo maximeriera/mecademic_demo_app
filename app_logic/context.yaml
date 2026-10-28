@@ -158,6 +158,15 @@ params:
     persist: true
     description: Run the whole search for first light, even with light at the start - the tilt spiral then the lateral spiral, each to its full radius - to show it. Off, the search stops as soon as it has the light.
 
+  use_remembered_pose:
+    type: bool
+    # Off: every alignment searches from where it starts, as for a fiber
+    # never aligned before. fiber_poses is still kept up to date.
+    default: true
+    editable_when_idle: true
+    persist: true
+    description: Start each alignment where this fiber aligned last (the fiber_poses variable), when there is one. Off, the search always starts from the current pose; the poses are still remembered.
+
   peak_grid:
     type: int
     # 5: 25 readings at rest per iteration, ~2.5 s; 3: 9 readings, ~1 s.
@@ -214,6 +223,29 @@ params:
     editable_when_idle: true
     persist: true
     description: Fiber slot (1..N) used by the Pick Fiber and Full Cycle manual actions.
+
+  # --- Alignment-only production (prod.py) ------------------------------------------
+  prod_align_only:
+    type: bool
+    # The fiber stays in the gripper: nothing is picked or placed.
+    default: false
+    editable_when_idle: true
+    persist: true
+    description: 'PROD runs only the alignment, over and over, on the held fiber: Move to alignment start, a random offset (random_offset_um, random_offset_deg), Align, Retract. Off: the full cycle (Pick, Move, Align, Retract, Place).'
+
+  random_offset_um:
+    type: float
+    default: 300.0
+    editable_when_idle: true
+    persist: true
+    description: Largest lateral offset (X/Z in the tool frame, µm) the alignment-only production moves the fiber by from align_start before each alignment. Drawn evenly over a disc of this radius.
+
+  random_offset_deg:
+    type: float
+    default: 1.0
+    editable_when_idle: true
+    persist: true
+    description: Largest tilt offset (Rx/Rz in the tool frame, °) the alignment-only production adds before each alignment. Drawn evenly over a disc of this radius. Never along or about the fiber axis (Y), so the gap stays the one align_start taught.
 
   # --- Demo pacing -----------------------------------------------------------------
   cycle_pause_s:

@@ -289,6 +289,9 @@ offsets. The rows published on `align_sample` use them too.
   taught again. One kept with another `TOOL_TRF` is not used.
 - To forget them (a fiber moved in its slot, a new rack), press Reset on
   `fiber_poses` in the Variables tab, or set it to `{}`.
+- To ignore them without forgetting them, turn `use_remembered_pose` off:
+  every alignment then searches from where it starts, and the poses are
+  still kept up to date.
 
 ### Params (`context.yaml`, Variables tab)
 
@@ -307,6 +310,7 @@ does not apply to it until you press Reset on it.
 | `acquire_ring_um` | 750 | How far around the start the ring of tilt spirals runs, when both spirals found nothing. 0: no ring. |
 | `signal_detect_uw` | 0.005 | Lowest power counted as light, raised to noise + 8σ. |
 | `acquire_full_search` | true | Run the first two spirals in full, even with light at the start (demo). |
+| `use_remembered_pose` | true | Start where this fiber aligned last (`fiber_poses`). Off: always search from where the alignment starts. |
 | `peak_grid` | 5 | Readings per side of the Peak pattern: odd, 3 to 9 (anything else is refused before the robot moves). More readings give a finer grid and a better fit, but a slower phase. |
 | `gradient_rounds` | 8 | Most rounds of gradient circles (one in X/Z, one in Rx/Rz: ~2.5 s together on the cell, ~1 s simulated) at the start of Peak. They stop sooner once no step stands out of the noise. 0: no circles, and then nothing after Angle corrects the tilt. |
 | `align_range_um` | 2000 | Window: how far X, Y, Z may go from the start. It must leave 100 µm beyond `acquire_radius_um` and `acquire_ring_um`. |
@@ -394,9 +398,13 @@ to detect:
    scan. Two-way scans cancel it, but a large value means slow readings.
 4. **Threshold.** Note the peak power of a good alignment, then set
    `power_threshold_mw` 0.5–1 dB under it.
-5. **Cold starts.** Reset `fiber_poses` first, or the remembered pose skips
-   the search. Run 5 alignments from no light (tilted ~1° from the Manual
-   tab) and 5 from a few µW. Note their time and final power.
+5. **Cold starts.** Turn `use_remembered_pose` off first, or the remembered
+   pose skips the search. Run 5 alignments from no light (tilted ~1° from
+   the Manual tab) and 5 from a few µW. Note their time and final power.
+   For many in a row, run PROD with `prod_align_only` on. Each cycle moves
+   to `align_start`, adds a random offset (`random_offset_um`,
+   `random_offset_deg`), aligns and retracts; `aligned_count` /
+   `failed_count` give the success rate.
 6. **Remembered poses.** Align each fiber once from the rack. The next time
    it is picked, the Acquire card should read "light at the remembered pose".
 7. **Gradient circles.** On the Peak card, the circles' steps should fall
