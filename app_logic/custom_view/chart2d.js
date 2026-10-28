@@ -10,7 +10,8 @@
 //       vlines:  [{x, color, dash}],
 //       markers: [{x, y, color}],                        // rings, e.g. the latest point
 //   });
-//   chart.render();   // or hand it to Plot3D.animate() with the 3D plots
+//   chart.render();   // draws only what changed since the last call (data, range, size);
+//                     // or hand it to Plot3D.animate() with the 3D plots
 (function (global) {
     'use strict';
 
@@ -43,9 +44,12 @@
         let data = { series: [], bands: [], hlines: [], vlines: [], markers: [] };
         let range = null;
         let anim = null;
+        // Something to draw since the last render (a range animation draws every frame).
+        let dirty = true;
 
         function setRange(value, ms) {
             if (!value) {
+                dirty = dirty || range !== null;
                 range = null;
                 anim = null;
                 return;
@@ -53,6 +57,7 @@
             const target = anim ? anim.to : range;
             const same = target && ['x', 'y'].every(k => target[k][0] === value[k][0] && target[k][1] === value[k][1]);
             if (same) return;
+            dirty = true;
             if (!range || !ms) {
                 range = value;
                 anim = null;
@@ -77,9 +82,13 @@
             const h = canvas.clientHeight;
             if (!w || !h) return;  // hidden panel
             if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+                // Resizing clears the canvas.
                 canvas.width = Math.round(w * dpr);
                 canvas.height = Math.round(h * dpr);
+                dirty = true;
             }
+            if (!dirty && !anim) return;  // nothing changed: the canvas still shows it
+            dirty = false;
             const ctx = canvas.getContext('2d');
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
@@ -219,9 +228,18 @@
 
         return {
             setRange,
-            setData(value) { data = Object.assign({ series: [], bands: [], hlines: [], vlines: [], markers: [] }, value); },
-            setLabels(value) { labels = Object.assign(labels, value); },
-            setMessage(text) { message = text; },
+            setData(value) {
+                data = Object.assign({ series: [], bands: [], hlines: [], vlines: [], markers: [] }, value);
+                dirty = true;
+            },
+            setLabels(value) {
+                labels = Object.assign(labels, value);
+                dirty = true;
+            },
+            setMessage(text) {
+                dirty = dirty || text !== message;
+                message = text;
+            },
             render,
         };
     }

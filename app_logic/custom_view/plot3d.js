@@ -15,6 +15,9 @@
 //                   marks: [{f: 0.6, text: 'threshold'}]});   // colour bar, top right; f in 0..1 left to right
 //   Plot3D.animate([plot, ...], camera);              // auto-rotates; drag to orbit
 //
+// Redraws at most 1000 / FRAME_MS times a second, and a plot (or a chart handed
+// to animate) only when it changed: new data or axes, the camera turned, a resize.
+//
 // Orthographic projection, painter's ordering: fine for a few thousand points.
 (function (global) {
     'use strict';
@@ -30,6 +33,9 @@
     const PATH_POINTS_MAX = 3000;
     // Thickness of the colour bar.
     const LEGEND_BAR_PX = 10;
+    // Shortest time between two redraws (ms): 30 a second keeps a slow turn smooth,
+    // at half the cost of drawing every display frame.
+    const FRAME_MS = 1000 / 30;
 
     function niceTicks(min, max, count) {
         const span = max - min;
@@ -107,17 +113,25 @@
         let floorPath = [];
         let legend = null;
         let message = 'Waiting for data…';
+        // Something to draw since the last render, and the camera that render used.
+        let dirty = true;
+        let drawnFrom = null;
+        // Each surface quad's colour, computed at its first draw: the surface and
+        // its colours do not change while the camera turns.
+        let surfaceColors = null;
 
         attachDrag(canvas, cam);
 
         function setAxes(value, ms) {
             if (!value) {
+                dirty = dirty || axes !== null;
                 axes = null;
                 anim = null;
                 return;
             }
             const target = anim ? anim.to : axes;
             if (target && ['x', 'y', 'z'].every(k => sameRange(target[k], value[k]))) return;
+            dirty = true;
             if (!axes || !ms) {
                 axes = value;
                 anim = null;
@@ -142,9 +156,15 @@
             const h = canvas.clientHeight;
             if (!w || !h) return;  // hidden panel
             if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+                // Resizing clears the canvas.
                 canvas.width = Math.round(w * dpr);
                 canvas.height = Math.round(h * dpr);
+                dirty = true;
             }
+            const turned = !drawnFrom || drawnFrom[0] !== cam.yaw || drawnFrom[1] !== cam.pitch;
+            if (!dirty && !anim && !(axes && turned)) return;  // the canvas still shows it
+            dirty = false;
+            drawnFrom = [cam.yaw, cam.pitch];
             const ctx = canvas.getContext('2d');
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
@@ -283,6 +303,7 @@
 
         function drawSurface(ctx, P) {
             const xs = surface.x, ys = surface.y, zs = surface.z;
+            if (!surfaceColors) surfaceColors = [];
             const quads = [];
             for (let j = 0; j + 1 < ys.length; j++) {
                 for (let i = 0; i + 1 < xs.length; i++) {
@@ -292,14 +313,16 @@
                         P(xs[i], ys[j], z[0]), P(xs[i + 1], ys[j], z[1]),
                         P(xs[i + 1], ys[j + 1], z[2]), P(xs[i], ys[j + 1], z[3]),
                     ];
-                    quads.push({ p, depth: (p[0][2] + p[1][2] + p[2][2] + p[3][2]) / 4, z: (z[0] + z[1] + z[2] + z[3]) / 4 });
+                    const k = j * xs.length + i;
+                    const fill = surfaceColors[k] || (surfaceColors[k] = color((z[0] + z[1] + z[2] + z[3]) / 4));
+                    quads.push({ p, depth: (p[0][2] + p[1][2] + p[2][2] + p[3][2]) / 4, fill });
                 }
             }
             quads.sort((a, b) => b.depth - a.depth);
             ctx.lineWidth = 0.6;
             ctx.strokeStyle = 'rgba(12, 26, 15, 0.45)';
             quads.forEach(q => {
-                ctx.fillStyle = color(q.z);
+                ctx.fillStyle = q.fill;
                 ctx.beginPath();
                 ctx.moveTo(q.p[0][0], q.p[0][1]);
                 for (let k = 1; k < 4; k++) ctx.lineTo(q.p[k][0], q.p[k][1]);
@@ -386,17 +409,18 @@
 
         return {
             setAxes,
-            setLabels(value) { labels = value; },
-            setColor(fn) { color = fn; },
+            setLabels(value) { labels = value; dirty = true; },
+            setColor(fn) { color = fn; surfaceColors = null; dirty = true; },
             setPoints(value, opts) {
                 points = value || [];
                 tail = opts && opts.tail ? opts.tail : Infinity;
+                dirty = true;
             },
-            setSurface(value) { surface = value || null; },
-            setMarkers(value) { markers = value || []; },
-            setFloorPath(value) { floorPath = value || []; },
-            setLegend(value) { legend = value || null; },
-            setMessage(text) { message = text; },
+            setSurface(value) { surface = value || null; surfaceColors = null; dirty = true; },
+            setMarkers(value) { markers = value || []; dirty = true; },
+            setFloorPath(value) { floorPath = value || []; dirty = true; },
+            setLegend(value) { legend = value || null; dirty = true; },
+            setMessage(text) { dirty = dirty || text !== message; message = text; },
             render,
         };
     }
@@ -423,11 +447,13 @@
         const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         let previous = performance.now();
         function frame(now) {
+            requestAnimationFrame(frame);
+            // A 2 ms margin: on a 60 Hz display, every other frame.
+            if (now - previous < FRAME_MS - 2) return;
             const dt = Math.min(0.1, (now - previous) / 1000);
             previous = now;
             if (!still && !cam.dragging && now > cam.idleUntil) cam.yaw += dt * cam.speed;
             plots.forEach(plot => plot.render());
-            requestAnimationFrame(frame);
         }
         requestAnimationFrame(frame);
     }

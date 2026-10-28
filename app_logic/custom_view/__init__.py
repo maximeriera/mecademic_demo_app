@@ -91,7 +91,7 @@ except ImportError as e:  # pragma: no cover - depends on how the workspace is l
 #: reading: 20 Hz is about as fast as it goes with room to spare. The driver's
 #: lock makes a step reading the meter wait at most one reading of it, and
 #: during an alignment this source does not read the meter at all.
-POWER_RATE_HZ = 100
+POWER_RATE_HZ = 20
 #: An alignment reading younger than this (s) stands in for the meter.
 ALIGN_FRESH_S = 0.5
 

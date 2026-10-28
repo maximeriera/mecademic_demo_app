@@ -13,6 +13,14 @@
 
     const THRESHOLD_PARAM = 'power_threshold_mw';
     const CONTEXT_POLL_MS = 1000;
+    // The hub is polled every POLL_MS: the live tile shows each new reading
+    // (custom_view.POWER_RATE_HZ). The run's cards and charts are rebuilt at
+    // most every RUN_RENDER_MS, and only when the hub brought something new for them.
+    const POLL_MS = 50;
+    const RUN_RENDER_MS = 100;
+    // What the page keeps of the hub's channels (s): a run lasts at most
+    // align_timeout_s, and a reloaded page redraws the latest one from align_result.
+    const HISTORY_S = 600;
     // A power reading older than this is stale: the hub stopped sampling.
     const STALE_S = 2;
     const EVENTS_SHOWN = 8;
@@ -937,8 +945,43 @@
 
     // --- Main loop ------------------------------------------------------------------------------------------
 
+    // The channels the run's cards are drawn from (the live tile reads `power`).
+    const RUN_CHANNELS = ['events', 'align_phases', 'align_sample', 'align_result', ...PUBLISHED.map(name => `align_${name}`)];
+    let runStamp = null;
+    let runRenderedAt = -Infinity;
+
+    // Whether an alignment is running: the latest align_start has no align_end after it.
+    function aligning(state) {
+        const events = state.channels.events;
+        for (let i = events.length - 1; i >= 0; i--) {
+            const name = events[i][1] && events[i][1].name;
+            if (name === 'align_end') return false;
+            if (name === 'align_start') return true;
+        }
+        return false;
+    }
+
+    // What the run's cards depend on: each channel's latest sample, the clock's
+    // origin (event times), and the clock itself while an alignment runs (its
+    // time and budget move even between readings).
+    function runStampOf(state) {
+        const ends = RUN_CHANNELS.map(name => {
+            const samples = state.channels[name] || [];
+            return samples.length ? samples[samples.length - 1][0] : null;
+        });
+        return JSON.stringify([ends, epochMs, aligning(state) ? state.now : null]);
+    }
+
     function render(state) {
         renderPower(state);
+        // The rest only when it changed, and not more often than RUN_RENDER_MS:
+        // a change skipped here is drawn at a later poll.
+        const now = performance.now();
+        if (now - runRenderedAt < RUN_RENDER_MS) return;
+        const stamp = runStampOf(state);
+        if (stamp === runStamp) return;
+        runStamp = stamp;
+        runRenderedAt = now;
         renderEvents(state);
         const run = buildRun(state);
         if (!run) {
@@ -959,9 +1002,9 @@
     setInterval(refreshContext, CONTEXT_POLL_MS);
 
     DataHubClient.poll({
-        channels: ['power', 'align_phases', 'align_sample', 'align_result', ...PUBLISHED.map(name => `align_${name}`)],
-        intervalMs: 100,
-        historyS: 1800,
+        channels: ['power', ...RUN_CHANNELS.filter(name => name !== 'events')],
+        intervalMs: POLL_MS,
+        historyS: HISTORY_S,
         onData: render,
         onError: () => { $('view-status').textContent = 'Connection lost — retrying…'; },
     });
