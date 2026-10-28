@@ -90,7 +90,7 @@ def spiral_reach(run):
     reach = {}
     for search in dict.fromkeys(a["search"] for a in acquire if a["search"]):
         payloads = [a for a in acquire if a["search"] == search]
-        u, v = (algorithm.LOCAL_INDEX[a] for a in algorithm.PHASE_VIEWS["Acquire"]["search_axes"][search])
+        u, v = (algorithm.LOCAL_INDEX[a] for a in algorithm.SEARCH_AXES[search])
         far = max(math.hypot(r[u], r[v]) for r in rows if payloads[0]["t"] <= r[9] <= payloads[-1]["t"])
         reach[search] = (far, payloads[0]["radius"], payloads[0]["pitch"] / algorithm.SPIRAL_READINGS_PER_PITCH)
     return reach

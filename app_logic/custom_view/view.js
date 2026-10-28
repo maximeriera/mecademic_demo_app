@@ -511,8 +511,10 @@
         return samples.filter(s => isNum(s[POWER])).map(s => [s[axes[0].index], s[axes[1].index], s[POWER]]);
     }
 
-    // All the landscapes turn together.
-    const cam = Plot3D.camera({ speed: 0.15 });
+    // All the landscapes turn together, when dragged. No auto-rotation: a
+    // landscape redraws only when its data changes, it is dragged or resized
+    // (a speed above 0, e.g. 0.15 rad/s, turns them all the time instead).
+    const cam = Plot3D.camera({ speed: 0 });
 
     // --- 2D charts ---------------------------------------------------------------------------------
 

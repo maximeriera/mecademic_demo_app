@@ -190,8 +190,9 @@ screens.
   tool frame, the axes the algorithm moves along (X/Z lateral in µm, Rx/Rz
   in °).
   - Acquire: a 3D landscape of the power along the latest search spiral,
-    over Rx/Rz for a tilt spiral and X/Z for a lateral one (the readings at
-    the start when light was already there). Until light is found it is
+    over X/Z whichever spiral ran (the readings at the start when light was
+    already there). A tilt spiral stays at one X/Z spot, so it shows as a
+    column of readings there until the later phases spread out. Until light is found it is
     scaled to the level counted as light, marked "light" on the colour bar.
     Its line says where the spiral is centred unless at the start
     ("remembered pose", "ring 3/6"), and reads "full search · …" when

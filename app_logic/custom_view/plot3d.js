@@ -13,7 +13,7 @@
 //   plot.setFloorPath([[x, y], ...]);                  // a trail drawn on the floor
 //   plot.setLegend({stops: [css, ...], low: 'text', high: 'text',
 //                   marks: [{f: 0.6, text: 'threshold'}]});   // colour bar, top right; f in 0..1 left to right
-//   Plot3D.animate([plot, ...], camera);              // auto-rotates; drag to orbit
+//   Plot3D.animate([plot, ...], camera);              // auto-rotates (camera speed > 0); drag to orbit
 //
 // Redraws at most 1000 / FRAME_MS times a second, and a plot (or a chart handed
 // to animate) only when it changed: new data or axes, the camera turned, a resize.

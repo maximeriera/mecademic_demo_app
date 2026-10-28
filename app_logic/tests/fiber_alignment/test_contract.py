@@ -100,8 +100,7 @@ def test_payloads_go_to_phases_whose_card_plots_them(run):
         assert {"noise_w", "detect_w", "found", "warm", "full", "search"} <= set(p)
         assert isinstance(p["full"], bool)
         if p["search"] is not None:
-            # The card plots each search over the axes declared for it.
-            assert p["search"] in view["search_axes"]
+            assert p["search"] in algorithm.SEARCH_AXES
             assert {"radius", "pitch", "unit"} <= set(p)
             assert p["unit"] == ("°" if p["search"] == "angle" else "µm")
 
@@ -122,7 +121,7 @@ def spirals(run):
         payloads = [a for a in acquire if a["search"] == search]
         t0 = payloads[0]["t"]
         t1 = min([a["t"] for a in acquire if a["t"] > t0 and a["search"] != search], default=math.inf)
-        axes = [algorithm.LOCAL_INDEX[a] for a in algorithm.PHASE_VIEWS["Acquire"]["search_axes"][search]]
+        axes = [algorithm.LOCAL_INDEX[a] for a in algorithm.SEARCH_AXES[search]]
         spacing = payloads[0]["pitch"] / algorithm.SPIRAL_READINGS_PER_PITCH
         readings = np.array([[r[axes[0]], r[axes[1]]] for r in rows if t0 <= r[9] < t1])
         yield search, axes, spacing, readings

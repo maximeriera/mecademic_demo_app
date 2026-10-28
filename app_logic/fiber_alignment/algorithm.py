@@ -67,15 +67,15 @@ from .frames import Pose6
 PHASES = ("Acquire", "Center", "Angle", "Peak")
 
 #: How the custom view plots each phase: "map" is a 3D landscape of the power
-#: over two axes (for Acquire, the axes of the search that ran: "search_axes"),
+#: over two axes (Acquire: X/Z, whichever search ran; a map may instead follow
+#: each search's own axes with "search_axes", e.g. {"angle": ["rx", "rz"]}),
 #: "profiles" the latest 1-D scan per axis (one plot per slot), "peak" the
 #: lateral circles' and the pattern's readings, and the steps of the peak search. Axes are io.local's:
 #: x, y, z (µm), rx, ry, rz (°). A map "until_end" goes on plotting the
 #: readings of the later phases, to the end of the run, with the best power
 #: seen at each spot: the landscape rises as the alignment climbs.
 PHASE_VIEWS = {
-    "Acquire": {"type": "map", "axes": ["x", "z"], "search_axes": {"angle": ["rx", "rz"], "lateral": ["x", "z"]},
-                "until_end": True},
+    "Acquire": {"type": "map", "axes": ["x", "z"], "until_end": True},
     "Center": {"type": "profiles", "slots": ["x", "z"]},
     "Angle": {"type": "profiles", "slots": ["rx", "rz", "x", "z"]},
     "Peak": {"type": "peak", "axes": ["x", "z"]},
@@ -125,6 +125,8 @@ WINDOW_MARGIN_MM = 0.1
 ANGLE_MARGIN_DEG = 0.5
 #: Points of the ring of tilt spirals (acquire_ring_um), evenly around the start.
 RING_POINTS = 6
+#: The two axes each spiral moves along.
+SEARCH_AXES = {"angle": ("rx", "rz"), "lateral": ("x", "z")}
 
 # --- Center --------------------------------------------------------------------------------
 #: A cross scan spans ± SCAN_HALF_WIDTHS widths, with SCAN_DENSITY readings per width.
@@ -405,10 +407,11 @@ def spiral(io: AlignmentIO, state: _State, search: str, info: Dict, full: bool =
     Ends on its best reading, at rest. False if it found no light.
     """
     s = state.settings
+    axes = SEARCH_AXES[search]
     if search == "angle":
-        axes, radius, width, unit, kind = ("rx", "rz"), s.acquire_radius_deg, state.angle_width, "°", "ang"
+        radius, width, unit, kind = s.acquire_radius_deg, state.angle_width, "°", "ang"
     else:
-        axes, radius, width, unit, kind = ("x", "z"), s.acquire_radius_mm * 1e3, state.width["x"], "µm", "cart"
+        radius, width, unit, kind = s.acquire_radius_mm * 1e3, state.width["x"], "µm", "cart"
     pitch = SPIRAL_PITCH_WIDTHS * width
     spacing = pitch / SPIRAL_READINGS_PER_PITCH
     payload = {**info, "search": search, "radius": radius, "pitch": round(pitch, 5), "unit": unit}
