@@ -30,6 +30,7 @@
     // A sample is [x, y, z, rx, ry, rz, power_w, kind, phase, t, still]: offsets
     // from the start in its tool frame, µm and degrees (AlignmentIO.row).
     const POWER = 6;
+    const KIND = 7;
     const PHASE = 8;
     const T = 9;
     const STILL = 10;
@@ -43,7 +44,7 @@
         rz: { index: 5, name: 'Rz', unit: '°' },
     };
     // What the algorithm publishes besides the samples (io.publish names).
-    const PUBLISHED = ['acquire', 'profile', 'peak'];
+    const PUBLISHED = ['acquire', 'profile', 'peak', 'gradient'];
     // How a phase the algorithm declares no view for is plotted.
     const DEFAULT_VIEW = { type: 'map', axes: ['x', 'z'] };
     // Width of a card holding a 3D landscape (map, peak), against 1 for a column of charts.
@@ -356,7 +357,12 @@
     function progress(run, phase) {
         const type = viewOf(run, phase.name).type;
         if (type === 'profiles') return `scan ${inPhase(run.published.profile, phase).length}`;
-        if (type === 'peak') return `iter ${inPhase(run.published.peak, phase).length}`;
+        if (type === 'peak') {
+            // Its gradient circles come first, then the pattern's iterations.
+            const iterations = inPhase(run.published.peak, phase).length;
+            const circles = inPhase(run.published.gradient, phase).length;
+            return iterations || !circles ? `iter ${iterations}` : `circle ${circles}`;
+        }
         const acquire = inPhase(run.published.acquire, phase);
         const last = acquire[acquire.length - 1];
         return last && last.found ? 'light found' : `${run.samples.filter(s => s[PHASE] === phase.index).length} readings`;
@@ -584,10 +590,11 @@
 
     // "312 readings · best 94.48 µW" for a card's title line. Once the phase
     // is over, its own count: the points of a reloaded run are decimated.
-    function phaseNumbers(run, phase, count) {
+    // `still`: the best of the readings at rest only.
+    function phaseNumbers(run, phase, count, still = false) {
         const samples = run.samples.filter(s => s[PHASE] === phase.index);
         const reads = phase.status !== 'running' && isNum(phase.reads) ? phase.reads : samples.length;
-        const best = maxOf(samples.map(s => s[POWER]));
+        const best = maxOf(samples.filter(s => !still || s[STILL]).map(s => s[POWER]));
         return `${count || `${reads} readings`}${isNum(best) ? ` · best ${withUnit(best)}` : ''}`;
     }
 
@@ -749,9 +756,17 @@
         };
     }
 
-    // A "peak" card: the phase's readings at rest as a 3D landscape, the
-    // centre of each iteration as a trail on its floor, and the step each
-    // iteration took.
+    // A "peak" card: the phase's readings at rest, with those of its lateral
+    // gradient circles ("gradient" payloads, kind "cart"), as a 3D landscape;
+    // the centre of each lateral circle then of each pattern iteration as a
+    // trail on its floor; and every step, in widths (lateral or tilt), in
+    // the order taken: the circles' first, then the pattern's.
+    const STEP_SERIES = [
+        { key: 'angle', text: 'tilt circles', color: BLUE },
+        { key: 'lateral', text: 'lateral circles', color: SOFT },
+        { key: 'pattern', text: 'pattern', color: ACCENT },
+    ];
+
     function renderPeak(view, name) {
         const axes = (view.axes || DEFAULT_VIEW.axes).map(a => AXES[a] || AXES.x);
         const body = document.createElement('div');
@@ -760,14 +775,20 @@
         canvas.className = 'peak-map';
         const title = document.createElement('div');
         title.className = 'sub-title';
-        title.textContent = 'Step per iteration';
+        title.append('Steps, in widths: ');
+        STEP_SERIES.forEach((s, i) => {
+            const key = document.createElement('span');
+            key.style.color = s.color;
+            key.textContent = `${i ? ' · ' : ''}${s.text}`;
+            title.append(key);
+        });
         const stepsCanvas = document.createElement('canvas');
         stepsCanvas.className = 'peak-steps';
         body.append(canvas, title, stepsCanvas);
         const waiting = `Waiting for ${name}…`;
         const plot = landscape(canvas, cam, waiting);
         const chart = Chart2D.create(stepsCanvas, {
-            fontPx: FONT_PX - 1, xLabel: 'iteration', yLabel: `step (${axes[0].unit})`, message: 'No step yet',
+            fontPx: FONT_PX - 1, xLabel: 'step', yLabel: 'step (widths)', message: 'No step yet',
         });
         return {
             width: LANDSCAPE_WIDTH,
@@ -782,22 +803,35 @@
                     return '';
                 }
                 chart.setMessage('No step yet');
+                const circles = inPhase(run.published.gradient, phase);
                 const steps = inPhase(run.published.peak, phase);
-                const trail = steps.map(p => p.center);
-                const last = steps[steps.length - 1];
+                // Lateral moves, in x/z: the lateral circles', then the pattern's.
+                const moves = circles.filter(c => c.search === 'lateral').concat(steps);
+                const trail = moves.map(p => p.center);
+                const last = moves[moves.length - 1];
                 if (last && Array.isArray(last.step)) trail.push([last.center[0] + last.step[0], last.center[1] + last.step[1]]);
+                const lastStep = steps[steps.length - 1];
+                const lastCircle = circles.filter(c => c.search === 'lateral').pop();
                 plot.update({
                     key: `${run.key}:${name}`,
-                    points: project(run.samples.filter(s => s[PHASE] === phase.index && s[STILL]), axes),
+                    points: project(run.samples.filter(s => s[PHASE] === phase.index && (s[STILL] || s[KIND] === 'cart')), axes),
                     names: axes.map(a => a.name), unit: axes[0].unit, minSpan: 4,
-                    // The latest pattern stands out, whatever its size.
-                    threshold: run.threshold_w, n: 24, sigmaCells: 2.2, tail: last && last.points ? last.points.length : 9,
+                    // The latest pattern (or circle) stands out, whatever its size.
+                    threshold: run.threshold_w, n: 24, sigmaCells: 2.2,
+                    tail: lastStep && lastStep.points ? lastStep.points.length : lastCircle ? lastCircle.readings : 9,
                     floorPath: trail,
                 });
-                const pts = steps.map((p, i) => [i + 1, p.step_um]).filter(p => isNum(p[1]));
-                chart.setRange({ x: [0.5, Math.max(2, steps.length) + 0.5], y: [0, Math.max(1, maxOf(pts.map(p => p[1]), 0)) * 1.2] }, AXES_ANIM_MS);
-                chart.setData({ series: [{ points: pts, color: ACCENT, width: 2, dots: true }] });
-                return phaseNumbers(run, phase, phase.status === 'running' ? `iter ${steps.length}` : plural(steps.length, 'iteration'));
+                const series = Object.fromEntries(STEP_SERIES.map(s => [s.key, []]));
+                circles.concat(steps).forEach((p, i) => {
+                    const list = series[p.search || 'pattern'];
+                    if (list && isNum(p.step_widths)) list.push([i + 1, p.step_widths]);
+                });
+                const count = circles.length + steps.length;
+                const top = maxOf(STEP_SERIES.flatMap(s => series[s.key].map(p => p[1])), 0);
+                chart.setRange({ x: [0.5, Math.max(2, count) + 0.5], y: [0, Math.max(0.05, top) * 1.2] }, AXES_ANIM_MS);
+                chart.setData({ series: STEP_SERIES.map(s => ({ points: series[s.key], color: s.color, width: 2, dots: true })) });
+                const iterations = phase.status === 'running' ? `iter ${steps.length}` : plural(steps.length, 'iteration');
+                return phaseNumbers(run, phase, `${iterations}${circles.length ? ` · ${plural(circles.length, 'circle')}` : ''}`, true);
             },
         };
     }

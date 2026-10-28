@@ -30,10 +30,14 @@ the custom view as PHASE_VIEWS declares:
    power rises, each re-centred along the lateral axis the tilt walks the
    beam on. A parabola through the log of the power at the best tilt and its
    two neighbours gives the tilt to keep.
-4. Peak: a square pattern of readings at rest around the centre (``peak_grid``
-   per side, 5 by default), a quadratic fit of the log power and a Newton step
-   to its top, until the steps are small; then to the best reading taken at
-   rest.
+4. Peak: first the gradient circles of the cell's first script, in rounds: a
+   circle in x/z, then one in Rx/Rz (carrying x/z along by the walk the
+   Angle phase measured), each read on the move, a plane fitted to the log
+   power over it, and a step up its slope (halved after an overshoot), until
+   no step stands out of the noise (``gradient_rounds`` at most). Then a square pattern of readings at rest
+   around the centre (``peak_grid`` per side, 5 by default), a quadratic fit
+   of the log power and a Newton step to its top, until the steps are small;
+   then to the best reading taken at rest.
 
 Positions are offsets from the start in the start's tool frame (see
 ``io.local`` / ``io.pose_at``): x and z lateral (µm), y along the fiber (never
@@ -44,7 +48,7 @@ are as dense as intended whatever the meter and the network do.
 The contract with the cell (see alignment.py): move only through ``io``, never
 catch exceptions broadly, leave the fiber at the best pose found. The custom
 view plots the readings and what is published here with ``io.publish()``:
-"acquire", "profile" and "peak" (their fields: custom_view/__init__.py).
+"acquire", "profile", "gradient" and "peak" (their fields: custom_view/__init__.py).
 """
 
 from __future__ import annotations
@@ -65,7 +69,7 @@ PHASES = ("Acquire", "Center", "Angle", "Peak")
 #: How the custom view plots each phase: "map" is a 3D landscape of the power
 #: over two axes (for Acquire, the axes of the search that ran: "search_axes"),
 #: "profiles" the latest 1-D scan per axis (one plot per slot), "peak" the
-#: pattern readings and the steps of the peak search. Axes are io.local's:
+#: lateral circles' and the pattern's readings, and the steps of the peak search. Axes are io.local's:
 #: x, y, z (µm), rx, ry, rz (°). A map "until_end" goes on plotting the
 #: readings of the later phases, to the end of the run, with the best power
 #: seen at each spot: the landscape rises as the alignment climbs.
@@ -153,6 +157,29 @@ ANGLE_ROUNDS = 3
 ANGLE_MIN_GAIN_DB = 0.1
 
 # --- Peak --------------------------------------------------------------------------------------
+#: Gradient circles: radius in widths (lateral, or tilt): 36 µm and 0.03° on
+#: the cell's ends, as the circles of its first script. Readings near the top
+#: fall ~4 % (lateral) or ~2 % (tilt) around it: a clear slope, little loss.
+GRADIENT_RADIUS_WIDTHS = 0.15
+#: Moves queued per lap (blended into a circle), and readings per lap.
+GRADIENT_POINTS = 36
+GRADIENT_READINGS = 24
+#: Lit readings a circle needs to fit its plane.
+GRADIENT_MIN_READINGS = 8
+#: A step goes at most this many widths: the slope gives the distance to the
+#: top of a Gaussian at any distance, but the widths are measured, not exact.
+GRADIENT_MAX_STEP_WIDTHS = 0.5
+#: A step the other way from the previous one (of the same search) went past
+#: the top: the steps shrink by this factor from then on. On the cell's faint
+#: light of 2026-10-28, the top was ~2.5× sharper than its fitted width.
+GRADIENT_OVERSHOOT_GAIN = 0.5
+#: A step under this many times its noise (from the readings' scatter about
+#: the plane: 1.5-2.7 % on the cell) is negligible, and not taken.
+GRADIENT_NOISE_SIGMAS = 2.0
+#: The rounds stop once both steps are under GRADIENT_MIN_STEP_WIDTHS widths
+#: (and under PEAK_MIN_STEP_UM, or GRADIENT_MIN_STEP_DEG for a tilt).
+GRADIENT_MIN_STEP_WIDTHS = 0.01
+GRADIENT_MIN_STEP_DEG = 0.001
 #: Pattern radius: PEAK_RADIUS_WIDTHS × the mean width, at least PEAK_RADIUS_MIN_UM.
 #: Each step is clipped to it. At 0.2 width the edge points still read ~8 %
 #: under the centre: plenty for the fit.
@@ -523,14 +550,9 @@ def cross_scan(io: AlignmentIO, state: _State, axis: str, iteration: int,
 
 def _scan_both_ways(io: AlignmentIO, state: _State, axis: str, lo: float, hi: float,
                     spacing: float) -> List[Tuple[int, List[Tuple[float, float]]]]:
-    """Readings (coordinate, power) from lo to hi, then back, at a fixed meter range; raised on an overrange.
-
-    The range starts at SCAN_HEADROOM × the power expected (at least × the
-    detection level), at most state.scan_range_w.
-    """
+    """Readings (coordinate, power) from lo to hi, then back, at a fixed meter range (_scan_range); raised on an overrange."""
     index = LOCAL_INDEX[axis]
-    expected = max((p for p in (state.peak_w, state.detect_w) if math.isfinite(p)), default=0.0)
-    range_w = min(state.scan_range_w, SCAN_HEADROOM * expected) if expected > 0 else state.scan_range_w
+    range_w = _scan_range(state)
     while True:
         _averaging(io, state, SCAN_AVERAGING)
         _range(io, state, range_w)
@@ -542,12 +564,7 @@ def _scan_both_ways(io: AlignmentIO, state: _State, axis: str, lo: float, hi: fl
             passes.append((direction, [(io.local(s.pose)[index], s.power_w) for s in samples]))
         if not any(math.isinf(p) for _, pts in passes for _, p in pts):
             return passes
-        # More light than the range: a range ten times higher, and again.
-        range_w *= 10.0
-        state.scan_range_w = max(state.scan_range_w, range_w)
-        if range_w > MAX_RANGE_W:
-            raise AlignmentError(f"The power meter overranges at {range_w / 10:.3g} W: "
-                                 f"check source_power_mw and the meter.")
+        range_w = _raise_range(state, range_w)
 
 
 def _fit_passes(passes, baseline: float) -> Tuple[Optional[fit.Gauss], Optional[float]]:
@@ -673,10 +690,12 @@ def pattern(n: int) -> List[Tuple[float, float]]:
 
 
 def peak(io: AlignmentIO, state: _State) -> None:
-    """Newton steps on a quadratic fit of log power over a square pattern at rest; ends on the best reading at rest.
+    """Gradient circles (``gradient``), then Newton steps on a quadratic fit of log power over a square pattern
+    at rest; ends on the best reading at rest.
 
     The pattern has peak_grid readings per side and spans ± the radius.
     """
+    gradient(io, state)
     mean_width = 0.5 * (state.width["x"] + state.width["z"])
     radius = max(PEAK_RADIUS_MIN_UM, PEAK_RADIUS_WIDTHS * mean_width)
     min_step = max(PEAK_MIN_STEP_UM, PEAK_MIN_STEP_WIDTHS * mean_width)
@@ -698,6 +717,7 @@ def peak(io: AlignmentIO, state: _State) -> None:
             "radius_um": round(radius, 3),
             "step": [round(du, 3), round(dz, 3)],
             "step_um": round(step, 3),
+            "step_widths": round(step / mean_width, 5),
             "newton": newton,
             "power_w": middle,
             "points": [[round(cx + u, 3), round(cz + v, 3), p] for u, v, p in readings],
@@ -713,6 +733,150 @@ def peak(io: AlignmentIO, state: _State) -> None:
     if best is not None and best.power_w > state.peak_w:
         _motion(io, state, **MOVE_MOTION)
         io.move_to(best.pose)
+
+
+def gradient(io: AlignmentIO, state: _State) -> None:
+    """Rounds of a lateral circle then a tilt circle around pos (``circle``), each stepping pos up its slope.
+
+    The circles of the cell's first script (looping_circles). The rounds stop
+    once neither circle takes a step, after gradient_rounds, or on a circle
+    that cannot run. If the power at rest is then lower than before them, pos
+    goes back to where they started.
+    """
+    rounds = state.settings.gradient_rounds
+    if rounds <= 0:
+        return
+    start, before = dict(state.pos), state.peak_w
+    climbs = [_Climb("lateral"), _Climb("angle")]
+    for round_ in range(rounds):
+        moved = []
+        for climb in climbs:
+            moved.append(circle(io, state, climb, round_))
+            if moved[-1] is None:
+                break
+        if None in moved or not any(moved):
+            break
+    _range(io, state, None)
+    _goto(io, state)
+    power = _still(io, state, "cart")
+    if power >= before:
+        state.peak_w = power
+    else:
+        # A slope misread (noise, a drift of the source): the pattern starts where the circles did.
+        state.pos.update(start)
+
+
+@dataclass
+class _Climb:
+    """One search of the gradient circles ("lateral" or "angle"), from round to round."""
+
+    search: str
+    #: The fraction of the Newton step taken: GRADIENT_OVERSHOOT_GAIN less after each overshoot.
+    gain: float = 1.0
+    #: The latest step taken, in the circle's two axes.
+    step: Tuple[float, float] = (0.0, 0.0)
+
+
+def circle(io: AlignmentIO, state: _State, climb: _Climb, round_: int) -> Optional[bool]:
+    """A circle around pos in the lateral plane ("lateral": x/z) or in tilt ("angle": rx/rz), read on the move.
+
+    It runs once each way, so that the reading/pose lag, and a drift of the
+    source, cancel in the fit. A plane fitted to ln P over its readings gives
+    the slope; on a Gaussian, the top is the slope × width² / 4 away (1/e²
+    radius, lateral) or × width² / 2 (1/e half-width, tilt). pos steps that
+    far times ``climb.gain``, halved whenever a step goes back on the
+    previous one, at most GRADIENT_MAX_STEP_WIDTHS. A step under
+    max(the minimum step, GRADIENT_NOISE_SIGMAS × its noise) is not taken. A
+    tilt circle carries the lateral position with the tilt, by the walk the
+    Angle phase measured: it follows the ridge where the beam stays centred,
+    as tilt_search does, instead of crossing it.
+
+    True if pos moved, False if the step was negligible, None if the circle
+    cannot run (it would leave the window, or has too little light). pos is
+    unchanged unless it moved.
+    """
+    search = climb.search
+    if search == "lateral":
+        axes, unit, kind = ("x", "z"), "µm", "cart"
+        widths = (state.width["x"], state.width["z"])
+        newton = tuple(w * w / 4 for w in widths)
+        min_step = max(PEAK_MIN_STEP_UM, GRADIENT_MIN_STEP_WIDTHS * min(widths))
+    else:
+        axes, unit, kind = ("rx", "rz"), "°", "ang"
+        widths = (state.angle_width, state.angle_width)
+        newton = tuple(w * w / 2 for w in widths)
+        min_step = max(GRADIENT_MIN_STEP_DEG, GRADIENT_MIN_STEP_WIDTHS * state.angle_width)
+    radius = GRADIENT_RADIUS_WIDTHS * 0.5 * (widths[0] + widths[1])
+    centre = dict(state.pos)
+
+    def moved_by(du: float, dv: float) -> Dict[str, float]:
+        p = {axes[0]: centre[axes[0]] + du, axes[1]: centre[axes[1]] + dv}
+        for axis, d in zip(axes, (du, dv)):
+            if axis in TILT_WALK:
+                p[TILT_WALK[axis]] = centre[TILT_WALK[axis]] + state.walk.get(axis, 0.0) * d
+        return p
+
+    path = [moved_by(radius * math.cos(a), radius * math.sin(a))
+            for a in (2 * math.pi * k / GRADIENT_POINTS for k in range(GRADIENT_POINTS + 1))]
+    if not all(_inside(state, {**centre, **p}) for p in path):
+        return None
+    spacing = 2 * math.pi * radius / GRADIENT_READINGS
+    range_w = _scan_range(state)
+    while True:
+        _averaging(io, state, SCAN_AVERAGING)
+        _range(io, state, range_w)
+        _goto(io, state, **path[0])
+        if search == "lateral":
+            _motion(io, state, lin_vel=_scan_speed(io, spacing), blending=100)
+        else:
+            _motion(io, state, ang_vel=_scan_ang_speed(io, spacing), blending=100)
+        samples = []
+        for lap in (path[1:], path[-2::-1]):
+            samples += io.scan([state.pose(io, **p) for p in lap], kind=kind)
+        if not any(math.isinf(s.power_w) for s in samples):
+            break
+        range_w = _raise_range(state, range_w)
+    readings = []
+    for s in samples:
+        if math.isfinite(s.power_w) and s.power_w >= state.detect_w:
+            offsets = io.local(s.pose)
+            readings.append((offsets[LOCAL_INDEX[axes[0]]] - centre[axes[0]],
+                             offsets[LOCAL_INDEX[axes[1]]] - centre[axes[1]], s.power_w))
+    fitted = fit.plane_slope(readings) if len(readings) >= GRADIENT_MIN_READINGS else None
+    step, noise, noise_widths, taken = (0.0, 0.0), 0.0, 0.0, False
+    if fitted is not None:
+        (gu, gv), (eu, ev) = fitted
+        full = (gu * newton[0], gv * newton[1])
+        if full[0] * climb.step[0] + full[1] * climb.step[1] < 0:
+            climb.gain *= GRADIENT_OVERSHOOT_GAIN  # the previous step went past the top
+        step = (climb.gain * full[0], climb.gain * full[1])
+        noise = climb.gain * math.hypot(eu * newton[0], ev * newton[1])
+        noise_widths = climb.gain * math.hypot(eu * newton[0] / widths[0], ev * newton[1] / widths[1])
+        in_widths = math.hypot(step[0] / widths[0], step[1] / widths[1])
+        if in_widths > GRADIENT_MAX_STEP_WIDTHS:
+            step = (step[0] * GRADIENT_MAX_STEP_WIDTHS / in_widths, step[1] * GRADIENT_MAX_STEP_WIDTHS / in_widths)
+        taken = math.hypot(*step) >= max(min_step, GRADIENT_NOISE_SIGMAS * noise)
+    if not taken:
+        step = (0.0, 0.0)
+    io.publish("gradient", {
+        "round": round_,
+        "search": search,
+        "unit": unit,
+        "center": [round(centre[axes[0]], 5), round(centre[axes[1]], 5)],
+        "radius": round(radius, 5),
+        "readings": len(readings),
+        "power_w": float(np.mean([p for _, _, p in readings])) if readings else None,
+        "step": [round(step[0], 5), round(step[1], 5)],
+        "step_widths": round(math.hypot(step[0] / widths[0], step[1] / widths[1]), 5),
+        "noise_widths": round(noise_widths, 5),
+        "gain": climb.gain,
+    })
+    if fitted is None:
+        return None
+    if taken:
+        state.pos.update(moved_by(*step))
+        climb.step = step
+    return taken
 
 
 # --- Helpers ---------------------------------------------------------------------------------
@@ -783,6 +947,30 @@ def _range(io: AlignmentIO, state: _State, watts: Optional[float]) -> None:
     if state.range_w != watts:
         io.set_power_range(watts)
         state.range_w = watts
+
+
+def _scan_range(state: _State) -> float:
+    """The fixed meter range a scan starts at: SCAN_HEADROOM × the power expected
+    (at least × the detection level), at most state.scan_range_w."""
+    expected = max((p for p in (state.peak_w, state.detect_w) if math.isfinite(p)), default=0.0)
+    return min(state.scan_range_w, SCAN_HEADROOM * expected) if expected > 0 else state.scan_range_w
+
+
+def _raise_range(state: _State, range_w: float) -> float:
+    """The range after an overrange at ``range_w``: ten times higher (and state.scan_range_w with it)."""
+    range_w *= 10.0
+    state.scan_range_w = max(state.scan_range_w, range_w)
+    if range_w > MAX_RANGE_W:
+        raise AlignmentError(f"The power meter overranges at {range_w / 10:.3g} W: "
+                             f"check source_power_mw and the meter.")
+    return range_w
+
+
+def _inside(state: _State, pos: Dict[str, float]) -> bool:
+    """Whether ``pos`` (x, z in µm, rx, rz in °) is inside the window, its margins left."""
+    s = state.settings
+    return (math.hypot(pos["x"], pos["z"]) <= (s.range_mm - WINDOW_MARGIN_MM) * 1e3
+            and math.hypot(pos["rx"], pos["rz"]) <= s.range_deg - ANGLE_MARGIN_DEG)
 
 
 def _db(power: float, reference: Optional[float]) -> float:

@@ -56,13 +56,14 @@ is outlined in yellow.
 | **Acquire**: find the light | It goes to where this fiber aligned last time, if it has before, and measures the meter's noise. If light already reaches the meter, it goes straight to Center (unless the full search is on: see below). Otherwise it spirals out in angle (up to 3°), then, still in the dark, sideways (up to 500 µm). Still dark, it spirals in angle again at 6 points around the start, 750 µm out. It stops once it has passed the light, then goes back to the brightest point. | A 3D landscape of the power along the latest spiral, over Rx/Rz for a tilt spiral and over X/Z for a sideways one. The line under it says where the spiral is centred: "remembered pose", "ring 3/6", or nothing for the start; "light at the remembered pose" when the fiber found light where it aligned last time. The "light" mark on the colour bar is the level that counts as light. It keeps filling during the later phases: their readings join the map, which shows the best power seen at each spot, so the landscape rises to the final peak as the robot climbs. |
 | **Center**: centre on the beam | It sweeps across the beam along X, then along Z, both ways. It fits a bell curve to each sweep and moves to its top, until the top stops moving. | The latest X and Z sweeps (green forward, blue backward), the fitted bell curve, and the chosen centre in yellow. |
 | **Angle**: square the angle | For Rx, then Rz, it tries tilts stepping away from the current one while the power rises, re-centring at each tilt. A curve through the best tilts picks the angle. It repeats with finer steps while that still gains. | Top: the power against each tilt, with the fitted curve and the "walk": how far the best position moves per degree of tilt. Bottom: the sideways re-centring sweeps. |
-| **Peak**: the last few µm | It takes readings at rest on a small square grid, 5×5 by default (±0.2 beam width, about ±50 µm). It fits a dome to them and steps to its top, until the steps are tiny. It ends on the best reading taken at rest. | The grid readings as a 3D landscape, the centre of each iteration on its floor, and the step each iteration took. |
+| **Peak**: the last few µm, and the last hundredths of a degree | First, small circles read on the move, as in the cell's first script: one sideways (about 36 µm across), then one in angle (about 0.03°). The power around each circle shows which way is uphill, and the robot steps that way; shorter steps after one goes too far. It repeats until the steps are lost in the noise, usually 1 to 4 rounds of about 2.5 s on the cell. Then it takes readings at rest on a small square grid, 5×5 by default (±0.2 beam width, about ±50 µm). It fits a dome to them and steps to its top, until the steps are tiny. It ends on the best reading taken at rest. | The grid readings and the sideways circles as a 3D landscape, the centres on its floor, and every step, circles then grid. |
 
 When the start is tilted, Angle brings by far the largest gain (+6 to
-+18 dB in simulation); when it is only off sideways, Center does. The whole
-alignment takes about 18 to 26 s on the simulated cell, 30 to 45 s when the
-start is off in angle and sideways at once, and about 11 s from a fiber's
-remembered pose. On the real cell, it scales with how fast the meter and the
++18 dB in simulation); when it is only off sideways, Center does. Peak
+mostly polishes, but it is the only phase after Angle that corrects the
+angle. The whole alignment takes about 19 to 27 s on the simulated cell,
+30 to 46 s when the start is off in angle and sideways at once, and about
+12 s from a fiber's remembered pose. On the real cell, it scales with how fast the meter and the
 robot answer.
 
 ### The top row
@@ -201,8 +202,60 @@ offsets. The rows published on `align_sample` use them too.
   radian: ~175 µm/° for ends 10 mm apart.
 - **Then.** Both lateral axes are re-centred.
 
-**Peak** (`peak`)
+**Peak** (`peak`): the gradient circles (`gradient`, `circle`), then the pattern
 
+- **The circles.** These are the circles of the cell's first script
+  (`looping_circles`). Each round runs a circle in X/Z, then one in Rx/Rz,
+  around the current pose.
+  - Their radius is 0.15 width (`GRADIENT_RADIUS_WIDTHS`), about 36 µm and
+    0.03° on the cell's ends.
+  - Each circle runs once each way, on the move, at a fixed meter range.
+    Going both ways cancels the reading/pose lag, and a slow drift of the
+    source, in the fit.
+  - Readings: 24 a lap in simulation (`GRADIENT_READINGS`). On the cell, a
+    lap of 36 blended moves takes ~0.42 s whatever the speed, so it gets
+    ~50 readings, and a round takes ~2.5 s.
+  - The robot rounds the circle off: on the cell, it traced ~23 µm and
+    ~0.031° for 28 µm and 0.043°. The fit uses the poses read, so this does
+    no harm.
+- **The step.** A plane fitted to the log power over the circle's readings
+  gives the slope, and its noise (from the readings' scatter about it).
+  - On a Gaussian, the top is the slope × width² / 4 away (lateral, 1/e²
+    radius), or × width² / 2 (tilt, 1/e half-width). The step goes that
+    far, times a gain, and at most 0.5 width (`GRADIENT_MAX_STEP_WIDTHS`).
+  - The gain starts at 1. It halves each time a step goes back against the
+    previous one of its kind, i.e. the previous step overshot
+    (`GRADIENT_OVERSHOOT_GAIN`). On the cell's faint light of 2026-10-28,
+    the top was ~2.5× sharper than its fitted width. Full steps then swung
+    −12, +14, −11 µm from round to round.
+  - A step under twice its noise (`GRADIENT_NOISE_SIGMAS`) is not taken: the
+    readings cannot tell it from noise. The cell's readings scattered 1.5–
+    2.7 % about the plane, about 1 µm of noise on a lateral step.
+  - The first script stepped a fixed 30 µm / 0.03°, shrunk ×0.8 above a
+    threshold. Here the steps shrink near the top by themselves, and after
+    an overshoot, with no threshold.
+- **The tilt circle follows the ridge.** It carries X/Z along with the
+  tilt, by the walk the Angle phase measured. The beam then stays centred
+  as the circle tilts, as in Angle's re-centred tilts.
+  - Without this, a TCP away from the tip (or a long gap) makes the circle
+    cross the ridge: its slope is mostly the sideways offset, and its steps
+    throw the beam off. In simulation, with the TCP 500 µm behind the tip,
+    the circles then gained nothing.
+- **When they stop.** When neither circle of a round takes a step: each is
+  under 0.01 width (and 0.5 µm / 0.001°) or under its noise. Otherwise
+  after `gradient_rounds` (8). A circle stops them early if it would leave
+  the window, or sees fewer than 8 lit readings.
+- **Kept only if better.** A reading at rest follows. If it is lower than
+  before the circles, the pattern starts where the circles did.
+- **What they gain** (simulation).
+  - Started 0.1–0.15° off in tilt (power 0.56–0.78 of the best) on
+    cell-like optics, Peak ended at 0.9997–1.001 with the circles, in 2–3
+    rounds. Without them it ended at 0.57–0.78: the pattern moves only X/Z.
+  - With a top sharper than its fitted width and 2 % noise per sample, as
+    on the cell, they stop after 1–4 rounds, ending at 0.998–1.000. Without
+    the gain and the noise test, they ran all 8 rounds with steps swinging
+    ~0.4 width.
+  - When Angle has already found the top, one round finds nothing to do.
 - **The pattern.** A square grid of `peak_grid` × `peak_grid` readings at
   rest (5×5 by default, 10 samples averaged each), taken row by row, each row
   the other way round so that no move is long.
@@ -255,6 +308,7 @@ does not apply to it until you press Reset on it.
 | `signal_detect_uw` | 0.005 | Lowest power counted as light, raised to noise + 8σ. |
 | `acquire_full_search` | true | Run the first two spirals in full, even with light at the start (demo). |
 | `peak_grid` | 5 | Readings per side of the Peak pattern: odd, 3 to 9 (anything else is refused before the robot moves). More readings give a finer grid and a better fit, but a slower phase. |
+| `gradient_rounds` | 8 | Most rounds of gradient circles (one in X/Z, one in Rx/Rz: ~2.5 s together on the cell, ~1 s simulated) at the start of Peak. They stop sooner once no step stands out of the noise. 0: no circles, and then nothing after Angle corrects the tilt. |
 | `align_range_um` | 2000 | Window: how far X, Y, Z may go from the start. It must leave 100 µm beyond `acquire_radius_um` and `acquire_ring_um`. |
 | `align_range_deg` | 8.0 | Window: how far the three angles may turn. It must leave 0.5° beyond `acquire_radius_deg`. |
 | `align_timeout_s` | 150 | After this, back to the best reading at rest, and judged there. |
@@ -293,9 +347,10 @@ to detect:
   cancelled by scanning both ways. It shows as `lag` on the Center card.
 - **The meter.**
   - 1 sample per reading while scanning, 10 at rest.
-  - A fixed range during cross scans: 10 × the power expected, at most
-    1.2 × source, ×10 on an overrange, up to 1 W. Auto range in the spirals,
-    in the Peak phase and for the verdict.
+  - A fixed range during cross scans and gradient circles: 10 × the power
+    expected, at most 1.2 × source, ×10 on an overrange, up to 1 W. Auto
+    range in the spirals, for the readings at rest of the Peak phase and for
+    the verdict.
   - The meter's settings are restored after the run.
 
 ### Safety
@@ -344,6 +399,11 @@ to detect:
    tab) and 5 from a few µW. Note their time and final power.
 6. **Remembered poses.** Align each fiber once from the rack. The next time
    it is picked, the Acquire card should read "light at the remembered pose".
+7. **Gradient circles.** On the Peak card, the circles' steps should fall
+   to 0 (not taken) within 1–4 rounds. If they keep going for all 8 rounds,
+   read `noise_widths` and `gain` in the `align_gradient` payloads.
+   Repeated steps despite a small gain point to a wrong walk (see 2), or to
+   a source that drifts within a lap. Set `gradient_rounds` to 0 to compare.
 
 ### Testing without the cell
 
@@ -360,7 +420,8 @@ python -m pytest tests -q
 The tests cover:
 - the cell's run of 2026-10-27, a few µW at the start, and no light (tilt
   or lateral search);
-- the full search, and the Peak grid;
+- the full search, and the Peak grid (the gradient circles run before it in
+  every test, but no test checks what they gain);
 - single-mode fibers, with a TCP off the tip;
 - the dark;
 - that what the alignment publishes is what the view plots.
@@ -368,7 +429,9 @@ The tests cover:
 They run without `acquire_ring_um` (it is 0 when `context.yaml` does not set
 it) and with no remembered pose, so they check the searches as they were.
 The ring, the 5 nW detection and the remembered poses were checked with
-separate simulated runs on 2026-10-28, with the `context.yaml` params.
+separate simulated runs on 2026-10-28, with the `context.yaml` params. So
+were the gradient circles, by moving the pose off in tilt and sideways just
+before Peak.
 
 To watch a simulated run in the real page:
 

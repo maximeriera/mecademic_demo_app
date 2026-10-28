@@ -156,6 +156,8 @@ class AlignmentSettings:
     full_search: bool
     #: Readings per side of the Peak phase's square pattern (odd).
     peak_grid: int
+    #: Rounds of gradient circles (a lateral one, then a tilt one) that start the Peak phase; 0: none.
+    gradient_rounds: int
 
     @classmethod
     def from_context(cls, context: AppContext) -> "AlignmentSettings":
@@ -179,6 +181,7 @@ class AlignmentSettings:
             signal_detect_w=float(context.get_param("signal_detect_uw", 1.0)) * 1e-6,
             full_search=bool(context.get_param("acquire_full_search", False)),
             peak_grid=int(context.get_param("peak_grid", 5)),
+            gradient_rounds=int(context.get_param("gradient_rounds", 8)),
         )
 
 
@@ -285,7 +288,7 @@ class AlignmentIO:
         """Share extra data with the custom view, as channel ``align_<name>``.
 
         Dict values get the current phase index and time added. The view uses
-        "acquire", "profile" and "peak" (see custom_view/__init__.py); anything
+        "acquire", "profile", "gradient" and "peak" (see custom_view/__init__.py); anything
         else is kept in align_result for later use.
         """
         if isinstance(value, dict):

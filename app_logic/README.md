@@ -133,18 +133,22 @@ mostly a matter of angle. Four phases:
 | Acquire | Starts at the fiber's remembered pose, if any. Measures the noise floor. Any light there (above `signal_detect_uw`, 5 nW, and the noise) goes straight to Center. Otherwise a spiral in tilt (Rx/Rz, out to `acquire_radius_deg`), then, still dark, a lateral spiral (out to `acquire_radius_um`), each stopping once past the light; dark at the remembered pose, the same around the start. Still dark, tilt spirals at 6 points `acquire_ring_um` around the start: a picked fiber is often off in tilt and sideways at once, which neither spiral alone finds. Then to the best reading. Still no light stops the alignment with "check the laser, the fibers and the align_start pose". With `acquire_full_search` (for demos), the first two spirals run to their full radius, even with light at the start. |
 | Center | Scans across the light along X then Z, both ways, fits each scan with a Gaussian over the noise floor and moves to its centre, until the centre stops moving. A window that misses the centre moves towards it by half its span at most; failing that, the fiber goes to the best reading, never to an extrapolated centre. A window without light widens. The meter's range is fixed during a scan, at 10× the power expected, so faint first light stays visible. |
 | Angle | For Rx then Rz: tilts stepping away from the current one (half an angle width at first) while the power rises, each re-centred along the lateral axis the tilt walks the beam on; a parabola through the best tilt and its neighbours picks the tilt. A tilt without light is a reading of no power, not an error. Again with half the step while it gains. |
-| Peak | Readings at rest on a square pattern of ±0.2 lateral width around the centre (~±50 µm on the cell's ends), `peak_grid` per side (5 by default: 25 readings, ~2.5 s), a quadratic fit of the log power and a step to its top (at most the pattern's radius), until the steps are small. Ends on the best reading taken at rest. |
+| Peak | First the gradient circles of the cell's first script: rounds of a circle in X/Z, then one in Rx/Rz (0.15 width radius: ~36 µm, ~0.03°), read on the move both ways. A plane fitted to the log power over each gives the slope, and a step up it, sized from the slope and the width (at most 0.5 width). The steps shrink by half after one overshoots, and a step under twice its noise is not taken. The tilt circle carries X/Z along by the walk Angle measured, so the beam stays centred. They stop once no step is taken, or after `gradient_rounds` (8); usually 1 to 4 rounds of ~2.5 s on the cell (~1 s simulated). Kept only if the power at rest is not lower. Then readings at rest on a square pattern of ±0.2 lateral width around the centre (~±50 µm on the cell's ends), `peak_grid` per side (5 by default: 25 readings, ~2.5 s), a quadratic fit of the log power and a step to its top (at most the pattern's radius), until the steps are small. Ends on the best reading taken at rest. |
 
 Each reading is paired with the robot's pose at the middle of the meter's
 reading (interpolated between the poses read before and after it), so fast
 scans place their readings where they were taken. Scan speeds come from the
 measured time per reading. In simulation, with optics like the cell's, the
-alignment of 2026-10-27 (~80 µW at the start) takes about 18 s, and a cold
-start needing the tilt or the lateral spiral about 19–20 s. A full search
+alignment of 2026-10-27 (~80 µW at the start) takes about 20 s, and a cold
+start needing the tilt or the lateral spiral about 20–22 s. A full search
 adds about 2 s; a 3×3 Peak pattern (`peak_grid` 3) saves about 1.5 s. With
 0.2° / 240 µm optics and the `context.yaml` defaults, light is found from
 starts up to 900 µm and 2.5° off at once (48 of 48 tested); those needing
-the ring take 30–45 s in all. From the remembered pose, about 11 s.
+the ring take 30–46 s in all. From the remembered pose, about 12 s. The
+gradient circles add ~1 s when Angle has already found the top (one round:
+~2.5 s on the cell); started
+0.1–0.15° off in tilt, Peak still ends within 0.1 % of the best (0.57–0.78
+without them, as the pattern moves only X/Z).
 
 ## Custom view (`/view/`)
 
@@ -177,8 +181,12 @@ screens.
     backward), the fitted Gaussian and the centre chosen, in yellow.
   - Angle: the power against each tilt with its parabola and the beam's
     walk per degree, and the lateral re-centring scans.
-  - Peak: the readings at rest as a 3D landscape with the centre of each
-    iteration on its floor, and the step each iteration took.
+  - Peak: the readings at rest and those of the lateral gradient circles as
+    a 3D landscape, with the centre of each lateral circle and pattern
+    iteration on its floor; and every step in widths, in order (tilt
+    circles blue, lateral circles pale green, pattern green). Its line
+    counts the pattern's iterations and the circles, and gives the best
+    reading at rest.
   - Colours span the dB range of the plot. A colour bar gives the values and
     marks the threshold, so small differences near the peak still show.
 

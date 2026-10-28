@@ -44,9 +44,18 @@ algorithm.py; tests/fiber_alignment/test_contract.py checks it):
     ``width`` and ``peak``), ``chosen`` (where the fiber went, or null), and
     for tilts ``walk_um_per_deg`` (how far the beam walks along the lateral
     axis per degree of tilt: in effect the distance between the fiber ends).
+  - ``align_gradient``: one per gradient circle, at the start of the Peak
+    phase: ``round``, ``search`` ("lateral": a circle in x/z, "angle": in
+    rx/rz), ``unit`` (µm or °), ``center`` and ``step`` [du, dv] in the
+    circle's two axes (the step taken: [0, 0] when negligible), ``radius``,
+    ``step_widths`` (the step in coupling widths), ``noise_widths`` (the
+    step's noise, from the readings' scatter), ``gain`` (the fraction of
+    the full step, halved after each overshoot), ``readings`` (lit readings
+    fitted) and ``power_w`` (their mean, or null). Its readings are the
+    samples of kind "cart" (lateral) or "ang" (tilt) taken meanwhile.
   - ``align_peak``: one per peak-search iteration: ``iter``, ``center`` [x, z],
-    ``radius_um``, ``step`` [dx, dz], ``step_um``, ``newton``, ``power_w``
-    (at the centre) and ``points`` [[x, z, power_w], ...].
+    ``radius_um``, ``step`` [dx, dz], ``step_um``, ``step_widths``,
+    ``newton``, ``power_w`` (at the centre) and ``points`` [[x, z, power_w], ...].
   - ``align_result``: the summary at the end (phases, phase views, published
     data, decimated readings with every reading at rest, ``best_still``, the
     final pose), from which a page loaded after the run redraws it. The hub

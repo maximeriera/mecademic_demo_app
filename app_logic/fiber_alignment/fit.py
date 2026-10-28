@@ -113,6 +113,27 @@ def parabola1d(coords: Sequence[float], powers: Sequence[float]) -> Optional[Par
     return Parabola(vertex=float(mid + vertex), curvature=float(a2), peak=float(math.exp(a0 - a1 * a1 / (4 * a2))))
 
 
+def plane_slope(points: Sequence[Tuple[float, float, float]]
+                ) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """The slope (d ln P/du, d ln P/dv) of a plane fitted to ln P over ``(u, v, power)`` points, and its
+    standard errors (from the readings' scatter about the plane).
+
+    None with fewer than 4 positive readings, or with readings all on a line.
+    """
+    pts = np.asarray([pt for pt in points if all(math.isfinite(c) for c in pt) and pt[2] > 0], dtype=float)
+    if len(pts) < 4:
+        return None
+    a = np.column_stack([np.ones(len(pts)), pts[:, 0], pts[:, 1]])
+    if np.linalg.matrix_rank(a) < 3:
+        return None
+    y = np.log(pts[:, 2])
+    coef, *_ = np.linalg.lstsq(a, y, rcond=None)
+    residuals = y - a @ coef
+    covariance = np.linalg.inv(a.T @ a) * float(residuals @ residuals) / (len(pts) - 3)
+    errors = np.sqrt(np.diag(covariance))
+    return (float(coef[1]), float(coef[2])), (float(errors[1]), float(errors[2]))
+
+
 def quad2d_step(points: Sequence[Tuple[float, float, float]], radius: float) -> Tuple[Tuple[float, float], bool]:
     """The step from the origin towards the maximum of a quadratic fitted to ln P.
 

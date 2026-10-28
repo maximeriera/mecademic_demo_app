@@ -166,6 +166,14 @@ params:
     persist: true
     description: Readings per side of the Peak phase's square pattern (odd, 3 to 9). The pattern spans ±0.2 lateral width around the centre whatever its size, so more readings means a finer grid and a better fit, but a slower phase.
 
+  gradient_rounds:
+    type: int
+    # A round (a lateral circle, then a tilt circle) takes ~2.5 s on the cell; 1 to 4 usually do.
+    default: 8
+    editable_when_idle: true
+    persist: true
+    description: Most rounds of gradient circles at the start of the Peak phase - a circle in x/z, then one in Rx/Rz, each stepping up the slope it reads - before the square pattern. They stop sooner once no step stands out of the noise. 0 skips them (the pattern alone then fixes only x/z, not the tilt).
+
   # --- Motion (applied at the start of every step) ------------------------------
   joint_vel_pct:
     type: float
