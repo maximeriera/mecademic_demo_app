@@ -1,13 +1,13 @@
 """Replay a simulated alignment into the real custom view, for a browser to watch.
 
-    python tools/view_replay.py [--offset X Z RX RZ] [--optics beam|smf] [--speed 4] [--port 8765] [--dark]
-                                [--full-search] [--step]
+    python app_logic/tools/view_replay.py [--offset X Z RX RZ] [--optics beam|smf] [--speed 4] [--port 8765]
+                                          [--dark] [--full-search] [--step]
 
-Runs one alignment on the simulated cell (tests/fiber_alignment/sim.py), then
-serves the page in app_logic/custom_view/ and its /static/ files with the hub
-endpoints it polls, replaying the run's publishes and events into a real
-core.DataHub at ``--speed`` times real time. tools/view_check.mjs drives a
-browser through it; open http://localhost:8765/view/ to watch by hand.
+Runs one alignment on the simulated cell (app_logic/tests/fiber_alignment/sim.py),
+then serves the page in app_logic/custom_view/ and its /static/ files with the
+hub endpoints it polls, replaying the run's publishes and events into a real
+core.DataHub at ``--speed`` times real time. app_logic/tools/view_check.mjs
+drives a browser through it; open http://localhost:8765/view/ to watch by hand.
 
 Besides the page's own endpoints:
 
@@ -34,17 +34,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from core.DataHub import DataHub  # noqa: E402
-from tests.fiber_alignment.sim import Scenario, simulate  # noqa: E402
+from app_logic.custom_view import POWER_RATE_HZ  # noqa: E402  (the live tile's sampling rate)
 from app_logic.fiber_alignment import algorithm  # noqa: E402
+from app_logic.tests.fiber_alignment.sim import Scenario, simulate  # noqa: E402
 
 VIEW_DIR = ROOT / "app_logic" / "custom_view"
 STATIC_DIR = ROOT / "static"
-#: The live tile's sampling rate (custom_view.POWER_RATE_HZ).
-POWER_RATE_HZ = 10
 
 
 def jsonable(value):

@@ -1,8 +1,8 @@
-// Drive a browser through tools/view_replay.py and check that the custom view
+// Drive a browser through app_logic/tools/view_replay.py and check that the custom view
 // shows the alignment as it ran:
 //
-//   python tools/view_replay.py --step &
-//   node tools/view_check.mjs [--url http://127.0.0.1:8765] [--out test-results/view]
+//   python app_logic/tools/view_replay.py --step &
+//   node app_logic/tools/view_check.mjs [--url http://127.0.0.1:8765] [--out test-results/view]
 //
 // 1. One card per declared phase, in order, of the declared type, before the
 //    first alignment already; the 3D landscape cards wider than a column of

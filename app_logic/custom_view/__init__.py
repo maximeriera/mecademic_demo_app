@@ -5,7 +5,7 @@ calls :func:`setup` at every Initialize, then starts the hub. Delete the folder
 and the standard app runs exactly as before.
 
 What the page reads (the contract with fiber_alignment/alignment.py and
-algorithm.py; tests/fiber_alignment/test_contract.py checks it):
+algorithm.py; app_logic/tests/fiber_alignment/test_contract.py checks it):
 
 * ``power``: a source sampling the power meter at POWER_RATE_HZ, for the live
   readout. It runs on its own thread. While an alignment streams readings, it
@@ -87,9 +87,11 @@ except ImportError as e:  # pragma: no cover - depends on how the workspace is l
     from fiber_alignment.algorithm import PHASES, PHASE_VIEWS
     from fiber_alignment.cell import POWER_METER
 
-#: Live readout rate. A PM100x with ``averaging: 10`` takes ~30 ms per reading,
-#: so 10 Hz leaves the meter mostly free for the alignment's own readings.
-POWER_RATE_HZ = 10
+#: Live readout rate. A PM100x with ``averaging: 10`` takes ~30-35 ms per
+#: reading: 20 Hz is about as fast as it goes with room to spare. The driver's
+#: lock makes a step reading the meter wait at most one reading of it, and
+#: during an alignment this source does not read the meter at all.
+POWER_RATE_HZ = 100
 #: An alignment reading younger than this (s) stands in for the meter.
 ALIGN_FRESH_S = 0.5
 

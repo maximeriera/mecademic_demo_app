@@ -407,14 +407,14 @@ to detect:
 
 ### Testing without the cell
 
-`tests/fiber_alignment/sim.py` simulates the cell: a robot running the moves
+`app_logic/tests/fiber_alignment/sim.py` simulates the cell: a robot running the moves
 and answering pose queries as the cell does, and a meter reading what the ends
 couple at the robot's pose (late and smeared on the move), on a simulated
 clock. From the repository root:
 
 ```
 pip install -r requirements-dev.txt
-python -m pytest tests -q
+python -m pytest app_logic/tests -q
 ```
 
 The tests cover:
@@ -436,9 +436,9 @@ before Peak.
 To watch a simulated run in the real page:
 
 ```
-python tools/view_replay.py                                   # http://127.0.0.1:8765/view/
-python tools/view_replay.py --full-search --offset 50 0 0.45 0  # the whole search, light at the start
-python tools/view_replay.py --step & node tools/view_check.mjs  # browser check, screenshots in test-results/view/
+python app_logic/tools/view_replay.py                                   # http://127.0.0.1:8765/view/
+python app_logic/tools/view_replay.py --full-search --offset 50 0 0.45 0  # the whole search, light at the start
+python app_logic/tools/view_replay.py --step & node app_logic/tools/view_check.mjs  # browser check, screenshots in test-results/view/
 ```
 
 `--offset X Z RX RZ` puts the best pose that far from the start (µm, µm, °,

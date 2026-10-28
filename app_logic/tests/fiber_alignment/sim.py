@@ -14,7 +14,7 @@ algorithm.py to run unchanged, fast and deterministically:
   single-mode fibers), averaged over the time a reading takes while the robot
   moves: a reading taken during a scan is smeared and late, as on the cell.
 * :class:`FakeContext` publishes to a real :class:`core.DataHub` and records the
-  timeline in simulated time, for the replay tool (tools/view_replay.py).
+  timeline in simulated time, for the replay tool (app_logic/tools/view_replay.py).
 
 :func:`simulate` runs one alignment in a :class:`Scenario` and returns
 everything a test needs.
@@ -394,7 +394,7 @@ class FakeContext:
     """The AppContext calls alignment.py makes, on a real DataHub.
 
     Also records every publish and mark with its simulated time in ``timeline``,
-    for tools/view_replay.py.
+    for app_logic/tools/view_replay.py.
     """
 
     def __init__(self, clock: SimClock, params: Optional[Dict[str, Any]] = None):

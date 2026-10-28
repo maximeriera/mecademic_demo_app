@@ -56,7 +56,7 @@ They run at the speeds set in the Variables tab unless they set their own.
 | `fiber_alignment/fit.py` | Its curve fits: Gaussian profiles, parabolas and quadratics in log power |
 | `fiber_alignment/frames.py` | Frame math from the colleague's script (poses ↔ 4×4 matrices) |
 | `custom_view/` | `/view/`: live power vs threshold (green/red), the verdict, and a plot per alignment phase (see below) |
-| `../tests/fiber_alignment/`, `../tools/` | A simulated cell, the tests run on it, and a replay of a run into the custom view (see below) |
+| `tests/fiber_alignment/`, `tools/` | A simulated cell, the tests run on it, and a replay of a run into the custom view (see below). Development only: `.dockerignore` keeps them out of the image |
 
 ## To do before running on the cell
 
@@ -198,7 +198,7 @@ its phases and how to plot each (`PHASES`, `PHASE_VIEWS` in
 
 ## Testing without the cell
 
-`tests/fiber_alignment/sim.py` simulates the cell: a robot executing the
+`app_logic/tests/fiber_alignment/sim.py` simulates the cell: a robot executing the
 moves (answering pose queries the way the cell does), a power meter reading
 what the fiber ends couple at the robot's pose (collimated ends like the
 cell's, or bare single-mode fibers; late and smeared while the robot moves,
@@ -206,7 +206,7 @@ as a real reading is), on a simulated clock. From the repository root:
 
 ```
 pip install -r requirements-dev.txt
-python -m pytest tests -q
+python -m pytest app_logic/tests -q
 ```
 
 checks the alignment from the cell's run of 2026-10-27, from a few µW, from
@@ -215,9 +215,9 @@ fibers with a TCP off the tip, in the dark, and that what it publishes is
 what the custom view plots. To watch a simulated run in the real custom view:
 
 ```
-python tools/view_replay.py            # then open http://127.0.0.1:8765/view/
-python tools/view_replay.py --step &   # or let a browser check it:
-node tools/view_check.mjs              # screenshots in test-results/view/
+python app_logic/tools/view_replay.py            # then open http://127.0.0.1:8765/view/
+python app_logic/tools/view_replay.py --step &   # or let a browser check it:
+node app_logic/tools/view_check.mjs              # screenshots in test-results/view/
 ```
 
 `--full-search` replays a full search (with `--offset 50 0 0.45 0`, from

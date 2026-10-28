@@ -17,7 +17,7 @@ from app_logic.fiber_alignment import algorithm, alignment, frames
 
 from .sim import START_POSE, Scenario, simulate
 
-VIEW_JS = Path(__file__).resolve().parents[2] / "app_logic" / "custom_view" / "view.js"
+VIEW_JS = Path(__file__).resolve().parents[2] / "custom_view" / "view.js"
 AXES = {"x", "y", "z", "rx", "ry", "rz"}
 KINDS = {"cart", "ang", None}
 #: What a phase view may declare (algorithm.PHASE_VIEWS).

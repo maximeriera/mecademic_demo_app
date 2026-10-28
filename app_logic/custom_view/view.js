@@ -836,7 +836,7 @@
         };
     }
 
-    // Plot cards by view type (algorithm.PHASE_VIEWS); tests/fiber_alignment/test_contract.py reads this table.
+    // Plot cards by view type (algorithm.PHASE_VIEWS); app_logic/tests/fiber_alignment/test_contract.py reads this table.
     const RENDERERS = {
         map: renderMap,
         profiles: renderProfiles,
