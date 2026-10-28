@@ -594,7 +594,8 @@
     // A "map" card: the phase's readings as a 3D landscape over two axes.
     // When the phase searches ("acquire" payloads with a "search"), the
     // landscape follows the latest search, over the axes the view declares
-    // for it ("search_axes"), with that search's readings only. The light
+    // for it ("search_axes"), with the readings of its latest run only (a
+    // search may run several times, centred elsewhere: "around"). The light
     // detection level is marked on the colour bar. A map "until_end" goes on
     // with the readings of the later phases, to the end of the run, and its
     // surface shows the best power seen at each spot.
@@ -620,13 +621,16 @@
                 const axes = keys.map(a => AXES[a] || AXES.x);
                 // The test reads which axes are shown.
                 canvas.dataset.axes = keys.join(',');
-                const since = search ? minOf(acquire.filter(a => a.search === search).map(a => a.t)) : -Infinity;
+                // Each run of a search starts with a payload not "found" yet.
+                const runs = acquire.filter(a => a.search === search);
+                const begun = runs.filter(a => !a.found);
+                const since = !search ? -Infinity : begun.length ? begun[begun.length - 1].t : minOf(runs.map(a => a.t));
                 // "until_end": the later phases' readings (and the verdict's) too.
                 const shown = s => s[PHASE] === phase.index || (view.until_end && (s[PHASE] > phase.index || s[PHASE] < 0));
                 const samples = run.samples.filter(s => s[T] >= since && shown(s));
                 canvas.dataset.points = String(samples.length);
                 plot.update({
-                    key: `${run.key}:${name}:${keys.join(',')}`,
+                    key: `${run.key}:${name}:${keys.join(',')}:${since}`,
                     points: project(samples, axes),
                     names: axes.map(a => a.name), unit: axes[0].unit, minSpan: axes[0].unit === '°' ? 0.05 : 20,
                     threshold: run.threshold_w,
@@ -635,15 +639,18 @@
                     // Readings at the same spot from different phases: the best power seen there.
                     combine: view.until_end ? 'max' : 'mean',
                 });
-                const how = SEARCH_NAMES[search] || 'search';
+                // Where the search is centred, unless at the start: "remembered pose", "ring 3/6".
+                const around = a => (a.around && a.around !== 'start' ? ` · ${a.around}` : '');
+                const how = (SEARCH_NAMES[search] || 'search') + (last ? around(last) : '');
+                const atStart = last && last.around === 'remembered pose' ? 'light at the remembered pose' : 'light at the start';
                 let light = !last ? null : last.found ? `light found · ${how}` : how;
                 if (last && last.full) {
                     // A full search runs both spirals to the end, light at the start or not.
                     const first = acquire.find(a => a.found);
-                    light = `full search · ${!last.found ? how : last.warm ? 'light at the start'
-                        : `light found · ${SEARCH_NAMES[first.search] || 'search'}`}`;
+                    light = `full search · ${!last.found ? how : last.warm ? atStart
+                        : `light found · ${SEARCH_NAMES[first.search] || 'search'}${around(first)}`}`;
                 } else if (last && last.warm) {
-                    light = 'light at the start';
+                    light = atStart;
                 }
                 return phaseNumbers(run, phase, light && phase.status === 'running' && !last.found
                     ? `${light} · ${samples.length} readings` : light);

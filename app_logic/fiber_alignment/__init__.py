@@ -6,6 +6,7 @@
     process.py    the five steps, plus run_cycle()
     alignment.py  the contract with the alignment algorithm: 3D moves, scans, readings
     algorithm.py  the alignment algorithm: acquire, centre, tilt, peak
-    fit.py        its curve fits (Gaussian profiles, log-power parabolas)
+    memory.py     where each fiber aligned last, so that its next alignment starts there
+    fit.py       its curve fits (Gaussian profiles, log-power parabolas)
     frames.py     frame math, from the colleague's script
 """

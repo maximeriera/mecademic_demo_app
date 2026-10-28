@@ -24,8 +24,8 @@ from typing import Dict
 from core import AppContext
 from devices import Device
 
-from . import algorithm, gripper, poses
-from .alignment import AlignmentResult, run_alignment
+from . import algorithm, gripper, memory, poses
+from .alignment import AlignmentResult, AlignmentSettings, run_alignment
 from .cell import ROBOT, ProcessError, power_meter, prepare_robot, run_program
 
 
@@ -69,7 +69,9 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
     """Run the alignment algorithm from the current pose, then judge it against the threshold.
 
     The search stays within ``align_range_um`` / ``align_range_deg`` of where it
-    starts. It only makes sense at the alignment station, with a fiber.
+    starts. It only makes sense at the alignment station, with a fiber. It
+    starts the search where this fiber aligned last (see memory.py), and
+    remembers where it ends, whenever that is in the light.
     """
     with context.step("Align fiber"):
         logger = devices[ROBOT].logger
@@ -79,7 +81,12 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
         robot = prepare_robot(devices, context)
 
         result = run_alignment(robot, power_meter(devices), context, fiber=fiber, align=algorithm.align,
-                               logger=logger, phases=algorithm.PHASES, phase_views=algorithm.PHASE_VIEWS)
+                               logger=logger, phases=algorithm.PHASES, phase_views=algorithm.PHASE_VIEWS,
+                               seed=memory.remembered_pose(context, fiber, logger))
+
+        # In the light, even under the threshold: a better start for this fiber than align_start.
+        if math.isfinite(result.power_w) and result.power_w >= AlignmentSettings.from_context(context).signal_detect_w:
+            memory.remember(context, fiber, result.pose, result.power_w, logger)
 
         power_mw = result.power_w * 1e3
         # Overrange reads +inf, which the Variables tab could not display.

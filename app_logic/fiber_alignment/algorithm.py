@@ -13,11 +13,15 @@ guesses (``lateral_width_um``, ``angle_width_deg``); each fit re-measures them.
 ``align`` runs four phases, each inside ``with io.phase(name):`` and plotted by
 the custom view as PHASE_VIEWS declares:
 
-1. Acquire: the noise floor at the start. Unless light already reaches the
-   meter, a spiral in tilt (Rx/Rz) around the start, then, still dark, a
-   spiral in the lateral plane, each until light shows; then the move to the
-   best reading. With ``acquire_full_search`` (for demos), both spirals run
-   to their full radius, whatever the start reads.
+1. Acquire: the noise floor where the search starts: the pose remembered for
+   this fiber (``io.seed``) if there is one, else the start. Unless light
+   already reaches the meter, a spiral in tilt (Rx/Rz) there, then, still
+   dark, a spiral in the lateral plane, each until light shows; dark at the
+   remembered pose, the same around the start. Still dark, tilt spirals at
+   ``acquire_ring_um`` around the start (6 points): a picked fiber is often
+   off in tilt and sideways at once, which neither spiral alone finds. Then
+   the move to the best reading. With ``acquire_full_search`` (for demos), the
+   first two spirals run to their full radius, whatever the start reads.
 2. Center: two-way scans across the light along x then z, each fitted with a
    Gaussian over the noise floor; the fiber moves to the fitted centre until
    it no longer shifts. The two directions also measure what is left of the
@@ -77,8 +81,12 @@ PHASE_VIEWS = {
 #: Samples averaged per reading (about 3 ms each on a PM100x): while scanning, and at rest.
 SCAN_AVERAGING = 1
 STILL_AVERAGING = 10
-#: Fixed meter range of the scans, × the source power: no range switch mid-scan.
+#: Fixed meter range of the scans (no range switch mid-scan): at most this × the source power.
 SCAN_RANGE = 1.2
+#: A scan's range starts at this × the power expected (at least × the
+#: detection level), so faint light keeps the meter's resolution: at 1.2 mW,
+#: a reading of a few tens of nW rounds to nothing. An overrange raises it ×10.
+SCAN_HEADROOM = 10.0
 #: Highest range tried when light overranges it (W).
 MAX_RANGE_W = 1.0
 
@@ -111,6 +119,8 @@ PAST_PEAK = 0.5
 #: Room the window must leave around the searches (mm, degrees).
 WINDOW_MARGIN_MM = 0.1
 ANGLE_MARGIN_DEG = 0.5
+#: Points of the ring of tilt spirals (acquire_ring_um), evenly around the start.
+RING_POINTS = 6
 
 # --- Center --------------------------------------------------------------------------------
 #: A cross scan spans ± SCAN_HALF_WIDTHS widths, with SCAN_DENSITY readings per width.
@@ -181,7 +191,7 @@ class _State:
     #: The meter's reading without light (W), and the lowest reading counted as light.
     baseline_w: float = 0.0
     detect_w: float = 0.0
-    #: Fixed range of the scans (W); raised if light overranges it.
+    #: Highest fixed range of the scans (W); raised if light overranges it.
     scan_range_w: float = 0.0
     # Meter and motion settings in force, so that only changes are sent.
     averaging: Optional[int] = None
@@ -202,6 +212,10 @@ def align(io: AlignmentIO, settings: AlignmentSettings) -> None:
         raise AlignmentError(
             f"acquire_radius_deg ({settings.acquire_radius_deg:g}) needs {ANGLE_MARGIN_DEG:g}° of room inside "
             f"align_range_deg ({settings.range_deg:g}): lower it, or widen the window.")
+    if settings.acquire_ring_mm + WINDOW_MARGIN_MM > settings.range_mm:
+        raise AlignmentError(
+            f"acquire_ring_um ({settings.acquire_ring_mm * 1e3:g}) needs {WINDOW_MARGIN_MM * 1e3:g} µm of room "
+            f"inside align_range_um ({settings.range_mm * 1e3:g}): lower it, or widen the window.")
     lo, hi = PEAK_GRID_BOUNDS
     if not (lo <= settings.peak_grid <= hi and settings.peak_grid % 2 == 1):
         raise AlignmentError(f"peak_grid ({settings.peak_grid}) must be odd, from {lo} to {hi}: the centre of "
@@ -260,12 +274,24 @@ def generate_archimedean_spiral(center=(0.0, 0.0), max_radius=0.5, spiral_pitch=
 
 
 def acquire(io: AlignmentIO, state: _State) -> None:
-    """The noise floor; unless light shows already, a tilt spiral, then a lateral one; ends on the best reading.
+    """The noise floor; unless light shows already, the searches for it; ends on the best reading.
 
-    With ``full_search``, both spirals run to their full radius, light at the
-    start or not, each ending on its best reading: the whole search, for a demo.
+    It starts at the pose remembered for this fiber (``io.seed``) when the
+    searches around it fit in the window, else at the start. Dark there: a
+    tilt spiral, then a lateral one; dark at the remembered pose, the same
+    around the start; still dark, tilt spirals at the ring's points around
+    the start. With ``full_search``, the first two spirals run to their full
+    radius, light at the start or not, each ending on its best reading: the
+    whole search, for a demo.
+
+    Every "acquire" payload says where its search is centred ("around"):
+    "remembered pose", "start", or "ring k/n".
     """
     s = state.settings
+    seed = _seed(io, state)
+    if seed is not None:
+        state.pos.update(seed)
+        _goto(io, state)
     _averaging(io, state, SCAN_AVERAGING)
     _range(io, state, None)
     noise, sigma = fit.noise_stats([io.read_power("cart") for _ in range(NOISE_READS)])
@@ -276,10 +302,12 @@ def acquire(io: AlignmentIO, state: _State) -> None:
     else:
         state.baseline_w = noise if math.isfinite(noise) else 0.0
         state.detect_w = max(s.signal_detect_w, noise + NOISE_SIGMAS * sigma) if math.isfinite(noise) else s.signal_detect_w
-    info = {"noise_w": noise, "sigma_w": sigma, "detect_w": state.detect_w, "warm": warm, "full": s.full_search}
+    info = {"noise_w": noise, "sigma_w": sigma, "detect_w": state.detect_w, "warm": warm, "full": s.full_search,
+            "around": "start" if seed is None else "remembered pose"}
     if warm and not s.full_search:
         state.peak_w = noise
-        io.publish("acquire", {**info, "search": None, "found": True, "at": [0.0, 0.0], "power_w": noise})
+        io.publish("acquire", {**info, "search": None, "found": True,
+                               "at": [round(state.pos["x"], 5), round(state.pos["z"], 5)], "power_w": noise})
         return
     if s.full_search:
         found = [spiral(io, state, search, info, full=True) for search in ("angle", "lateral")]
@@ -293,10 +321,54 @@ def acquire(io: AlignmentIO, state: _State) -> None:
         for search in ("angle", "lateral"):
             if spiral(io, state, search, info):
                 return
+    where = (f"tilting ±{s.acquire_radius_deg:g}° nor moving ±{s.acquire_radius_mm * 1e3:g} µm around the start"
+             + ("" if seed is None else " and around the fiber's remembered pose"))
+    if seed is not None:
+        # The fiber is no longer where it aligned last: the same searches around the start.
+        state.pos.update(x=0.0, z=0.0, rx=0.0, rz=0.0)
+        _goto(io, state)
+        for search in ("angle", "lateral"):
+            if spiral(io, state, search, {**info, "around": "start"}):
+                return
+    ring = _ring(state)
+    for k, (x, z) in enumerate(ring, start=1):
+        # Off sideways too far for the tilt spiral at the start to see the light: the same, from here.
+        state.pos.update(x=x, z=z, rx=0.0, rz=0.0)
+        _goto(io, state)
+        if spiral(io, state, "angle", {**info, "around": f"ring {k}/{len(ring)}"}):
+            return
+    if ring:
+        where += f", nor tilting at {len(ring)} points {s.acquire_ring_mm * 1e3:g} µm around it"
     raise AlignmentNoSignal(
-        f"No light above {state.detect_w:.3g} W (noise {noise:.3g} W) tilting ±{s.acquire_radius_deg:g}° "
-        f"nor moving ±{s.acquire_radius_mm * 1e3:g} µm around the start: check the laser, the fibers "
+        f"No light above {state.detect_w:.3g} W (noise {noise:.3g} W) {where}: check the laser, the fibers "
         f"and the align_start pose.")
+
+
+def _seed(io: AlignmentIO, state: _State) -> Optional[Dict[str, float]]:
+    """The pose remembered for this fiber, as pos (x, z, rx, rz), or None.
+
+    None too when the spirals around it would leave the window (align_start
+    taught again far from it). Its offset along the fiber (y) is not used:
+    the gap stays the one align_start taught.
+    """
+    if io.seed is None:
+        return None
+    s = state.settings
+    x, _, z, rx, _, rz = io.seed
+    lateral_room = (s.range_mm - WINDOW_MARGIN_MM - s.acquire_radius_mm) * 1e3
+    angle_room = s.range_deg - ANGLE_MARGIN_DEG - s.acquire_radius_deg
+    if math.hypot(x, z) > lateral_room or math.hypot(rx, rz) > angle_room:
+        return None
+    return {"x": x, "z": z, "rx": rx, "rz": rz}
+
+
+def _ring(state: _State) -> List[Tuple[float, float]]:
+    """The lateral points (x, z in µm) of the ring of tilt spirals, around the start: none if acquire_ring_um is 0."""
+    radius = state.settings.acquire_ring_mm * 1e3
+    if radius <= 0:
+        return []
+    return [(radius * math.cos(2 * math.pi * k / RING_POINTS), radius * math.sin(2 * math.pi * k / RING_POINTS))
+            for k in range(RING_POINTS)]
 
 
 def spiral(io: AlignmentIO, state: _State, search: str, info: Dict, full: bool = False) -> bool:
@@ -451,11 +523,17 @@ def cross_scan(io: AlignmentIO, state: _State, axis: str, iteration: int,
 
 def _scan_both_ways(io: AlignmentIO, state: _State, axis: str, lo: float, hi: float,
                     spacing: float) -> List[Tuple[int, List[Tuple[float, float]]]]:
-    """Readings (coordinate, power) from lo to hi, then back, at a fixed meter range; raised on an overrange."""
+    """Readings (coordinate, power) from lo to hi, then back, at a fixed meter range; raised on an overrange.
+
+    The range starts at SCAN_HEADROOM × the power expected (at least × the
+    detection level), at most state.scan_range_w.
+    """
     index = LOCAL_INDEX[axis]
+    expected = max((p for p in (state.peak_w, state.detect_w) if math.isfinite(p)), default=0.0)
+    range_w = min(state.scan_range_w, SCAN_HEADROOM * expected) if expected > 0 else state.scan_range_w
     while True:
         _averaging(io, state, SCAN_AVERAGING)
-        _range(io, state, state.scan_range_w)
+        _range(io, state, range_w)
         _goto(io, state, **{axis: lo})
         _motion(io, state, lin_vel=_scan_speed(io, spacing), blending=0)
         passes = []
@@ -465,9 +543,10 @@ def _scan_both_ways(io: AlignmentIO, state: _State, axis: str, lo: float, hi: fl
         if not any(math.isinf(p) for _, pts in passes for _, p in pts):
             return passes
         # More light than the range: a range ten times higher, and again.
-        state.scan_range_w *= 10.0
-        if state.scan_range_w > MAX_RANGE_W:
-            raise AlignmentError(f"The power meter overranges at {state.scan_range_w / 10:.3g} W: "
+        range_w *= 10.0
+        state.scan_range_w = max(state.scan_range_w, range_w)
+        if range_w > MAX_RANGE_W:
+            raise AlignmentError(f"The power meter overranges at {range_w / 10:.3g} W: "
                                  f"check source_power_mw and the meter.")
 
 

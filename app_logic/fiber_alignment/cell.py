@@ -38,7 +38,8 @@ def prepare_robot(devices: Dict[str, Device], context: AppContext) -> Any:
 
     Every process function starts with this. Speeds edited in the Variables tab
     therefore apply from the next step on, and the steps can run in any order
-    from the Manual tab.
+    from the Manual tab. It returns once the robot has applied them and run the
+    ``init`` program: the alignment reads its start pose right after.
     """
     if not poses.POSES_TAUGHT:
         raise ProcessError(
@@ -46,7 +47,6 @@ def prepare_robot(devices: Dict[str, Device], context: AppContext) -> Any:
             "then set POSES_TAUGHT = True."
         )
     robot = devices[ROBOT].api
-    robot.ActivateSim()
     robot.SetTrf(*poses.TOOL_TRF)
     robot.SetJointVel(context.get_param("joint_vel_pct", 20.0))
     robot.SetCartLinVel(context.get_param("lin_vel_mm_s", 10.0))
@@ -56,6 +56,8 @@ def prepare_robot(devices: Dict[str, Device], context: AppContext) -> Any:
     # straight descent onto a slot.
     robot.SetBlending(0)
     robot.StartProgram(poses.INIT_PROGRAM)
+    # These are queued: wait until they apply. ABORT interrupts the wait.
+    robot.WaitIdle()
     return robot
 
 

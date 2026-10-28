@@ -19,6 +19,9 @@ here:
 * Every target pose is checked **before anything is sent**: each coordinate
   must stay within ``align_range_um`` / ``align_range_deg`` of the start pose,
   and be a finite number.
+* A pose remembered for the fiber (``seed``, where it aligned last) reaches
+  the algorithm as ``io.seed``, offsets from the start. The window stays
+  centred on the start: a remembered pose never moves it.
 * ABORT, a device fault and ``align_timeout_s`` are checked before every
   command and every reading. A scan interrupted for any reason clears the
   robot's motion queue, so queued moves never run on after it.
@@ -144,6 +147,8 @@ class AlignmentSettings:
     #: How far the searches for first light go from the start: tilt (degrees), lateral (mm).
     acquire_radius_deg: float
     acquire_radius_mm: float
+    #: Still no light, the tilt search runs again at points this far around the start (mm); 0: not.
+    acquire_ring_mm: float
     #: Lowest power counted as light (W). The algorithm raises it above the noise it measures.
     signal_detect_w: float
     #: Run both searches for first light to their full radius, even with light
@@ -169,6 +174,8 @@ class AlignmentSettings:
             angle_width_deg=float(context.get_param("angle_width_deg", 0.3)),
             acquire_radius_deg=float(context.get_param("acquire_radius_deg", 2.0)),
             acquire_radius_mm=float(context.get_param("acquire_radius_um", 500.0)) * 1e-3,
+            # Off unless context.yaml sets it (750 there).
+            acquire_ring_mm=float(context.get_param("acquire_ring_um", 0.0)) * 1e-3,
             signal_detect_w=float(context.get_param("signal_detect_uw", 1.0)) * 1e-6,
             full_search=bool(context.get_param("acquire_full_search", False)),
             peak_grid=int(context.get_param("peak_grid", 5)),
@@ -207,6 +214,9 @@ class AlignmentIO:
         self.start: Pose6 = self._target_pose()
         self._start_matrix = frames.pose_matrix(self.start)
         self._start_inverse = np.linalg.inv(self._start_matrix)
+        #: Where this fiber aligned last, as :meth:`local` offsets from the
+        #: start, or None. Set by run_alignment; never checked against the window.
+        self.seed: Optional[Pose6] = None
         self._t0 = time.monotonic()
         self._deadline = self._t0 + settings.timeout_s
         #: Every reading so far.
@@ -627,7 +637,8 @@ Algorithm = Callable[[AlignmentIO, AlignmentSettings], None]
 
 def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
                   align: Algorithm, logger: Optional[logging.Logger] = None,
-                  phases: Sequence[str] = (), phase_views: Optional[Dict[str, Any]] = None) -> AlignmentResult:
+                  phases: Sequence[str] = (), phase_views: Optional[Dict[str, Any]] = None,
+                  seed: Optional[Sequence[float]] = None) -> AlignmentResult:
     """Run ``align`` from the robot's current pose, then judge the result.
 
     Brackets the run with ``align_start`` / ``align_end`` events and publishes
@@ -635,13 +646,20 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
     custom view. Each phase is logged to ``logger`` (the robot's device log).
     ``phases`` are the algorithm's phase names, in order (``algorithm.PHASES``),
     and ``phase_views`` how the custom view plots each (``algorithm.PHASE_VIEWS``).
+    ``seed`` is a robot pose where this fiber aligned before: the algorithm
+    gets it as ``io.seed`` and may start there.
     """
     log = logger or logging.getLogger(__name__)
     settings = AlignmentSettings.from_context(context)
     phase_views = dict(phase_views or {})
     io = AlignmentIO(robot, meter, context, settings, logger=log, phases=phases)
-    log.info(f"Alignment of fiber {fiber}: start {_fmt_pose(io.start)}, window ±{settings.range_mm:g} mm / "
-             f"±{settings.range_deg:g}°, threshold {settings.threshold_w:.4g} W, timeout {settings.timeout_s:g} s. "
+    if seed is not None:
+        io.seed = io.local(seed)
+    remembered = "" if io.seed is None else (
+        f", remembered pose at x {io.seed[0]:.1f} µm, z {io.seed[2]:.1f} µm, "
+        f"rx {io.seed[3]:.3f}°, rz {io.seed[5]:.3f}° from it")
+    log.info(f"Alignment of fiber {fiber}: start {_fmt_pose(io.start)}{remembered}, window ±{settings.range_mm:g} mm "
+             f"/ ±{settings.range_deg:g}°, threshold {settings.threshold_w:.4g} W, timeout {settings.timeout_s:g} s. "
              f"Robot: {io._robot_state()}")
     context.mark("align_start", fiber=fiber, threshold_w=settings.threshold_w, start=list(io.start),
                  range_mm=settings.range_mm, range_deg=settings.range_deg, phases=list(io.phases),

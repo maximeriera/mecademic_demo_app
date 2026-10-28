@@ -31,7 +31,10 @@ algorithm.py; tests/fiber_alignment/test_contract.py checks it):
     (a spiral in rx/rz) or "lateral" (a spiral in x/z), published as each
     spiral starts and as it ends on the light, with its ``radius``, ``pitch``
     and ``unit`` (° or µm), and once found ``at`` (the spiral's two axes) and
-    ``power_w``.
+    ``power_w``. ``around``: where the search is centred, "remembered pose"
+    (where this fiber aligned last), "start", or "ring k/n" (the tilt spirals
+    around the start, when both spirals found nothing). A search may run
+    several times: the map shows its latest run.
   - ``align_profile``: one per 1-D scan. ``axis`` (x, z, rx or rz), ``unit``
     (µm or °), ``iteration``, ``rescan``, ``span`` [lo, hi], ``passes``
     [{``dir`` 1 or -1, ``points`` [[coord, power_w], ...]}], ``fit`` (null,

@@ -31,9 +31,13 @@ reflected at the two glass/air faces. On screen, that is −0.31 dB vs source.
   and tilt it (Rx, Rz). It never moves it along its axis: the gap stays as
   taught, so the two ends can never touch.
 - **Lopsided tolerances.** Sideways, the beam forgives a few hundred µm. In
-  angle, 0.3° already loses two thirds of the light. More than about 0.7° off,
+  angle, 0.2° already loses two thirds of the light. More than about 0.7° off,
   nothing reaches the meter: it reads noise, and there is no slope to climb.
   So finding the light is mostly a matter of angle.
+- **A different fiber every cycle.** Each fiber sits a little differently in
+  the gripper and points a little differently. A fiber just picked is often
+  off in angle and sideways at once, the hardest case to find. So the robot
+  remembers where each fiber aligned last time, and starts there.
 - **Angle and position are linked.** Tilting the receiver about its tip also
   moves the sideways position where it collects best, by about 175 µm per
   degree for ends 10 mm apart. Each tilt has to be re-centred before it can be
@@ -49,15 +53,17 @@ is outlined in yellow.
 
 | Phase | What the robot does | What the card shows |
 |---|---|---|
-| **Acquire**: find the light | It measures the meter's noise. If light already reaches the meter, it goes straight to Center (unless the full search is on: see below). Otherwise it spirals out in angle (up to 2°), then, still in the dark, sideways (up to 500 µm). It stops once it has passed the light, then goes back to the brightest point. | A 3D landscape of the power along the spiral, over Rx/Rz for the tilt spiral and over X/Z for the sideways one. The "light" mark on the colour bar is the level that counts as light. It keeps filling during the later phases: their readings join the map, which shows the best power seen at each spot, so the landscape rises to the final peak as the robot climbs. |
+| **Acquire**: find the light | It goes to where this fiber aligned last time, if it has before, and measures the meter's noise. If light already reaches the meter, it goes straight to Center (unless the full search is on: see below). Otherwise it spirals out in angle (up to 3°), then, still in the dark, sideways (up to 500 µm). Still dark, it spirals in angle again at 6 points around the start, 750 µm out. It stops once it has passed the light, then goes back to the brightest point. | A 3D landscape of the power along the latest spiral, over Rx/Rz for a tilt spiral and over X/Z for a sideways one. The line under it says where the spiral is centred: "remembered pose", "ring 3/6", or nothing for the start; "light at the remembered pose" when the fiber found light where it aligned last time. The "light" mark on the colour bar is the level that counts as light. It keeps filling during the later phases: their readings join the map, which shows the best power seen at each spot, so the landscape rises to the final peak as the robot climbs. |
 | **Center**: centre on the beam | It sweeps across the beam along X, then along Z, both ways. It fits a bell curve to each sweep and moves to its top, until the top stops moving. | The latest X and Z sweeps (green forward, blue backward), the fitted bell curve, and the chosen centre in yellow. |
 | **Angle**: square the angle | For Rx, then Rz, it tries tilts stepping away from the current one while the power rises, re-centring at each tilt. A curve through the best tilts picks the angle. It repeats with finer steps while that still gains. | Top: the power against each tilt, with the fitted curve and the "walk": how far the best position moves per degree of tilt. Bottom: the sideways re-centring sweeps. |
 | **Peak**: the last few µm | It takes readings at rest on a small square grid, 5×5 by default (±0.2 beam width, about ±50 µm). It fits a dome to them and steps to its top, until the steps are tiny. It ends on the best reading taken at rest. | The grid readings as a 3D landscape, the centre of each iteration on its floor, and the step each iteration took. |
 
 When the start is tilted, Angle brings by far the largest gain (+6 to
 +18 dB in simulation); when it is only off sideways, Center does. The whole
-alignment takes about 18 to 26 s on the simulated cell. On the real cell, it
-scales with how fast the meter and the robot answer.
+alignment takes about 18 to 26 s on the simulated cell, 30 to 45 s when the
+start is off in angle and sideways at once, and about 11 s from a fiber's
+remembered pose. On the real cell, it scales with how fast the meter and the
+robot answer.
 
 ### The top row
 
@@ -83,11 +89,12 @@ When light already reaches the meter at the start, Acquire skips the
 spirals, so the audience never sees the search. To show it, set
 `acquire_full_search` to true in the Variables tab while the cell is idle.
 
-Every alignment then runs the tilt spiral out to its full 2°, then the
+Every alignment then runs the tilt spiral out to its full 3°, then the
 sideways spiral out to its full 500 µm around the best tilt found, even with
-light at the start. Each spiral ends on its brightest point. The Acquire card
-reads "full search · …". It costs a few seconds per fiber; set it back to
-false for production.
+light at the start. Both are centred where the fiber starts: its remembered
+pose, else the start. Each spiral ends on its brightest point. The Acquire
+card reads "full search · …". It costs a few seconds per fiber; set it back
+to false for production.
 
 ---
 
@@ -110,9 +117,15 @@ offsets. The rows published on `align_sample` use them too.
 
 **Acquire** (`acquire`, `spiral`)
 
-- **Noise.** 20 readings at the start give the noise floor (their median)
-  and its spread σ. Light is a reading of at least `signal_detect_uw`, and at
-  least median + 8σ.
+- **Where it starts.** At the pose where this fiber aligned last
+  (`io.seed`, from the `fiber_poses` variable: see "Remembered poses"
+  below), else at the start. A remembered pose is not used if the spirals
+  around it would leave the window (`align_start` taught again far from it).
+  Its offset along the fiber is never used: the gap stays the taught one.
+- **Noise.** 20 readings there give the noise floor (their median) and its
+  spread σ. Light is a reading of at least `signal_detect_uw` (5 nW), and at
+  least median + 8σ. The meter's noise on the cell is ~0.01–0.15 nW; on a run
+  of 2026-10-28, 6–9 nW showed during spirals that 1 µW called dark.
 - **Light at the start** (median ≥ `signal_detect_uw`). Straight to Center,
   with no baseline under the fits (unless `acquire_full_search`, below).
 - **Tilt spiral.** An Archimedean spiral in Rx/Rz around the start tilt, out
@@ -127,10 +140,20 @@ offsets. The rows published on `align_sample` use them too.
   at rest.
 - **Lateral spiral.** If still dark: the same in X/Z, out to
   `acquire_radius_um`, with a pitch of 1.5 lateral widths.
+- **Remembered pose dark.** The fiber is no longer where it aligned last:
+  the tilt spiral, then the lateral one, again around the start.
+- **The ring.** Still dark: the tilt spiral again at 6 points
+  `acquire_ring_um` (750 µm) around the start, at the start's tilt, until one
+  sees light. The tilt spiral alone covers a start off in angle, the lateral
+  spiral one off sideways; a fiber just picked is often off in both at once,
+  which neither covers. With `acquire_ring_um` 0, no ring.
 - **Still dark.** `AlignmentNoSignal`.
-- **`acquire_full_search`.** Both spirals run to their full radius whatever
-  the start reads, with no stop past the light. Each ends on its best
-  reading, and the lateral spiral runs around the best tilt.
+- **`acquire_full_search`.** The first two spirals run to their full radius
+  whatever the start reads, with no stop past the light. Each ends on its
+  best reading, and the lateral spiral runs around the best tilt.
+- **Each payload** on `align_acquire` says where its spiral is centred
+  (`around`: "remembered pose", "start", "ring k/6"); the Acquire card maps
+  the latest spiral only.
 
 **Center** (`center`, `cross_scan`)
 
@@ -138,7 +161,9 @@ offsets. The rows published on `align_sample` use them too.
   centre moves less than max(0.5 µm, 0.05 width).
 - **A scan.** It spans ±1.5 widths around the current estimate, with a
   reading every width/10 (at least 0.25 µm). Each scan runs both ways, with
-  1 sample per reading and the meter at a fixed range (1.2 × source).
+  1 sample per reading and the meter at a fixed range: 10 × the power
+  expected (at least 10 × the light level), at most 1.2 × source, ×10 on an
+  overrange. At 1.2 × source, faint first light (tens of nW) would read 0.
 - **The fit.** Each direction is fitted with a Gaussian over the noise floor:
   log(power − floor) is a parabola, fitted with weights.
   - The centre is the mean of the two directions.
@@ -201,33 +226,52 @@ offsets. The rows published on `align_sample` use them too.
 - The result is published on `align_result`, with everything the page needs
   to redraw the run after a reload.
 
+**Remembered poses** (`memory.py`, called by `process.align_fiber`)
+
+- After every alignment whose final reading is light (≥ `signal_detect_uw`),
+  passed or not, the final pose is kept for that fiber in the `fiber_poses`
+  variable (JSON, persisted). The next alignment of the same fiber starts
+  there.
+- The poses are the robot's, in the WRF: they stay valid if `align_start` is
+  taught again. One kept with another `TOOL_TRF` is not used.
+- To forget them (a fiber moved in its slot, a new rack), press Reset on
+  `fiber_poses` in the Variables tab, or set it to `{}`.
+
 ### Params (`context.yaml`, Variables tab)
+
+The defaults are `context.yaml`'s. Every param persists: an edit in the
+Variables tab survives a restart, but then a new default in `context.yaml`
+does not apply to it until you press Reset on it.
 
 | Param | Default | What it sets |
 |---|---|---|
-| `power_threshold_mw` | 0.9 | Pass or fail. Set it 0.5–1 dB under the peak measured on the setup. |
-| `source_power_mw` | 1.0 | The source's output. The scans' fixed meter range is 1.2 × this; the verdict shows dB against it. |
+| `power_threshold_mw` | 0.65 | Pass or fail. Set it 0.5–1 dB under the peak measured on the setup (0.76 mW on 2026-10-28). |
+| `source_power_mw` | 1.0 | The source's output. The scans' fixed meter range is at most 1.2 × this; the verdict shows dB against it. |
 | `lateral_width_um` | 200 | Starting guess of the lateral 1/e² radius. Cross scans span ±1.5 widths with a reading every width/10, the lateral spiral's pitch is 1.5 widths, and the Peak pattern spans ±0.2 width. Re-measured by every fit. |
-| `angle_width_deg` | 0.3 | Starting guess of the tilt 1/e half-width. The tilt spiral's pitch is 1.5 widths, and the first tilt step 0.5 width. Re-measured by the tilt parabolas. |
-| `acquire_radius_deg` | 2.0 | How far the tilt spiral goes. |
+| `angle_width_deg` | 0.2 | Starting guess of the tilt 1/e half-width (0.19° measured on 2026-10-28). The tilt spiral's pitch is 1.5 widths, and the first tilt step 0.5 width. Re-measured by the tilt parabolas. |
+| `acquire_radius_deg` | 3.0 | How far the tilt spiral goes. |
 | `acquire_radius_um` | 500 | How far the lateral spiral goes. |
-| `signal_detect_uw` | 1.0 | Lowest power counted as light, raised to noise + 8σ. |
-| `acquire_full_search` | false | Run both spirals in full, even with light at the start (demo). |
+| `acquire_ring_um` | 750 | How far around the start the ring of tilt spirals runs, when both spirals found nothing. 0: no ring. |
+| `signal_detect_uw` | 0.005 | Lowest power counted as light, raised to noise + 8σ. |
+| `acquire_full_search` | true | Run the first two spirals in full, even with light at the start (demo). |
 | `peak_grid` | 5 | Readings per side of the Peak pattern: odd, 3 to 9 (anything else is refused before the robot moves). More readings give a finer grid and a better fit, but a slower phase. |
-| `align_range_um` | 2000 | Window: how far X, Y, Z may go from the start. It must leave 100 µm beyond `acquire_radius_um`. |
+| `align_range_um` | 2000 | Window: how far X, Y, Z may go from the start. It must leave 100 µm beyond `acquire_radius_um` and `acquire_ring_um`. |
 | `align_range_deg` | 8.0 | Window: how far the three angles may turn. It must leave 0.5° beyond `acquire_radius_deg`. |
-| `align_timeout_s` | 300 | After this, back to the best reading at rest, and judged there. |
+| `align_timeout_s` | 150 | After this, back to the best reading at rest, and judged there. |
 | `align_settle_s` | 0.05 | Pause after each point-to-point move. |
 
 The finer constants (spans, densities, steps, stop criteria) are at the top
 of `algorithm.py`, each with its reason.
 
-How far the searches reach, with the cell's optics (240 µm, 0.3°) and 1 µW
+How far the searches reach, with the cell's optics (240 µm, 0.2°) and 5 nW
 to detect:
-- light shows within about ±0.75° of the best tilt (at the best position),
-  and within about ±440 µm of the best position (at the best tilt);
-- so the tilt spiral finds a start up to about 2.7° off in tilt, and the
-  lateral spiral one up to about 0.9 mm off sideways.
+- light shows within about ±0.7° of the best tilt (at the best position),
+  and within about ±590 µm of the best position (at the best tilt);
+- so the tilt spiral finds a start up to about 3.7° off in tilt, and the
+  lateral spiral one up to about 1.1 mm off sideways;
+- a start off in both at once is the ring's: in simulation, light was found
+  from 48 of 48 starts up to 900 µm and 2.5° off together (26 of 48 with
+  1 µW and no ring).
 
 ### Readings, poses and timing
 
@@ -249,16 +293,18 @@ to detect:
   cancelled by scanning both ways. It shows as `lag` on the Center card.
 - **The meter.**
   - 1 sample per reading while scanning, 10 at rest.
-  - A fixed range during cross scans: 1.2 × source, ×10 on an overrange, up
-    to 1 W. Auto range in the spirals, in the Peak phase and for the verdict.
+  - A fixed range during cross scans: 10 × the power expected, at most
+    1.2 × source, ×10 on an overrange, up to 1 W. Auto range in the spirals,
+    in the Peak phase and for the verdict.
   - The meter's settings are restored after the run.
 
 ### Safety
 
 - **The window.** Every pose is checked against `align_range_um` /
   `align_range_deg` before it is sent. One outside is refused, and the
-  alignment faults. The spirals' radii are checked against the window before
-  anything moves.
+  alignment faults. The spirals' radii and the ring are checked against the
+  window before anything moves. The window stays centred on `align_start`:
+  a remembered pose never moves it.
 - **No move along the fiber.** Tool Y is never commanded, so the gap stays
   as taught. The simulator fails any run where the ends touch.
 - **Timeout.** After `align_timeout_s`, the fiber goes back slowly to the
@@ -272,9 +318,9 @@ to detect:
 
 | Message | Meaning | What to do |
 |---|---|---|
-| `No light above … tilting ±2° nor moving ±500 µm around the start: check the laser, the fibers and the align_start pose.` | Neither spiral saw light. | Check the laser is on and both fibers are connected. Check `align_start` lands within ~2° and ~0.5 mm of the best pose. Or raise the radii, within the window. |
+| `No light above … tilting ±3° nor moving ±500 µm around the start (and around the fiber's remembered pose), nor tilting at 6 points 750 µm around it: check the laser, the fibers and the align_start pose.` | No search saw light. | Check the laser is on and both fibers are connected. Check `align_start` lands within ~3° and ~1 mm of the best pose. Or raise the radii, within the window. |
 | `Lost the light while centring along x: …` | The light vanished during Center. | The laser, the fibers, or the fiber slipping in the gripper. |
-| `acquire_radius_um (…) needs 100 µm of room inside align_range_um (…)` (or `acquire_radius_deg`) | A spiral would leave the window. Refused before anything moves. | Lower the radius, or widen the window. |
+| `acquire_radius_um (…) needs 100 µm of room inside align_range_um (…)` (or `acquire_radius_deg`, `acquire_ring_um`) | A spiral would leave the window. Refused before anything moves. | Lower the radius, or widen the window. |
 | `X … is … mm from the start: outside the ±… mm window` | The algorithm asked for a pose beyond the window. | Widen the window, or start closer to the best pose. |
 | `The power meter overranges at … W: check source_power_mw and the meter.` | More light than the meter's top range. | Check `source_power_mw` and the meter. |
 | `The robot dropped the scan …`, `The robot is not executing the scan …`, `The robot did not complete a move …` | The robot is in error, paused or not activated. The message gives its state. | Clear the robot's error, then Clear Faults. |
@@ -293,8 +339,11 @@ to detect:
    scan. Two-way scans cancel it, but a large value means slow readings.
 4. **Threshold.** Note the peak power of a good alignment, then set
    `power_threshold_mw` 0.5–1 dB under it.
-5. **Cold starts.** Run 5 alignments from no light (tilted ~1° from the
-   Manual tab) and 5 from a few µW. Note their time and final power.
+5. **Cold starts.** Reset `fiber_poses` first, or the remembered pose skips
+   the search. Run 5 alignments from no light (tilted ~1° from the Manual
+   tab) and 5 from a few µW. Note their time and final power.
+6. **Remembered poses.** Align each fiber once from the rack. The next time
+   it is picked, the Acquire card should read "light at the remembered pose".
 
 ### Testing without the cell
 
@@ -315,6 +364,11 @@ The tests cover:
 - single-mode fibers, with a TCP off the tip;
 - the dark;
 - that what the alignment publishes is what the view plots.
+
+They run without `acquire_ring_um` (it is 0 when `context.yaml` does not set
+it) and with no remembered pose, so they check the searches as they were.
+The ring, the 5 nW detection and the remembered poses were checked with
+separate simulated runs on 2026-10-28, with the `context.yaml` params.
 
 To watch a simulated run in the real page:
 
