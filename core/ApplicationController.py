@@ -514,6 +514,13 @@ class ApplicationController:
             self._current_task.start()
             return True
 
+    def is_busy(self) -> bool:
+        """True while a task runs, the cell initializes or a device switches link."""
+        task = self._current_task
+        return ((task is not None and task.is_alive())
+                or self.get_state() == ControllerState.INITIALIZING
+                or bool(self._in_transition))
+
     def task_refusal_reason(self, task_type: TaskType) -> str | None:
         """Why *task_type* may not start because of device links, or None.
 

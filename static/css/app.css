@@ -2304,3 +2304,48 @@ button:active { transform: scale(0.98); }
 a.link-btn {
     text-decoration: none;
 }
+
+/* --- Workspace picker --- */
+.workspace-name {
+    margin-top: 6px;
+    font-size: 0.78em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-accent-soft);
+    overflow-wrap: anywhere;
+}
+.workspace-name:empty {
+    display: none;
+}
+.workspace-select {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    background: var(--color-panel-2);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 0.85em;
+}
+.workspace-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+}
+.workspace-buttons button {
+    padding: 10px 6px;
+    font-size: 0.75em;
+}
+.workspace-buttons button:disabled,
+.workspace-select:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+.workspace-hint {
+    margin-top: 8px;
+    font-size: 0.75em;
+    color: var(--color-muted);
+    overflow-wrap: anywhere;
+}

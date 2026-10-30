@@ -57,6 +57,12 @@ function updateRobotStatus() {
             patchLiveStep(data.step || null);
             stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
             updateManualActionAvailability(data.status);
+            updateWorkspaceButtons(data.status);
+            // Another page switched the workspace: everything here is stale.
+            if (data.workspace) {
+                if (currentWorkspace === null) currentWorkspace = data.workspace;
+                else if (data.workspace !== currentWorkspace && !workspaceSwitching) window.location.reload();
+            }
         })
         .catch(() => {
             latestControllerStatus = 'FAULTED';
@@ -172,6 +178,100 @@ function sendInitialize() {
         .then(r => r.json()).then(d => setMessage(d.message))
         .catch(() => setMessage('Error sending initialization command.'))
         .finally(loadSystemInfo);
+}
+
+/* ---- Workspace picker ---- */
+let currentWorkspace = null;
+let workspaceSwitching = false;
+
+function loadWorkspaces() {
+    fetch('/api/workspaces')
+        .then(r => r.json())
+        .then(renderWorkspaces)
+        .catch(() => {
+            const hint = document.getElementById('workspace-hint');
+            if (hint) hint.textContent = 'Could not list workspaces.';
+        });
+}
+
+function renderWorkspaces(data) {
+    const select = document.getElementById('workspace-select');
+    const nameEl = document.getElementById('workspace-name');
+    const hint = document.getElementById('workspace-hint');
+    const items = Array.isArray(data.workspaces) ? data.workspaces : [];
+    const current = items.find((w) => w.current);
+    if (nameEl) nameEl.textContent = current ? (current.title || current.name) : (data.current || '');
+    if (select) {
+        select.innerHTML = items.map((w) => {
+            const label = w.title ? `${w.title} (${w.name})` : w.name;
+            const suffix = w.valid ? '' : ' — invalid config.yaml';
+            return `<option value="${escapeHtml(w.name)}"${w.current ? ' selected' : ''}${w.valid ? '' : ' disabled'}>`
+                + `${escapeHtml(label + suffix)}</option>`;
+        }).join('');
+    }
+    if (hint) {
+        hint.textContent = data.root
+            ? `Folders of ${data.root} holding a config.yaml.`
+            : 'Set MECADEMIC_WORKSPACES_ROOT (or --workspaces-root) to list other workspaces.';
+    }
+    updateWorkspaceButtons(latestControllerStatus);
+}
+
+function updateWorkspaceButtons(status) {
+    const normalized = normalizeStatus(status);
+    const locked = workspaceSwitching || normalized === 'BUSY' || normalized === 'INITIALIZING';
+    ['workspace-load-btn', 'workspace-reload-btn', 'workspace-select'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = locked;
+            el.title = locked && !workspaceSwitching ? `Not available while the controller is ${status}.` : '';
+        }
+    });
+}
+
+function switchWorkspaceTo(name, title, message) {
+    showConfirmModal(title, message, () => {
+        workspaceSwitching = true;
+        updateWorkspaceButtons(latestControllerStatus);
+        setMessage(`Loading workspace '${name}'…`);
+        fetch('/api/workspaces/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        })
+            .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                setMessage(data.message);
+                // Reload whatever the outcome once a switch happened: tabs,
+                // manual actions and the custom view all belong to the workspace.
+                if (ok) window.location.reload();
+            })
+            .catch(() => setMessage('Error switching workspace.'))
+            .finally(() => {
+                workspaceSwitching = false;
+                updateWorkspaceButtons(latestControllerStatus);
+            });
+    });
+}
+
+function loadSelectedWorkspace() {
+    const select = document.getElementById('workspace-select');
+    const name = select ? select.value : '';
+    if (!name) return;
+    if (name === currentWorkspace) {
+        reloadCurrentWorkspace();
+        return;
+    }
+    switchWorkspaceTo(name, 'Load workspace',
+        `Load workspace '${name}'?\n\nEvery device is disconnected and this workspace's code is unloaded. `
+        + 'The new workspace starts OFF: press INITIALIZE to connect its devices.');
+}
+
+function reloadCurrentWorkspace() {
+    if (!currentWorkspace) return;
+    switchWorkspaceTo(currentWorkspace, 'Reload workspace code',
+        `Reload the code and config.yaml of '${currentWorkspace}'?\n\n`
+        + 'Every device is disconnected; press INITIALIZE afterwards.');
 }
 
 /* ---- Workspace / config problems ---- */
@@ -2472,3 +2572,4 @@ loadBackupRestoreRobots();
 initCustomViewLink();
 loadSystemInfo();
 initProdTimeline();
+loadWorkspaces();

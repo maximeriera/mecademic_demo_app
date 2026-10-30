@@ -18,6 +18,7 @@
                     height="619"
                 >
                 <h1>Demo Application Controller</h1>
+                <div id="workspace-name" class="workspace-name" title="Active workspace"></div>
             </div>
 
             <div class="global-status-wrap">
@@ -88,6 +89,17 @@
                                 <div id="control-step-indicator-fill" class="step-progress-fill"></div>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- Folders next to the startup workspace that hold a config.yaml. -->
+                    <div class="section">
+                        <div class="section-title">Workspace</div>
+                        <select id="workspace-select" class="workspace-select" aria-label="Workspace"></select>
+                        <div class="workspace-buttons">
+                            <button type="button" class="btn-task" id="workspace-load-btn" onclick="loadSelectedWorkspace()">LOAD</button>
+                            <button type="button" class="btn-task" id="workspace-reload-btn" onclick="reloadCurrentWorkspace()">RELOAD CODE</button>
+                        </div>
+                        <div id="workspace-hint" class="workspace-hint"></div>
                     </div>
                 </div>
 

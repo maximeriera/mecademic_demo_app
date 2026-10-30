@@ -16,6 +16,9 @@ parser = argparse.ArgumentParser(description="Mecademic Demo App")
 parser.add_argument('--workspace', type=str, default=BASE_DIR, help="Path to the external workspace")
 parser.add_argument('--host', type=str, default='0.0.0.0', help="Interface the server binds to")
 parser.add_argument('--port', type=int, default=5000, help="Port the server listens on")
+parser.add_argument('--workspaces-root', type=str, default=None,
+                    help="Folder whose subfolders the workspace picker lists "
+                         "(default: MECADEMIC_WORKSPACES_ROOT, else the parent of --workspace)")
 args, _ = parser.parse_known_args()
 
 workspace_path = os.path.abspath(args.workspace)
@@ -35,6 +38,8 @@ from core.ControllerState import ControllerState
 from core.ContextStore import ContextError
 from core.BackupRestoreService import BackupRestoreService
 from core.LogSetup import describe_logging, get_app_logger, request_id_var
+from core.Workspaces import (config_dir_of, default_root, discover as discover_workspaces,
+                             purge_modules as purge_workspace_modules, resolve as resolve_workspace)
 
 # --- Logging Setup ---
 # Format, levels, the combined log and the stdout stream all come from
@@ -45,62 +50,141 @@ logger = get_app_logger()
 app = Flask(__name__)
 
 # --- APPLICATION Controller Instance (Singleton) ---
-# Initialize the controller once outside the routes
-# NOTE: Replace dummy config with your actual Meca 500 connection details
-app_logic_dir = os.path.join(workspace_path, "app_logic")
-workspace_config_dir = app_logic_dir if os.path.isdir(app_logic_dir) else workspace_path
-try:
-    # We must start the controller in the main thread before starting Flask's server
-    from core.ApplicationController import ApplicationController
-    config_path = os.path.join(workspace_config_dir, "config.yaml")
-    # The optional context file (context.yaml) is located by the controller,
-    # relative to config.yaml, honouring `context_file:` in it.
-    APPLICATION = ApplicationController(config_path=config_path)
-    logger.info("ApplicationController initialized successfully.")
-except Exception as e:
-    # If connection fails, set a permanent FAULT state
-    logger.critical(f"Failed to initialize ApplicationController: {e}", exc_info=True)
-    print(f"FATAL: Failed to initialize ApplicationController: {e}")
-    class MockApplicationController:
-        def get_state(self): return ControllerState.OFF
-        def start_task(self, task): print("Mocked start task.")
-        def start_manual_action(self, action_key):
-            print(f"Mocked manual action: {action_key}")
-            return False
-        def stop_current_task(self): print("Mocked stop task.")
-        def abort_current_task(self): print("Mocked abort task.")
-        def initialize(self): return True
-        def shutdown(self): pass
-        def get_devices_info(self): return {}
-        def get_manual_actions(self): return []
-        def clear_faults(self): pass
-        def get_live_step(self): return None
-        def get_current_task_label(self): return None
-        def get_prod_snapshot(self):
-            return {'state': ControllerState.OFF.value, 'metrics': {}, 'steps': {}}
-        def get_context_snapshot(self):
-            return {
-                'enabled': False,
-                'source': None,
-                'state_file': None,
-                'load_error': 'Controller failed to start; see app.log.',
-                'state': ControllerState.OFF.value,
-                'locked': False,
-                'params': {},
-                'variables': {},
-            }
-        def update_context(self, payload): return ([], ['Context unavailable: controller failed to start'])
-        def reset_context(self, namespace, key=None): raise RuntimeError('Controller failed to start')
-        def get_detached(self): return {}
-        def _unavailable(self, device_id):
-            return {'success': False, 'message': 'Controller failed to start; see app.log.'}
-        connect_device = disconnect_device = clear_device_fault = _unavailable
-        config_issues = []
-    APPLICATION = MockApplicationController()
-    APPLICATION.load_error = f"{type(e).__name__}: {e}"
+# Built from the active workspace; rebuilt by switch_workspace() (Workspaces
+# picker, Reload code). Routes read these globals at call time, so rebinding
+# them is all a switch needs.
 
-BACKUP_DIR = os.path.join(workspace_path, "backups")
-BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+class MockApplicationController:
+    """Stands in when the controller cannot be built, so the UI still loads and says why."""
+
+    config_issues = []
+    history = None
+    workspace_name = None
+
+    def __init__(self, load_error):
+        self.load_error = load_error
+
+    def get_state(self): return ControllerState.OFF
+    def start_task(self, task): return False
+    def start_manual_action(self, action_key): return False
+    def stop_current_task(self): pass
+    def abort_current_task(self): pass
+    def initialize(self): raise RuntimeError(f'Controller failed to start: {self.load_error}')
+    def shutdown(self): pass
+    def close(self): pass
+    def is_busy(self): return False
+    def get_devices_info(self): return {}
+    def get_manual_actions(self): return []
+    def clear_faults(self): pass
+    def get_live_step(self): return None
+    def get_current_task_label(self): return None
+    def get_prod_snapshot(self):
+        return {'state': ControllerState.OFF.value, 'metrics': {}, 'steps': {}}
+    def get_context_snapshot(self):
+        return {
+            'enabled': False,
+            'source': None,
+            'state_file': None,
+            'load_error': 'Controller failed to start; see app.log.',
+            'state': ControllerState.OFF.value,
+            'locked': False,
+            'params': {},
+            'variables': {},
+        }
+    def update_context(self, payload): return ([], ['Context unavailable: controller failed to start'])
+    def reset_context(self, namespace, key=None): raise RuntimeError('Controller failed to start')
+    def get_detached(self): return {}
+    def _unavailable(self, device_id):
+        return {'success': False, 'message': 'Controller failed to start; see app.log.'}
+    connect_device = disconnect_device = clear_device_fault = _unavailable
+
+
+def _build_controller(ws_path):
+    """Controller for the workspace at *ws_path*, or the mock with the reason it failed."""
+    config_dir = config_dir_of(ws_path) or ws_path
+    try:
+        from core.ApplicationController import ApplicationController
+        # The optional context file (context.yaml) is located by the controller,
+        # relative to config.yaml, honouring `context_file:` in it.
+        controller = ApplicationController(config_path=os.path.join(config_dir, "config.yaml"))
+        logger.info("ApplicationController initialized successfully.")
+        return controller, config_dir
+    except Exception as e:
+        logger.critical(f"Failed to initialize ApplicationController: {e}", exc_info=True)
+        print(f"FATAL: Failed to initialize ApplicationController: {e}")
+        return MockApplicationController(f"{type(e).__name__}: {e}"), config_dir
+
+
+def _activate_workspace(ws_path):
+    """Build the controller for *ws_path* and point every workspace global at it."""
+    global workspace_path, workspace_config_dir, APPLICATION, BACKUP_DIR, BACKUP_RESTORE, CUSTOM_VIEW_DIR
+    workspace_path = ws_path
+    APPLICATION, workspace_config_dir = _build_controller(ws_path)
+    BACKUP_DIR = os.path.join(ws_path, "backups")
+    BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+    # A workspace may ship custom_view/ next to its config.yaml (see below).
+    CUSTOM_VIEW_DIR = os.path.join(workspace_config_dir, "custom_view")
+
+
+_activate_workspace(workspace_path)
+
+WORKSPACES_ROOT = (os.path.abspath(args.workspaces_root) if args.workspaces_root
+                   else os.path.abspath(os.environ['MECADEMIC_WORKSPACES_ROOT'])
+                   if os.environ.get('MECADEMIC_WORKSPACES_ROOT')
+                   else default_root(workspace_path))
+
+# Serialises workspace switches against each other and against process exit.
+_switch_lock = threading.RLock()
+
+
+class WorkspaceBusyError(RuntimeError):
+    """A switch was refused because the cell is busy."""
+
+
+def switch_workspace(name):
+    """Shut the current controller down and start the workspace called *name*.
+
+    In-process: the old workspace's modules are purged from sys.modules and
+    its sys.path entry replaced, so the new (or edited) code is what runs.
+    Switching to the current workspace is "Reload code". Raises ValueError for
+    an unknown name, WorkspaceBusyError while a task runs.
+    """
+    global _last_logged_state, _last_logged_health, _step_read_failed, _task_read_failed
+    with _switch_lock:
+        target = resolve_workspace(WORKSPACES_ROOT, workspace_path, name)
+        busy = getattr(APPLICATION, 'is_busy', None)
+        if busy is not None and busy():
+            raise WorkspaceBusyError('A task is running or the cell is initializing. Stop it first.')
+
+        old_path = workspace_path
+        logger.info(f"Switching workspace: {old_path} -> {target}")
+        try:
+            APPLICATION.shutdown()
+        except Exception as e:
+            logger.warning(f"Error shutting down the old controller: {e}", exc_info=True)
+        try:
+            APPLICATION.close()
+        except Exception as e:
+            logger.warning(f"Error closing the old controller: {e}", exc_info=True)
+
+        purged = purge_workspace_modules([old_path, target])
+        logger.info(f"Purged {len(purged)} workspace module(s): {', '.join(purged) or '-'}")
+        # Replace only the entry this file inserted for the old workspace.
+        if old_path in sys.path:
+            sys.path.remove(old_path)
+        sys.path.insert(0, target)
+
+        _activate_workspace(target)
+        with _state_log_lock:
+            _last_logged_state = None
+            _last_logged_health = None
+        _step_read_failed = False
+        _task_read_failed = False
+        return {
+            'success': not isinstance(APPLICATION, MockApplicationController),
+            'workspace': os.path.basename(target),
+            'controller_error': getattr(APPLICATION, 'load_error', None),
+        }
 
 
 def _task_refusal_message(task_type):
@@ -262,7 +346,9 @@ def get_status():
         if not _task_read_failed:
             _task_read_failed = True
             logger.error("Current task read failed; task name suppressed: %s", e, exc_info=True)
-    return jsonify({'status': current_state, 'step': step, 'task': task})
+    # The workspace name lets every open page notice a switch made elsewhere and reload.
+    return jsonify({'status': current_state, 'step': step, 'task': task,
+                    'workspace': os.path.basename(os.path.normpath(workspace_path))})
 
 @app.route('/api/task/<task_name>', methods=['POST'])
 def handle_task(task_name):
@@ -503,6 +589,38 @@ def get_system():
         'config_issues': list(getattr(APPLICATION, 'config_issues', None) or []),
         'controller_error': getattr(APPLICATION, 'load_error', None),
     }), 200
+
+
+@app.route('/api/workspaces', methods=['GET'])
+def list_workspaces():
+    """Workspaces the picker offers: subfolders of the workspaces root holding a config.yaml."""
+    return jsonify({
+        'current': os.path.basename(os.path.normpath(workspace_path)),
+        'root': WORKSPACES_ROOT,
+        'workspaces': discover_workspaces(WORKSPACES_ROOT, workspace_path),
+    }), 200
+
+
+@app.route('/api/workspaces/switch', methods=['POST'])
+def switch_workspace_route():
+    """Load another workspace (or reload the current one): ``{"name": "<folder name>"}``.
+
+    Disconnects every device; the new workspace starts OFF and needs INITIALIZE.
+    """
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    try:
+        result = switch_workspace(name)
+    except WorkspaceBusyError as e:
+        return jsonify({'message': str(e), 'success': False}), 409
+    except ValueError as e:
+        return jsonify({'message': str(e), 'success': False}), 400
+    if result['success']:
+        result['message'] = f"Workspace '{result['workspace']}' loaded. Initialize to connect its devices."
+    else:
+        result['message'] = (f"Workspace '{result['workspace']}' failed to start: "
+                             f"{result['controller_error']}")
+    return jsonify(result), 200
 
 
 @app.route('/api/devices/types', methods=['GET'])
@@ -770,7 +888,6 @@ def reset_context():
 # A workspace may ship custom_view/ next to its config.yaml: a Python module
 # (data sources + analysis, loaded by the controller) and a web page served
 # here. The standard UI only links to it.
-CUSTOM_VIEW_DIR = os.path.join(workspace_config_dir, "custom_view")
 
 
 def _data_hub():
@@ -900,7 +1017,13 @@ def shutdown_APPLICATION_controller():
         if _shutdown_called:
             return
         _shutdown_called = True
+    # Never in the middle of a workspace switch: wait for it, then shut the
+    # controller it installed down.
+    with _switch_lock:
+        _shutdown_active_controller()
 
+
+def _shutdown_active_controller():
     print("Process exit: Shutting down APPLICATION controller.")
     logger.info("Process exit: Shutting down APPLICATION controller.")
     try:
