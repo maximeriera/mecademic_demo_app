@@ -91,10 +91,26 @@ except Exception as e:
             }
         def update_context(self, payload): return ([], ['Context unavailable: controller failed to start'])
         def reset_context(self, namespace, key=None): raise RuntimeError('Controller failed to start')
+        def get_detached(self): return {}
+        def _unavailable(self, device_id):
+            return {'success': False, 'message': 'Controller failed to start; see app.log.'}
+        connect_device = disconnect_device = clear_device_fault = _unavailable
     APPLICATION = MockApplicationController()
 
 BACKUP_DIR = os.path.join(workspace_path, "backups")
 BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+
+
+def _task_refusal_message(task_type):
+    """Why the controller refused *task_type*, for the 400 response."""
+    reason = None
+    getter = getattr(APPLICATION, 'task_refusal_reason', None)
+    if getter is not None:
+        try:
+            reason = getter(task_type)
+        except Exception:
+            reason = None
+    return reason or f'APPLICATION is {APPLICATION.get_state().value}.'
 
 
 def _parse_bool(value, default=False):
@@ -262,8 +278,9 @@ def handle_task(task_name):
             logger.info(f"Task started: {task_name.upper()}")
             return jsonify({'message': f'{task_name.upper()} task started.', 'success': True}), 200
         else:
-            logger.warning(f"Could not start task '{task_name}'. APPLICATION is {APPLICATION.get_state().value}.")
-            return jsonify({'message': f'Could not start task. APPLICATION is {APPLICATION.get_state().value}.', 'success': False}), 400
+            reason = _task_refusal_message(task_type)
+            logger.warning(f"Could not start task '{task_name}'. {reason}")
+            return jsonify({'message': f'Could not start task. {reason}', 'success': False}), 400
     else:
         logger.warning(f"Unknown task name requested: '{task_name}'")
         return jsonify({'message': 'Invalid task name.'}), 404
@@ -335,13 +352,15 @@ def run_manual_action(action_key):
     if action_key not in available:
         return jsonify({'message': f"Unknown manual action '{action_key}'.", 'success': False}), 404
 
-    return jsonify({'message': f'Could not start manual action. APPLICATION is {state}.', 'success': False}), 400
+    return jsonify({'message': f'Could not start manual action. {_task_refusal_message(TaskType.MANUAL_ACTION)}',
+                    'success': False, 'state': state}), 400
 
 @app.route('/api/info', methods=['GET'])
 def get_APPLICATION_info():
     """API endpoint to get device information including live status."""
     try:
         info_list = []
+        detached = APPLICATION.get_detached()
         for device_id, device_info in APPLICATION.get_devices_info().items():
             # Enrich static info with live status fields
             entry = {'device_id': device_id}
@@ -352,6 +371,14 @@ def get_APPLICATION_info():
                 entry['connected'] = dev.connected
                 entry['ready'] = dev.ready
                 entry['faulted'] = dev.faulted
+                try:
+                    entry['link'] = dev.link
+                except Exception:
+                    entry['link'] = 'disconnected'
+                entry['detached'] = device_id in detached
+                entry['in_transition'] = APPLICATION.is_in_transition(device_id)
+                entry['supports_reconnect'] = bool(getattr(dev, 'supports_reconnect', False))
+                entry['supports_monitoring'] = bool(getattr(dev, 'supports_monitoring', False))
             info_list.append(entry)
         # Polled at 1 Hz; log only when device health actually changes.
         _log_device_health_change(info_list)
@@ -395,6 +422,43 @@ def clear_faults():
     except Exception as e:
         logger.error(f"Failed to clear faults: {e}", exc_info=True)
         return jsonify({'message': f'Failed to clear faults: {e}', 'success': False}), 500
+
+def _device_link_response(result):
+    """Map a controller link-action result to an HTTP response.
+
+    Refusals (task running, unknown device...) are 409/404; a device error
+    after the action ran is still 200 with ``success: false``, so the UI shows
+    the message rather than a transport error.
+    """
+    if result.get('success'):
+        return jsonify(result), 200
+    if 'link' in result:
+        return jsonify(result), 200
+    status = 404 if str(result.get('message', '')).startswith('Unknown device') else 409
+    return jsonify(result), status
+
+
+@app.route('/api/devices/<device_id>/connect', methods=['POST'])
+def connect_device(device_id):
+    """Bring one device (back) under this app's control."""
+    return _device_link_response(APPLICATION.connect_device(device_id))
+
+
+@app.route('/api/devices/<device_id>/disconnect', methods=['POST'])
+def disconnect_device(device_id):
+    """Release one device (a robot keeps a monitoring link)."""
+    return _device_link_response(APPLICATION.disconnect_device(device_id))
+
+
+@app.route('/api/devices/<device_id>/clear_fault', methods=['POST'])
+def clear_device_fault(device_id):
+    """Clear the fault of one device."""
+    result = APPLICATION.clear_device_fault(device_id)
+    if result.get('success'):
+        return jsonify(result), 200
+    status = 404 if str(result.get('message', '')).startswith('Unknown device') else 409
+    return jsonify(result), status
+
 
 @app.route('/api/state_values', methods=['GET'])
 def get_state_values():

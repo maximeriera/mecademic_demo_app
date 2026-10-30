@@ -31,11 +31,19 @@ class BackupRestoreService:
             except Exception:
                 info = {}
 
+            # Backup and restore send commands, so "connected" means *in control*:
+            # a robot released to another client (monitoring link only) would
+            # drop its monitoring link on the first command.
+            try:
+                in_control = getattr(device, "link", None) == "control"
+            except Exception:
+                in_control = False
+
             robots.append(
                 {
                     "device_id": device_id,
                     "ip_address": cfg.get("ip_address") or info.get("ip_address"),
-                    "connected": bool(getattr(device, "connected", False)),
+                    "connected": in_control,
                     "ready": bool(getattr(device, "ready", False)),
                     "faulted": bool(getattr(device, "faulted", False)),
                     "model": info.get("model"),
@@ -275,7 +283,7 @@ class BackupRestoreService:
         if robot_id not in robots:
             raise ValueError(f"Unknown Mecademic robot '{robot_id}'.")
         if not robots[robot_id].get("connected"):
-            raise ValueError(f"Robot '{robot_id}' is not connected.")
+            raise ValueError(f"Robot '{robot_id}' is not connected (or its control is released).")
         return application.devices[robot_id]
 
     def _get_robot_api(self, device):

@@ -93,6 +93,8 @@ class SmarActMCS2(Device):
     >>> stage.api.position_mm(0)
     """
 
+    supports_reconnect = True
+
     def __init__(
         self,
         ip_address: str,

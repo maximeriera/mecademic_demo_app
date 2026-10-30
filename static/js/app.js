@@ -43,6 +43,9 @@ function switchTab(name, btn) {
     if (name === 'manual') {
         loadManualActions();
     }
+    if (name === 'devices') {
+        loadRobotInfo();
+    }
 }
 
 /* ---- Status polling ---- */
@@ -341,6 +344,14 @@ function updateManualActionAvailability(status) {
             btn.title = '';
         }
     });
+
+    // Clearing faults aborts a running task server-side: never offer it mid-task.
+    const clearBtn = document.getElementById('manual-clear-faults-btn');
+    if (clearBtn) {
+        const locked = normalizedStatus === 'BUSY' || normalizedStatus === 'INITIALIZING';
+        clearBtn.disabled = locked;
+        clearBtn.title = locked ? `Not available while the controller is ${status}.` : '';
+    }
 }
 
 function runManualAction(buttonEl) {
@@ -366,7 +377,7 @@ function runManualAction(buttonEl) {
         ? `/api/task/${encodeURIComponent(task)}`
         : `/api/manual/actions/${encodeURIComponent(actionKey)}/run`;
 
-    showConfirmModal(confirmTitle, confirmMessage, () => {
+    showConfirmModal(confirmTitle, confirmMessage + detachedDevicesWarning(), () => {
         fetch(url, { method: 'POST' })
             .then(r => r.json().then((data) => ({ ok: r.ok, data })))
             .then(({ ok, data }) => {
@@ -383,6 +394,27 @@ function runManualAction(buttonEl) {
                 setManualActionMessage(msg, true);
             });
     });
+}
+
+// Same request as the Control tab's CLEAR FAULTS, reported in the Manual log
+// with the server's detail (which devices are still faulted, which errored).
+function sendManualClearFaults() {
+    showConfirmModal(
+        'Confirm Clear Faults',
+        'Clear the faults on every connected device? No hardware moves; released devices are left alone.',
+        () => {
+            fetch('/api/clear_faults', { method: 'POST' })
+                .then(r => r.json())
+                .then((d) => {
+                    setMessage(d.message);
+                    setManualActionMessage(d.message, d.success === false);
+                })
+                .catch(() => {
+                    setMessage('Error sending clear faults command.');
+                    setManualActionMessage('Error sending clear faults command.', true);
+                });
+        }
+    );
 }
 
 function sendManualAbort() {
@@ -1181,79 +1213,238 @@ function executeContextReset(namespace, key) {
         });
 }
 
+/* ---- Devices: health strip (Control tab) and cards (Devices tab) ---- */
+let latestDevices = [];
+const devicePending = new Set();   // device ids with a link request in flight
+
+// Live/status fields the cards show as badges or buttons, not as table rows.
+const DEVICE_STATUS_KEYS = new Set([
+    'connected', 'ready', 'faulted', 'device_id', 'link', 'detached',
+    'in_transition', 'supports_reconnect', 'supports_monitoring',
+]);
+
+function setDevicesMessage(text, isError = false) {
+    const log = document.getElementById('devices-action-log');
+    if (!log) return;
+    log.textContent = text || 'No recent device action.';
+    log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
 function loadRobotInfo() {
     fetch('/api/info')
         .then(r => r.json())
-        .then(data => {
-            const container = document.getElementById('robot-info-container');
-            container.innerHTML = '';
-            if (!Array.isArray(data) || data.length === 0) {
-                container.innerHTML = '<p class="empty-state">No devices configured.</p>';
-                return;
-            }
-            const statusKeys = new Set(['connected', 'ready', 'faulted', 'device_id']);
-            data.forEach(device => {
-                const card = document.createElement('div');
-                card.className = 'device-card';
-
-                const header = document.createElement('div');
-                header.className = 'device-card-header';
-                const title = document.createElement('span');
-                title.textContent = device.device_id || 'Unknown Device';
-                header.appendChild(title);
-
-                const badges = document.createElement('span');
-                if ('faulted' in device) {
-                    const b = document.createElement('span');
-                    b.className = 'badge ' + (device.faulted ? 'badge-error' : 'badge-ok');
-                    b.textContent = device.faulted ? 'FAULTED' : 'OK';
-                    badges.appendChild(b);
-                }
-                if ('connected' in device) {
-                    const b = document.createElement('span');
-                    b.className = 'badge ' + (device.connected ? 'badge-ok' : 'badge-off');
-                    b.textContent = device.connected ? 'Connected' : 'Disconnected';
-                    badges.appendChild(b);
-                }
-                if ('ready' in device) {
-                    const b = document.createElement('span');
-                    b.className = 'badge ' + (device.ready ? 'badge-ok' : 'badge-warn');
-                    b.textContent = device.ready ? 'Ready' : 'Not Ready';
-                    badges.appendChild(b);
-                }
-                header.appendChild(badges);
-                card.appendChild(header);
-
-                const body = document.createElement('div');
-                body.className = 'device-card-body';
-                const table = document.createElement('table');
-                for (const key in device) {
-                    if (statusKeys.has(key)) continue;
-                    const row = table.insertRow();
-                    const label = row.insertCell(0);
-                    const value = row.insertCell(1);
-                    label.textContent = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                    const raw = device[key];
-                    if (key === 'ip_address' && raw) {
-                        const link = document.createElement('a');
-                        link.href = `http://${raw}`;
-                        link.target = '_blank';
-                        link.rel = 'noopener noreferrer';
-                        link.textContent = raw;
-                        value.appendChild(link);
-                    } else {
-                        value.textContent = (raw !== null && raw !== undefined) ? raw : '—';
-                    }
-                }
-                body.appendChild(table);
-                card.appendChild(body);
-                container.appendChild(card);
-            });
-        })
+        .then(data => renderDevices(Array.isArray(data) ? data : []))
         .catch(() => {
-            document.getElementById('robot-info-container').innerHTML =
-            '<p class="empty-state empty-state-error">Error loading device info.</p>';
+            const msg = '<p class="empty-state empty-state-error">Error loading device info.</p>';
+            document.getElementById('robot-info-container').innerHTML = msg;
+            document.getElementById('device-health-strip').innerHTML = msg;
         });
+}
+
+function renderDevices(devices) {
+    latestDevices = devices;
+    renderDeviceHealthStrip(devices);
+    renderDeviceCards(devices);
+}
+
+// One summary per device: [dot class, short text].
+function deviceHealth(device) {
+    if (device.in_transition) return ['info', 'Switching…'];
+    if (device.detached) {
+        return device.link === 'monitoring' ? ['info', 'Released · monitoring'] : ['info', 'Released'];
+    }
+    if (device.faulted) return ['error', 'Faulted'];
+    if (!device.connected) return ['', 'Disconnected'];
+    if (!device.ready) return ['warn', 'Not ready'];
+    return ['ok', 'Ready'];
+}
+
+// Rebuilt every second: it holds no controls, so nothing loses focus.
+function renderDeviceHealthStrip(devices) {
+    const strip = document.getElementById('device-health-strip');
+    if (!strip) return;
+    if (devices.length === 0) {
+        strip.innerHTML = '<p class="empty-state">No devices configured.</p>';
+        return;
+    }
+    strip.innerHTML = devices.map((device) => {
+        const [dot, text] = deviceHealth(device);
+        return `<span class="device-chip" title="${escapeHtml(text)}">`
+            + `<span class="device-chip-dot ${dot}"></span>`
+            + `<span>${escapeHtml(device.device_id || 'device')}</span>`
+            + `<span class="device-chip-link">${escapeHtml(text)}</span></span>`;
+    }).join('');
+}
+
+function deviceBadgesHtml(device) {
+    const badges = [];
+    if (device.detached) {
+        badges.push('<span class="badge badge-info">RELEASED</span>');
+    } else if ('faulted' in device) {
+        badges.push(device.faulted
+            ? '<span class="badge badge-error">FAULTED</span>'
+            : '<span class="badge badge-ok">OK</span>');
+    }
+    const link = device.link || (device.connected ? 'control' : 'disconnected');
+    if (link === 'control') badges.push('<span class="badge badge-ok">Connected</span>');
+    else if (link === 'monitoring') badges.push('<span class="badge badge-info">Monitoring</span>');
+    else badges.push('<span class="badge badge-off">Disconnected</span>');
+    if (!device.detached && 'ready' in device) {
+        badges.push(device.ready
+            ? '<span class="badge badge-ok">Ready</span>'
+            : '<span class="badge badge-warn">Not Ready</span>');
+    }
+    return badges.join('');
+}
+
+function deviceTableHtml(device) {
+    const rows = [];
+    for (const key in device) {
+        if (DEVICE_STATUS_KEYS.has(key)) continue;
+        const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const raw = device[key];
+        let value;
+        if (key === 'ip_address' && raw) {
+            value = `<a href="http://${escapeHtml(raw)}" target="_blank" rel="noopener noreferrer">${escapeHtml(raw)}</a>`;
+        } else {
+            value = (raw !== null && raw !== undefined) ? escapeHtml(raw) : '—';
+        }
+        rows.push(`<tr><td>${escapeHtml(label)}</td><td>${value}</td></tr>`);
+    }
+    return `<table>${rows.join('')}</table>`;
+}
+
+function createDeviceCard(deviceId) {
+    const card = document.createElement('div');
+    card.className = 'device-card';
+    card.dataset.deviceId = deviceId;
+    card.innerHTML = `
+        <div class="device-card-header">
+            <span class="device-card-title"></span>
+            <span class="device-card-badges"></span>
+        </div>
+        <div class="device-card-actions">
+            <button type="button" class="btn-task" data-link-action="disconnect"></button>
+            <button type="button" class="btn-init" data-link-action="connect">Connect</button>
+            <button type="button" class="btn-clear" data-link-action="clear_fault">Clear fault</button>
+        </div>
+        <div class="device-card-body"></div>`;
+    card.querySelector('.device-card-title').textContent = deviceId;
+    card.querySelectorAll('[data-link-action]').forEach((btn) => {
+        btn.addEventListener('click', () => deviceLinkAction(deviceId, btn.dataset.linkAction));
+    });
+    return card;
+}
+
+// Cards are created once per device and patched in place, so their buttons
+// keep focus and hover across the 1 Hz refresh.
+function renderDeviceCards(devices) {
+    const container = document.getElementById('robot-info-container');
+    if (!container) return;
+    if (devices.length === 0) {
+        container.innerHTML = '<p class="empty-state">No devices configured.</p>';
+        return;
+    }
+    const existing = new Map();
+    container.querySelectorAll('.device-card').forEach((card) => existing.set(card.dataset.deviceId, card));
+    if (existing.size === 0) container.innerHTML = '';
+
+    const status = normalizeStatus(latestControllerStatus);
+    const controllerLocked = status === 'BUSY' || status === 'INITIALIZING';
+
+    devices.forEach((device, index) => {
+        const id = device.device_id || 'device';
+        let card = existing.get(id);
+        if (!card) card = createDeviceCard(id);
+        existing.delete(id);
+        if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
+
+        card.classList.toggle('device-detached', !!device.detached);
+
+        const badges = deviceBadgesHtml(device);
+        const badgesEl = card.querySelector('.device-card-badges');
+        if (badgesEl.dataset.html !== badges) {
+            badgesEl.innerHTML = badges;
+            badgesEl.dataset.html = badges;
+        }
+        const table = deviceTableHtml(device);
+        const bodyEl = card.querySelector('.device-card-body');
+        if (bodyEl.dataset.html !== table) {
+            bodyEl.innerHTML = table;
+            bodyEl.dataset.html = table;
+        }
+
+        const canLink = !!device.supports_reconnect;
+        const busy = controllerLocked || device.in_transition || devicePending.has(id);
+        const lockReason = controllerLocked ? `Locked while the controller is ${status}.`
+            : (device.in_transition || devicePending.has(id)) ? 'A link change is in progress.' : '';
+
+        const releaseBtn = card.querySelector('[data-link-action="disconnect"]');
+        releaseBtn.textContent = device.supports_monitoring ? 'Release control' : 'Disconnect';
+        releaseBtn.hidden = !canLink || !!device.detached;
+        releaseBtn.disabled = busy;
+        releaseBtn.title = lockReason;
+
+        const connectBtn = card.querySelector('[data-link-action="connect"]');
+        connectBtn.hidden = !canLink || !(device.detached || device.link === 'disconnected');
+        connectBtn.disabled = busy;
+        connectBtn.title = lockReason;
+
+        const clearBtn = card.querySelector('[data-link-action="clear_fault"]');
+        clearBtn.hidden = !device.faulted || !!device.detached || !device.connected;
+        clearBtn.disabled = busy;
+        clearBtn.title = lockReason;
+
+        card.querySelector('.device-card-actions').hidden =
+            releaseBtn.hidden && connectBtn.hidden && clearBtn.hidden;
+    });
+    existing.forEach((card) => card.remove());
+}
+
+function deviceLinkConfirm(device, action) {
+    const id = device.device_id;
+    const lockNote = 'Production, HOME, SHIPMENT and CALIBRATION stay locked until it is connected again; manual actions still run.';
+    if (action === 'disconnect' && device.supports_monitoring) {
+        return ['Release control', `Release control of ${id}?\n\n`
+            + 'This app stops commanding it and its motion pauses. Another client (web portal, script) '
+            + 'can then take control; it must resume motion before moving the robot. '
+            + `The custom view keeps receiving its position.\n\n${lockNote}`];
+    }
+    if (action === 'disconnect') {
+        return ['Disconnect device', `Disconnect ${id} so another program can use it?\n\n${lockNote}`];
+    }
+    if (action === 'connect') {
+        const extra = device.supports_monitoring
+            ? '\n\nThis app takes control back: the robot activates and homes. Close any other control connection first and make sure the cell is clear.'
+            : '';
+        return ['Connect device', `Connect ${id}?${extra}`];
+    }
+    return ['Clear device fault', `Clear the fault on ${id}?`];
+}
+
+function deviceLinkAction(deviceId, action) {
+    const device = latestDevices.find((d) => d.device_id === deviceId) || { device_id: deviceId };
+    const [title, message] = deviceLinkConfirm(device, action);
+    showConfirmModal(title, message, () => {
+        devicePending.add(deviceId);
+        renderDeviceCards(latestDevices);
+        setDevicesMessage(`${deviceId}: ${action === 'clear_fault' ? 'clearing fault' : action + 'ing'}…`);
+        fetch(`/api/devices/${encodeURIComponent(deviceId)}/${action}`, { method: 'POST' })
+            .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => setDevicesMessage(data.message || `${deviceId}: done.`, !ok || data.success === false))
+            .catch(() => setDevicesMessage(`Error sending ${action} for ${deviceId}.`, true))
+            .finally(() => {
+                devicePending.delete(deviceId);
+                loadRobotInfo();
+            });
+    });
+}
+
+function detachedDevicesWarning() {
+    const detached = latestDevices.filter((d) => d.detached);
+    if (detached.length === 0) return '';
+    const names = detached.map((d) => d.device_id + (d.link === 'monitoring' ? ' (monitoring only)' : '')).join(', ');
+    return `\n\nReleased: ${names}. Steps that command ${detached.length > 1 ? 'these devices' : 'it'} will fail.`;
 }
 
 /* ---- Backup / restore tab ---- */

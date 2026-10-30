@@ -14,6 +14,8 @@ from .api.ed_device import EDDigitalDeviceSync, WatchdogConfig
 class BrainboxesEDDigital(Device):
     """Synchronous Device wrapper for Brainboxes ED digital I/O modules."""
 
+    supports_reconnect = True
+
     def __init__(
         self,
         ip_address: str,

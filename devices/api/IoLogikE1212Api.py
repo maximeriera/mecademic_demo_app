@@ -100,6 +100,9 @@ class IoLogikE1212Api:
     def connect(self) -> None:
         """Open the Modbus TCP connection to the device."""
         self.logger.info(f"Connecting to ioLogik E1212 at {self._ip_address}:{self._port}")
+        if self._client is not None:
+            # A second connect() without disconnect() used to leak this socket.
+            self._client.close()
         self._client = ModbusTcpClient(host=self._ip_address, port=self._port)
         if not self._client.connect():
             msg = f"Could not reach ioLogik E1212 at {self._ip_address}:{self._port}"

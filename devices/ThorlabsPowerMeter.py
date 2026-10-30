@@ -86,6 +86,8 @@ class ThorlabsPowerMeter(Device):
     >>> pm.api.wavelength = 532      # every driver setting is on .api
     """
 
+    supports_reconnect = True
+
     def __init__(
         self,
         resource: str | None = None,

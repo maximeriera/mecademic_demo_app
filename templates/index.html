@@ -47,6 +47,7 @@
 
             <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-devices" id="tab-btn-devices" onclick="switchTab('devices', this)">Devices</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-variables" id="tab-btn-variables" onclick="switchTab('variables', this)">Variables</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-manual" id="tab-btn-manual" onclick="switchTab('manual', this)">Manual</button>
@@ -126,8 +127,26 @@
             <div id="message-log" class="message-log">No recent command activity.</div>
 
             <div class="section">
-                <div class="section-title">Device Network</div>
-                <div id="robot-info-container">Loading device info...</div>
+                <div class="section-title section-title-row">
+                    <span>Device Network</span>
+                    <button type="button" class="link-btn" onclick="switchTab('devices', document.getElementById('tab-btn-devices'))">Manage devices &rarr;</button>
+                </div>
+                <!-- Compact health only; connect/disconnect and details live on the Devices tab. -->
+                <div id="device-health-strip" class="device-health-strip">Loading device info...</div>
+            </div>
+        </div>
+
+        <!-- ===== DEVICES TAB ===== -->
+        <div id="tab-devices" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-devices" hidden>
+            <div class="section">
+                <div class="section-title">Devices</div>
+                <div class="manual-state-hint">
+                    Release a device to drive it from another program (e.g. a robot from its web portal).
+                    A released robot keeps a read-only link, so the custom view still receives its position.
+                    While any device is released, only manual actions run.
+                </div>
+                <div id="devices-action-log" class="message-log">No recent device action.</div>
+                <div id="robot-info-container" class="devices-grid">Loading device info...</div>
             </div>
         </div>
 
@@ -205,7 +224,10 @@
             <div class="section">
                 <div class="section-title">Manual Safety Control</div>
                 <div class="manual-safety-row">
-                    <button type="button" class="btn-abort" onclick="sendManualAbort()">ABORT</button>
+                    <div class="manual-safety-buttons">
+                        <button type="button" class="btn-abort" onclick="sendManualAbort()">ABORT</button>
+                        <button type="button" class="btn-clear" id="manual-clear-faults-btn" onclick="sendManualClearFaults()">CLEAR FAULTS</button>
+                    </div>
                     <div id="manual-action-log" class="message-log">No recent manual action activity.</div>
                 </div>
             </div>

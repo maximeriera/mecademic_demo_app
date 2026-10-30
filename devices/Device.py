@@ -58,6 +58,19 @@ class Device(ABC):
         returns right away).  Called by the task system on emergency stop
         or when any device in the cell faults.
 
+    Optional link control  (override to opt in)
+    -------------------------------------------
+    supports_reconnect : bool
+        ``True`` if :meth:`connect` can bring the device back after
+        :meth:`disconnect`. The UI only offers per-device Connect/Disconnect
+        for drivers that set it.
+    supports_monitoring : bool
+        ``True`` if ``disconnect(keep_monitoring=True)`` keeps a read-only link.
+    link -> str
+        ``"control"``, ``"monitoring"`` or ``"disconnected"``, computed live.
+    connect() / disconnect(keep_monitoring)
+        Default to :meth:`initialize` / :meth:`shutdown`.
+
     Example
     -------
     >>> class MyDevice(Device):
@@ -176,3 +189,27 @@ class Device(ABC):
         Called when a fault is detected on any device to halt the whole cell.
         """
         ...
+
+    # --- Optional link control ------------------------------------------
+    # Not abstract: existing drivers keep working, and the UI hides the
+    # per-device Connect/Disconnect buttons until a driver opts in.
+
+    supports_reconnect: bool = False
+    supports_monitoring: bool = False
+
+    @property
+    def link(self) -> str:
+        """``"control"``, ``"monitoring"`` or ``"disconnected"``, computed live."""
+        return "control" if self.connected else "disconnected"
+
+    def connect(self) -> None:
+        """Bring the device back under this app's control after :meth:`disconnect`."""
+        self.initialize()
+
+    def disconnect(self, keep_monitoring: bool = False) -> None:
+        """Release the device so another program can use it.
+
+        ``keep_monitoring`` asks for a read-only link to stay open; drivers
+        without :attr:`supports_monitoring` ignore it.
+        """
+        self.shutdown()

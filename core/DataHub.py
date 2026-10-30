@@ -44,12 +44,14 @@ def _lerp(a: Any, b: Any, frac: float) -> Any:
 
 
 class _Source:
-    __slots__ = ("name", "read", "rate_hz", "errors", "last_error", "_last_logged")
+    __slots__ = ("name", "read", "rate_hz", "device", "paused", "errors", "last_error", "_last_logged")
 
-    def __init__(self, name: str, read: Callable[[], Any], rate_hz: float):
+    def __init__(self, name: str, read: Callable[[], Any], rate_hz: float, device: Optional[str] = None):
         self.name = name
         self.read = read
         self.rate_hz = rate_hz
+        self.device = device
+        self.paused = False
         self.errors = 0
         self.last_error: Optional[str] = None
         self._last_logged = 0.0
@@ -84,6 +86,11 @@ class DataHub:
         self.setup_error: Optional[str] = None
         self._analysis_errors = 0
         self._last_analysis_error: Optional[str] = None
+
+        # Set by the controller: False while a device is fully disconnected
+        # (detached without a monitoring link). Sources tagged with that device
+        # pause instead of piling up read errors.
+        self.device_available: Callable[[str], bool] = lambda _device_id: True
 
     # --- Clock ------------------------------------------------------------
 
@@ -199,14 +206,19 @@ class DataHub:
     # --- Workspace registration (from custom_view.setup) ---------------------
 
     def add_source(self, name: str, read: Callable[[], Any], rate_hz: float,
-                   history_s: float = 120.0) -> None:
+                   history_s: float = 120.0, device: Optional[str] = None) -> None:
         """Sample ``read()`` into channel ``name`` at ``rate_hz`` on its own thread.
 
         ``read`` runs concurrently with the task thread, so it must only touch a
-        device whose read path is thread-safe (e.g. mecademicpy's cached
-        ``GetRtTargetCartPos()`` — never ``synchronous_update=True``), or a device
-        this source owns exclusively; task code then reads the value with
+        device whose read path is thread-safe (e.g. mecademicpy's cached getters:
+        ``robot.rt.GetRtTargetCartPos(synchronous_update=False)`` — the default
+        ``synchronous_update=True`` sends a query on the command link), or a
+        device this source owns exclusively; task code then reads the value with
         ``context.latest(name)`` instead of querying the device itself.
+
+        ``device`` names the device ``read`` uses: the source then pauses while
+        that device is fully disconnected from its card (it keeps sampling over
+        a robot's monitoring link).
 
         Returning ``None`` records nothing. Exceptions are counted and logged at
         most every few seconds; sampling carries on.
@@ -220,7 +232,7 @@ class DataHub:
                 raise RuntimeError("Sources must be added before the hub is started.")
             if name in self._sources:
                 raise ValueError(f"Source '{name}' is already registered.")
-            self._sources[name] = _Source(name, read, rate_hz)
+            self._sources[name] = _Source(name, read, rate_hz, device)
             self._channels[name] = deque(maxlen=max(1, int(rate_hz * history_s)))
 
     def on(self, event_name: str, fn: Callable[["DataHub", Dict[str, Any]], None]) -> None:
@@ -297,6 +309,8 @@ class DataHub:
                     "rate_hz": source.rate_hz if source else None,
                     "errors": source.errors if source else 0,
                     "last_error": source.last_error if source else None,
+                    "device": source.device if source else None,
+                    "paused": source.paused if source else False,
                 }
             return {
                 "active": self._run_stop is not None,
@@ -314,6 +328,15 @@ class DataHub:
         period = 1.0 / source.rate_hz
         next_tick = time.monotonic()
         while not stop.is_set():
+            if source.device is not None:
+                try:
+                    source.paused = not self.device_available(source.device)
+                except Exception:
+                    source.paused = False
+                if source.paused:
+                    stop.wait(period)
+                    next_tick = time.monotonic()
+                    continue
             t_before = time.monotonic()
             try:
                 value = source.read()

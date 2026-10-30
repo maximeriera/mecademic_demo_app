@@ -161,6 +161,8 @@ class AsyrilEyePlusApi:
         ConnectionError
             If the socket cannot reach the device within the timeout.
         """
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="asyril_async")
         try:
             self.logger.info(f"Attempting to connect to Asyril Eye Plus at {self._ip_address}:{self._port}")
             self._connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -207,7 +209,9 @@ class AsyrilEyePlusApi:
     def disconnect(self):
         """Close the TCP connection and shut down the async executor."""
         self.logger.info("Disconnecting from Asyril Eye Plus...")
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None  # recreated by connect()
         if self._connection:
             self._connection.close()
             self._connection = None

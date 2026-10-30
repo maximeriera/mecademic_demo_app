@@ -163,6 +163,7 @@ class Task(threading.Thread):
         devices: Dict[str, Device],
         context: AppContext,
         manual_action_key: str | None = None,
+        is_detached=None,
     ):
         super().__init__()
         
@@ -175,6 +176,9 @@ class Task(threading.Thread):
         self.devices = devices
         self.context = context
         self.manual_action_key = (manual_action_key or "").strip() or None
+        # Callable[[device_id], bool]: devices released to another program are
+        # never sent an abort, which could command a robot someone else drives.
+        self._is_detached = is_detached or (lambda _device_id: False)
 
     def run(self):
         """Entry point called by ``threading.Thread.start()``.
@@ -430,6 +434,8 @@ class Task(threading.Thread):
         self.logger.warning(f"[{self.name}] Aborting task immediately!")
         self._stop_event.set()
         for device in self.devices.values():
+            if self._is_detached(device.device_id):
+                continue
             try:
                 device.abort()
             except Exception as e:

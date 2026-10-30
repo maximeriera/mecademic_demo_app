@@ -30,6 +30,8 @@ class IoLogikE1212(Device):
     >>> states = io.api.read_all_di()
     """
 
+    supports_reconnect = True
+
     def __init__(self, ip_address: str, port: int = 502, slave_id: int = 1, name=None):
         if name is None:
             name = f"IoLogikE1212_{ip_address}"

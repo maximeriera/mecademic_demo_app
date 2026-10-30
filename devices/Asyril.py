@@ -3,6 +3,8 @@ from .Device import Device
 from .api.AsyrilAPI import AsyrilEyePlusApi
 
 class AsyrilEyePlus(Device):
+    supports_reconnect = True
+
     def __init__(self, ip_address: str, recipe:int, port: int = 7171, name=None):
         if name is None:
             name = f"AsyrilEyePlus_{ip_address}"

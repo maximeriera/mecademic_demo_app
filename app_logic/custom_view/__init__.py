@@ -16,7 +16,8 @@ Rules for sources
 -----------------
 * A source runs on its own thread, concurrently with ``prod_cycle``. Read only
   what is safe to read from another thread — e.g. mecademicpy's cached
-  real-time data (``GetRtTargetCartPos``, never ``synchronous_update=True``) —
+  real-time data (``robot.rt.GetRtTargetCartPos(synchronous_update=False)``;
+  the default ``True`` queries the robot) —
   or a device this source owns alone; task code then uses
   ``context.latest("<source>")`` instead of querying that device itself.
 * To analyse one movement rather than the whole cycle, bracket it in
@@ -69,14 +70,23 @@ def setup(hub, devices):
         scan = SimulatedScan(hub, SCAN_X_MM, SCAN_Y_MM)
         hub.add_source("robot_xy", scan.robot_xy, rate_hz=50)
     else:
-        # Cached real-time target pose: thread-safe, no I/O. The robot's
-        # monitoring runs at ~60 Hz by default, so sampling faster only
-        # duplicates values.
-        hub.add_source(
-            "robot_xy",
-            lambda: robot.api.GetRtTargetCartPos(include_timestamp=True).data[:2],
-            rate_hz=50,
-        )
+        # Cached real-time target pose: thread-safe, no I/O. `robot.rt` is the
+        # control link or, once control is released to another client from the
+        # Devices tab, the monitoring link, so the map keeps filling while the
+        # robot is jogged from its web portal. synchronous_update=False is what
+        # makes the read cached (the default queries the robot, and is refused
+        # on a monitoring link). The robot's monitoring runs at ~60 Hz by
+        # default, so sampling faster only duplicates values.
+        last_stamp = [None]
+
+        def read_robot_xy():
+            pose = robot.rt.GetRtTargetCartPos(include_timestamp=True, synchronous_update=False)
+            if pose.timestamp == last_stamp[0]:
+                return None  # no new robot cycle (link dropped?): record nothing stale
+            last_stamp[0] = pose.timestamp
+            return pose.data[:2]
+
+        hub.add_source("robot_xy", read_robot_xy, rate_hz=50, device="my_meca_robot")
 
     def read_power():
         watts = meter.api.read_power()
@@ -84,7 +94,7 @@ def setup(hub, devices):
         # rather than a value the page and the analysis cannot use.
         return watts if math.isfinite(watts) else None
 
-    hub.add_source("power", read_power, rate_hz=POWER_RATE_HZ)
+    hub.add_source("power", read_power, rate_hz=POWER_RATE_HZ, device=POWER_METER)
 
     # Fixed plot axes and the pass/fail criterion, for the page.
     hub.publish("scan_config", {
