@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from core import AppContext
 from devices import Device
 
-from . import algorithm, gripper, memory, poses
+from . import algorithm, gripper, memory, poses, runlog
 from .alignment import AlignmentNoSignal, AlignmentResult, AlignmentSettings, run_alignment
 from .cell import ROBOT, ProcessError, power_meter, prepare_robot, run_program
 
@@ -75,14 +75,15 @@ def move_to_alignment_start(devices: Dict[str, Device], context: AppContext) -> 
         run_program(devices, robot, poses.ALIGN_START_PROGRAM)
 
 
-def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentResult:
+def align_fiber(devices: Dict[str, Device], context: AppContext,
+                on_summary: Optional[Callable[[Dict[str, Any]], None]] = None) -> AlignmentResult:
     """Run the alignment algorithm from the current pose, then judge it against the threshold.
 
     The search stays within ``align_range_um`` / ``align_range_deg`` of where it
     starts. It only makes sense at the alignment station, with a fiber. It
     starts the search where this fiber aligned last (see memory.py), unless
     ``use_remembered_pose`` is off, and remembers where it ends, whenever that
-    is in the light.
+    is in the light. ``on_summary`` gets the run's summary (run_alignment).
     """
     with context.step("Align fiber"):
         logger = devices[ROBOT].logger
@@ -98,7 +99,7 @@ def align_fiber(devices: Dict[str, Device], context: AppContext) -> AlignmentRes
             logger.info("use_remembered_pose is off: the search starts from the current pose.")
         result = run_alignment(robot, power_meter(devices), context, fiber=fiber, align=algorithm.align,
                                logger=logger, phases=algorithm.PHASES, phase_views=algorithm.PHASE_VIEWS,
-                               seed=seed)
+                               seed=seed, on_summary=on_summary)
 
         # In the light, even under the threshold: a better start for this fiber than align_start.
         if math.isfinite(result.power_w) and result.power_w >= AlignmentSettings.from_context(context).signal_detect_w:
@@ -191,14 +192,19 @@ def run_align_only_cycle(devices: Dict[str, Device], context: AppContext) -> Opt
     For running the alignment over and over from random starts: nothing is
     picked or placed. A search that finds no light is not a fault here: it is
     logged, the fiber still retracts, and the result is None (prod.py counts
-    it as failed). Any other error stops the cycle as usual.
+    it as failed). Any other error stops the cycle as usual. Every alignment,
+    whatever its end, adds a row to the ``align_only_csv`` file (runlog.py).
     """
+    logger = devices[ROBOT].logger
     move_to_alignment_start(devices, context)
-    random_offset(devices, context)
+    offset = random_offset(devices, context)
+    summary: Dict[str, Any] = {}
+    result: Optional[AlignmentResult] = None
     try:
-        result: Optional[AlignmentResult] = align_fiber(devices, context)
+        result = align_fiber(devices, context, on_summary=summary.update)
     except AlignmentNoSignal as e:
-        devices[ROBOT].logger.warning(f"Alignment-only cycle: no light found ({e}). Retracting for the next cycle.")
-        result = None
+        logger.warning(f"Alignment-only cycle: no light found ({e}). Retracting for the next cycle.")
+    finally:
+        runlog.record(context, logger, offset, summary)
     retract_from_alignment(devices, context)
     return result

@@ -641,7 +641,8 @@ Algorithm = Callable[[AlignmentIO, AlignmentSettings], None]
 def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
                   align: Algorithm, logger: Optional[logging.Logger] = None,
                   phases: Sequence[str] = (), phase_views: Optional[Dict[str, Any]] = None,
-                  seed: Optional[Sequence[float]] = None) -> AlignmentResult:
+                  seed: Optional[Sequence[float]] = None,
+                  on_summary: Optional[Callable[[Dict[str, Any]], None]] = None) -> AlignmentResult:
     """Run ``align`` from the robot's current pose, then judge the result.
 
     Brackets the run with ``align_start`` / ``align_end`` events and publishes
@@ -650,7 +651,9 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
     ``phases`` are the algorithm's phase names, in order (``algorithm.PHASES``),
     and ``phase_views`` how the custom view plots each (``algorithm.PHASE_VIEWS``).
     ``seed`` is a robot pose where this fiber aligned before: the algorithm
-    gets it as ``io.seed`` and may start there.
+    gets it as ``io.seed`` and may start there. ``on_summary`` is called with
+    the ``align_result`` summary as it is published, whether the run passed,
+    failed, or raised (e.g. to log each run).
     """
     log = logger or logging.getLogger(__name__)
     settings = AlignmentSettings.from_context(context)
@@ -700,8 +703,10 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
         log.error(f"Alignment of fiber {fiber} failed after {io.elapsed_s():.1f} s: {error}")
         context.mark("align_end", fiber=fiber, passed=False, error=error)
         try:
-            context.publish("align_result", _summary(io, settings, fiber, phase_views,
-                                                     passed=False, power_w=None, error=error))
+            summary = _summary(io, settings, fiber, phase_views, passed=False, power_w=None, error=error)
+            context.publish("align_result", summary)
+            if on_summary is not None:
+                on_summary(summary)
         except Exception as summary_error:  # never hide the alignment's own error
             log.warning(f"Could not publish the alignment summary: {summary_error}")
         raise
@@ -718,9 +723,11 @@ def run_alignment(robot: Any, meter: Any, context: AppContext, fiber: int,
         timed_out=timed_out,
     )
     context.mark("align_end", fiber=fiber, passed=result.passed, power_w=final.power_w)
-    context.publish("align_result", _summary(io, settings, fiber, phase_views, passed=result.passed,
-                                             power_w=final.power_w, final=list(final.pose),
-                                             final_local=list(io.row(final)[:6]), timed_out=timed_out))
+    summary = _summary(io, settings, fiber, phase_views, passed=result.passed, power_w=final.power_w,
+                       final=list(final.pose), final_local=list(io.row(final)[:6]), timed_out=timed_out)
+    context.publish("align_result", summary)
+    if on_summary is not None:
+        on_summary(summary)
     return result
 
 

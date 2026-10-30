@@ -67,7 +67,7 @@ class FiberSlot:
 # --- Tool --------------------------------------------------------------------
 
 #: Tool reference frame (SetTrf), with the TCP at the tip of the held fiber.
-TOOL_TRF = Pose(-5.35, -9.26647182049, 9, 0 , 0 , 150)
+TOOL_TRF = Pose(0 , -8, 14, 0, 0, 180)
 
 # --- Joint positions -----------------------------------------------------------
 

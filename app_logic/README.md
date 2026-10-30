@@ -32,7 +32,23 @@ a random start. Nothing is picked or placed, and `next_fiber` stays as it is.
 
 `aligned_count` / `failed_count` then give the success rate. A search that
 finds no light counts as failed and the fiber still retracts; it does not
-fault the cell. Turn `use_remembered_pose` off for these runs, or each
+fault the cell.
+
+Each run adds a row to `logs/alignment/align_only_runs.csv` (the
+`align_only_csv` param; empty turns it off), flushed at once so an
+overnight run keeps its data. A row holds:
+- the time, the run number and the fiber;
+- the random offset (x, z µm, rx, rz °);
+- the power at the start, whether Acquire found light, and how (e.g.
+  `angle @ ring 3/6`);
+- for each phase, its status, duration and best power so far;
+- the gradient circles and pattern iterations;
+- the verdict, power, duration and readings;
+- where the fiber ended, both from the offset start and as the robot pose;
+- the error, if the run stopped on one.
+
+The columns are listed in `fiber_alignment/runlog.py`. An update that
+changes them renames the old file aside instead of mixing them. Turn `use_remembered_pose` off for these runs, or each
 alignment goes straight back to where the last one ended. The Manual tab
 has the same Random Offset step as a button.
 
@@ -70,6 +86,7 @@ They run at the speeds set in the Variables tab unless they set their own.
 | `ALIGNMENT.md` | A brief on the alignment: for presenters, then the technical details |
 | `fiber_alignment/algorithm.py` | The alignment algorithm (see below), and how the custom view plots each of its phases (`PHASE_VIEWS`) |
 | `fiber_alignment/memory.py` | Where each fiber aligned last (the `fiber_poses` variable), so that its next alignment starts there |
+| `fiber_alignment/runlog.py` | A CSV row per alignment-only run: its random offset, how the light was found, each phase, the result |
 | `fiber_alignment/fit.py` | Its curve fits: Gaussian profiles, parabolas and quadratics in log power |
 | `fiber_alignment/frames.py` | Frame math from the colleague's script (poses ↔ 4×4 matrices) |
 | `custom_view/` | `/view/`: live power vs threshold (green/red), the verdict, and a plot per alignment phase (see below) |

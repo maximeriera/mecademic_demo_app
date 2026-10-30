@@ -247,6 +247,15 @@ params:
     persist: true
     description: Largest tilt offset (Rx/Rz in the tool frame, °) the alignment-only production adds before each alignment. Drawn evenly over a disc of this radius. Never along or about the fiber axis (Y), so the gap stays the one align_start taught.
 
+  align_only_csv:
+    type: str
+    # One row per run: the offset, how the light was found, each phase's
+    # status, time and best power, the result and the final pose.
+    default: alignment/align_only_runs.csv
+    editable_when_idle: true
+    persist: true
+    description: 'CSV file the alignment-only production adds a row to after each alignment (fiber_alignment/runlog.py). Relative to the logs/ folder, or absolute. Empty: no file.'
+
   # --- Demo pacing -----------------------------------------------------------------
   cycle_pause_s:
     type: float
