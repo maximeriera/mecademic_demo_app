@@ -6,19 +6,7 @@ import pytest
 
 from core import Workspaces
 
-
-def _make_workspace(folder, marker, layout="flat", title=None):
-    config_dir = folder / "app_logic" if layout == "app_logic" else folder
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.yaml").write_text(
-        (f"title: {title}\n" if title else "") + "devices:\n  cell: {type: simulated}\n",
-        encoding="utf-8",
-    )
-    # A workspace-local module and package, as real workspaces have helpers.
-    (folder / "marker.py").write_text(f"VERSION = {marker!r}\n", encoding="utf-8")
-    (folder / "ws_helpers").mkdir()
-    (folder / "ws_helpers" / "__init__.py").write_text(f"VERSION = {marker!r}\n", encoding="utf-8")
-    return folder
+from conftest import make_workspace as _make_workspace
 
 
 def test_discover_lists_both_layouts_and_skips_the_rest(tmp_path):
@@ -88,27 +76,10 @@ def test_purge_reloads_workspace_code_but_keeps_installed_and_framework(tmp_path
         Workspaces.purge_modules([str(a), str(b)])
 
 
-@pytest.fixture(scope="module")
-def flask_app(tmp_path_factory):
-    """app.py imported against a temporary workspaces root."""
-    root = tmp_path_factory.mktemp("workspaces")
-    _make_workspace(root / "ws_main", "main")
-    _make_workspace(root / "ws_other", "other", layout="app_logic")
-    argv = sys.argv
-    sys.argv = ["app.py", "--workspace", str(root / "ws_main"), "--workspaces-root", str(root)]
-    try:
-        sys.modules.pop("app", None)
-        import app as app_module
-    finally:
-        sys.argv = argv
-    yield app_module
-    with app_module._switch_lock:
-        app_module._shutdown_active_controller()
-    sys.modules.pop("app", None)
-
-
 def test_switch_through_the_api(flask_app):
     client = flask_app.app.test_client()
+    # Start from ws_main whatever ran before (the fixture is shared).
+    assert client.post("/api/workspaces/switch", json={"name": "ws_main"}).status_code == 200
 
     listing = client.get("/api/workspaces").get_json()
     assert listing["current"] == "ws_main"

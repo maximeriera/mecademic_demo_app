@@ -80,6 +80,37 @@ def controller(cell_dir):
     ctrl.close()
 
 
+def make_workspace(folder, marker, layout="flat", title=None):
+    """A minimal workspace (one simulated device) with a local module and package."""
+    config_dir = folder / "app_logic" if layout == "app_logic" else folder
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yaml").write_text(
+        (f"title: {title}\n" if title else "") + "devices:\n  cell: {type: simulated}\n",
+        encoding="utf-8",
+    )
+    (folder / "marker.py").write_text(f"VERSION = {marker!r}\n", encoding="utf-8")
+    (folder / "ws_helpers").mkdir()
+    (folder / "ws_helpers" / "__init__.py").write_text(f"VERSION = {marker!r}\n", encoding="utf-8")
+    return folder
+
+
+@pytest.fixture(scope="session")
+def flask_app(tmp_path_factory):
+    """app.py imported once, against a temporary workspaces root (ws_main, ws_other)."""
+    root = tmp_path_factory.mktemp("workspaces")
+    make_workspace(root / "ws_main", "main")
+    make_workspace(root / "ws_other", "other", layout="app_logic")
+    argv = sys.argv
+    sys.argv = ["app.py", "--workspace", str(root / "ws_main"), "--workspaces-root", str(root)]
+    try:
+        import app as app_module
+    finally:
+        sys.argv = argv
+    yield app_module
+    with app_module._switch_lock:
+        app_module._shutdown_active_controller()
+
+
 @pytest.fixture
 def ready_controller(controller):
     from core.ControllerState import ControllerState

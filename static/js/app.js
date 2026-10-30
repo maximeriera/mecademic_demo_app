@@ -49,21 +49,24 @@ function switchTab(name, btn) {
 }
 
 /* ---- Status polling ---- */
+// From the SSE `status` event, or the /api/status poll when the stream is down.
+function applyStatus(data) {
+    latestControllerStatus = data.status;
+    patchLiveStep(data.step || null);
+    stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
+    updateManualActionAvailability(data.status);
+    updateWorkspaceButtons(data.status);
+    // Another page switched the workspace: everything here is stale.
+    if (data.workspace) {
+        if (currentWorkspace === null) currentWorkspace = data.workspace;
+        else if (data.workspace !== currentWorkspace && !workspaceSwitching) window.location.reload();
+    }
+}
+
 function updateRobotStatus() {
     fetch('/api/status')
         .then(r => r.json())
-        .then(data => {
-            latestControllerStatus = data.status;
-            patchLiveStep(data.step || null);
-            stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
-            updateManualActionAvailability(data.status);
-            updateWorkspaceButtons(data.status);
-            // Another page switched the workspace: everything here is stale.
-            if (data.workspace) {
-                if (currentWorkspace === null) currentWorkspace = data.workspace;
-                else if (data.workspace !== currentWorkspace && !workspaceSwitching) window.location.reload();
-            }
-        })
+        .then(applyStatus)
         .catch(() => {
             latestControllerStatus = 'FAULTED';
             // Without this the indicator freezes on a stale step while the
@@ -2535,7 +2538,9 @@ setInterval(() => {
     }
 }, 10000);
 
+// Fallback polling: skipped while the event stream (live.js) delivers the same data.
 setInterval(() => {
+    if (Live.active) return;
     if (document.getElementById('tab-production').classList.contains('active')) {
         refreshProdMetrics();
     }
@@ -2543,6 +2548,42 @@ setInterval(() => {
         refreshContext(true);
     }
 }, 1000);
+
+/* ---- Live updates (server-sent events) ---- */
+function isTabActive(name) {
+    const tab = document.getElementById('tab-' + name);
+    return !!(tab && tab.classList.contains('active'));
+}
+
+Live.on('status', applyStatus);
+Live.on('devices', (devices) => renderDevices(Array.isArray(devices) ? devices : []));
+Live.on('prod', (snapshot) => {
+    if (isTabActive('production')) renderProdSnapshot(snapshot);
+});
+Live.on('context', (snapshot) => {
+    if (isTabActive('variables') && !isContextUserInteracting()) renderContext(snapshot);
+});
+Live.on('notice', (notice) => showToast(notice.level, notice.message));
+Live.on('workspace', (info) => {
+    if (info && info.name && info.name !== currentWorkspace && !workspaceSwitching) window.location.reload();
+});
+
+/* ---- Toasts (faults, failed tasks, link changes) ---- */
+function showToast(level, message) {
+    const container = document.getElementById('toast-container');
+    if (!container || !message) return;
+    const toast = document.createElement('div');
+    const kind = ['error', 'warning', 'info'].includes(level) ? level : 'info';
+    toast.className = `toast toast-${kind}`;
+    toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    toast.textContent = message;
+    toast.title = 'Click to dismiss';
+    const dismiss = () => toast.remove();
+    toast.addEventListener('click', dismiss);
+    container.appendChild(toast);
+    while (container.children.length > 4) container.firstElementChild.remove();
+    setTimeout(dismiss, kind === 'error' ? 12000 : 6000);
+}
 
 /* ---- Custom view link ---- */
 // Shown only when the workspace ships custom_view/index.html.
@@ -2556,8 +2597,8 @@ function initCustomViewLink() {
 }
 
 /* ---- Startup ---- */
-setInterval(updateRobotStatus, 100);
-setInterval(loadRobotInfo, 1000);
+setInterval(() => { if (!Live.active) updateRobotStatus(); }, 100);
+setInterval(() => { if (!Live.active) loadRobotInfo(); }, 1000);
 setInterval(pollDeviceLive, 500);
 updateRobotStatus();
 loadRobotInfo();
@@ -2573,3 +2614,4 @@ initCustomViewLink();
 loadSystemInfo();
 initProdTimeline();
 loadWorkspaces();
+Live.connect();

@@ -428,6 +428,10 @@
         </div>
     </div>
 
+    <!-- Faults, failed tasks and device link changes, pushed over /api/events. -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <script src="{{ url_for('static', filename='js/live.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

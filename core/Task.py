@@ -164,6 +164,7 @@ class Task(threading.Thread):
         context: AppContext,
         manual_action_key: str | None = None,
         is_detached=None,
+        notify=None,
     ):
         super().__init__()
         
@@ -179,6 +180,8 @@ class Task(threading.Thread):
         # Callable[[device_id], bool]: devices released to another program are
         # never sent an abort, which could command a robot someone else drives.
         self._is_detached = is_detached or (lambda _device_id: False)
+        # Callable[[level, message], None]: operator-facing notices (UI toasts).
+        self._notify = notify or (lambda _level, _message: None)
 
     def run(self):
         """Entry point called by ``threading.Thread.start()``.
@@ -216,6 +219,7 @@ class Task(threading.Thread):
                     self._run_manual_action()
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
+            self._notify("error", f"{self._display_name()} failed: {e}")
             if self.task_type == TaskType.PROD:
                 self.context.apply_event("fault")
                 self.context.metrics.mark_prod_running(False)
@@ -230,6 +234,11 @@ class Task(threading.Thread):
                 # Only transition to READY if no FAULT was set during execution
                 self.state_change_callback(ControllerState.READY)
             self.logger.info(f"[{self.name}] Task finished.")
+
+    def _display_name(self) -> str:
+        if self.task_type == TaskType.MANUAL_ACTION:
+            return f"Manual action '{self.manual_action_key}'"
+        return self.task_type.value
 
     def _sequence_key(self) -> str:
         """Key used to look up a declared step sequence for this task."""

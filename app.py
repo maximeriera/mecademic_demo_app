@@ -24,15 +24,18 @@ args, _ = parser.parse_known_args()
 workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
 
-from flask import Flask, abort, render_template, jsonify, request, send_from_directory, url_for
+from flask import Flask, Response, abort, render_template, jsonify, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
+import json
 import logging
 import math
 import time
 import uuid
 
+from core.EventBus import CLOSED, EventBus
+from core.LivePublisher import LivePublisher, LiveSource
 from core.Task import TaskType
 from core.ControllerState import ControllerState
 from core.ContextStore import ContextError
@@ -48,6 +51,15 @@ logger = get_app_logger()
 
 # --- Flask Setup ---
 app = Flask(__name__)
+
+# Server-sent events (/api/events): one bus for the process, kept across
+# workspace switches. The LivePublisher feeding it is created below the routes.
+BUS = EventBus()
+
+
+def _publish_notice(level, message):
+    """Operator-facing notice (a fault, a failed task, a link change), shown as a toast."""
+    BUS.publish('notice', json.dumps({'level': level, 'message': message, 'time': time.time()}))
 
 # --- APPLICATION Controller Instance (Singleton) ---
 # Built from the active workspace; rebuilt by switch_workspace() (Workspaces
@@ -120,6 +132,8 @@ def _activate_workspace(ws_path):
     global workspace_path, workspace_config_dir, APPLICATION, BACKUP_DIR, BACKUP_RESTORE, CUSTOM_VIEW_DIR
     workspace_path = ws_path
     APPLICATION, workspace_config_dir = _build_controller(ws_path)
+    if not isinstance(APPLICATION, MockApplicationController):
+        APPLICATION.on_notice = _publish_notice
     BACKUP_DIR = os.path.join(ws_path, "backups")
     BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
     # A workspace may ship custom_view/ next to its config.yaml (see below).
@@ -180,6 +194,7 @@ def switch_workspace(name):
             _last_logged_health = None
         _step_read_failed = False
         _task_read_failed = False
+        BUS.publish('workspace', json.dumps({'name': os.path.basename(target)}))
         return {
             'success': not isinstance(APPLICATION, MockApplicationController),
             'workspace': os.path.basename(target),
@@ -225,7 +240,8 @@ _state_log_lock = threading.Lock()
 
 
 def _is_noisy_path(path):
-    return (path in _POLL_PATHS or path.startswith('/static/') or path.startswith('/api/logs/')
+    return (path in _POLL_PATHS or path == '/api/events'
+            or path.startswith('/static/') or path.startswith('/api/logs/')
             or path.startswith('/api/data') or path.startswith('/view/')
             or (path.startswith('/api/devices/') and path.endswith('/live')))
 
@@ -314,6 +330,11 @@ def index():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """API endpoint to check the APPLICATION's current state."""
+    return jsonify(_status_payload())
+
+
+def _status_payload():
+    """State, running task, live step and workspace: /api/status and the SSE ``status`` event."""
     current_state = APPLICATION.get_state().value
     # Polled at 10 Hz; log only on change (see _log_state_change).
     _log_state_change(current_state)
@@ -347,8 +368,8 @@ def get_status():
             _task_read_failed = True
             logger.error("Current task read failed; task name suppressed: %s", e, exc_info=True)
     # The workspace name lets every open page notice a switch made elsewhere and reload.
-    return jsonify({'status': current_state, 'step': step, 'task': task,
-                    'workspace': os.path.basename(os.path.normpath(workspace_path))})
+    return {'status': current_state, 'step': step, 'task': task,
+            'workspace': os.path.basename(os.path.normpath(workspace_path))}
 
 @app.route('/api/task/<task_name>', methods=['POST'])
 def handle_task(task_name):
@@ -449,34 +470,40 @@ def run_manual_action(action_key):
 def get_APPLICATION_info():
     """API endpoint to get device information including live status."""
     try:
-        info_list = []
-        detached = APPLICATION.get_detached()
-        for device_id, device_info in APPLICATION.get_devices_info().items():
-            # Enrich static info with live status fields
-            entry = {'device_id': device_id}
-            entry.update(device_info)
-            # Attach live status if devices are accessible
-            if hasattr(APPLICATION, 'devices') and device_id in APPLICATION.devices:
-                dev = APPLICATION.devices[device_id]
-                entry['connected'] = dev.connected
-                entry['ready'] = dev.ready
-                entry['faulted'] = dev.faulted
-                try:
-                    entry['link'] = dev.link
-                except Exception:
-                    entry['link'] = 'disconnected'
-                entry['detached'] = device_id in detached
-                entry['in_transition'] = APPLICATION.is_in_transition(device_id)
-                entry['supports_reconnect'] = bool(getattr(dev, 'supports_reconnect', False))
-                entry['supports_monitoring'] = bool(getattr(dev, 'supports_monitoring', False))
-                entry['has_live_data'] = bool(getattr(dev, 'has_live_data', False))
-            info_list.append(entry)
-        # Polled at 1 Hz; log only when device health actually changes.
-        _log_device_health_change(info_list)
-        return jsonify(info_list), 200
+        return jsonify(_jsonable(_device_info_list())), 200
     except Exception as e:
         logger.error(f"Failed to retrieve device info: {e}", exc_info=True)
         return jsonify({'message': f'Failed to retrieve device info: {e}'}), 500
+
+
+def _device_info_list():
+    """Static info plus live status of every device: /api/info and the SSE ``devices`` event."""
+    info_list = []
+    detached = APPLICATION.get_detached()
+    for device_id, device_info in APPLICATION.get_devices_info().items():
+        # Enrich static info with live status fields
+        entry = {'device_id': device_id}
+        entry.update(device_info)
+        # Attach live status if devices are accessible
+        if hasattr(APPLICATION, 'devices') and device_id in APPLICATION.devices:
+            dev = APPLICATION.devices[device_id]
+            entry['connected'] = dev.connected
+            entry['ready'] = dev.ready
+            entry['faulted'] = dev.faulted
+            try:
+                entry['link'] = dev.link
+            except Exception:
+                entry['link'] = 'disconnected'
+            entry['detached'] = device_id in detached
+            entry['in_transition'] = APPLICATION.is_in_transition(device_id)
+            entry['supports_reconnect'] = bool(getattr(dev, 'supports_reconnect', False))
+            entry['supports_monitoring'] = bool(getattr(dev, 'supports_monitoring', False))
+            entry['has_live_data'] = bool(getattr(dev, 'has_live_data', False))
+        info_list.append(entry)
+    # Produced at 1 Hz; log only when device health actually changes.
+    _log_device_health_change(info_list)
+    return info_list
+
 
 @app.route('/api/clear_faults', methods=['POST'])
 def clear_faults():
@@ -776,7 +803,6 @@ def _history_store():
 
 
 def _csv_response(text, filename):
-    from flask import Response
     return Response(text, mimetype='text/csv',
                     headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
@@ -1003,6 +1029,57 @@ def get_log(category, filename):
         return jsonify({'message': f'Failed to read log: {e}'}), 500
 
 
+# --- Server-sent events ---------------------------------------------------
+# Every page holds one /api/events stream instead of polling /api/status at
+# 10 Hz and /api/info, /api/prod/metrics, /api/context at 1 Hz. The pages fall
+# back to that polling whenever the stream is down. /api/status stays: it is
+# also the Docker healthcheck.
+
+PUBLISHER = LivePublisher(BUS, [
+    LiveSource('status', _status_payload, 0.1),
+    LiveSource('devices', lambda: _jsonable(_device_info_list()), 1.0),
+    LiveSource('prod', lambda: _jsonable(APPLICATION.get_prod_snapshot()), 1.0),
+    LiveSource('context', lambda: _jsonable(APPLICATION.get_context_snapshot()), 1.0),
+], logger)
+PUBLISHER.start()
+
+#: Comment line sent when nothing else was, so dead clients are found within seconds.
+_SSE_HEARTBEAT_S = 5.0
+
+
+@app.route('/api/events', methods=['GET'])
+def stream_events():
+    """Server-sent events: status, devices, prod, context, notice, workspace.
+
+    Starts with a full snapshot of every source, then sends changes only.
+    ``X-Accel-Buffering: no`` lets it through an nginx reverse proxy unbuffered.
+    """
+    sub = BUS.subscribe()
+    if sub is None:
+        return jsonify({'message': 'Server is shutting down.'}), 503
+    snapshot = PUBLISHER.current()
+
+    def generate():
+        try:
+            yield 'retry: 2000\n\n'
+            for name, payload in snapshot.items():
+                yield f'event: {name}\ndata: {payload}\n\n'
+            while True:
+                item = sub.get(timeout=_SSE_HEARTBEAT_S)
+                if item is CLOSED:
+                    return
+                if item is None:
+                    yield ': ping\n\n'
+                    continue
+                name, payload = item
+                yield f'event: {name}\ndata: {payload}\n\n'
+        finally:
+            BUS.unsubscribe(sub)
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
 # --- Cleanup on Process Exit ---
 # NOTE: this must NOT be a Flask `teardown_appcontext` hook — that hook runs at the
 # end of *every request*, which would shut the controller down on the first page load.
@@ -1026,6 +1103,10 @@ def shutdown_APPLICATION_controller():
 def _shutdown_active_controller():
     print("Process exit: Shutting down APPLICATION controller.")
     logger.info("Process exit: Shutting down APPLICATION controller.")
+    # Streams first: the publisher must not probe devices being disconnected,
+    # and closing the bus ends every open /api/events response.
+    PUBLISHER.stop()
+    BUS.close()
     try:
         APPLICATION.shutdown()
     except Exception as e:

@@ -90,6 +90,10 @@ class ApplicationController:
         self._command_lock = threading.RLock()
         self._detached: Dict[str, str] = {}      # device_id -> "monitoring" | "disconnected"
         self._in_transition: set[str] = set()    # device ids mid connect/disconnect
+
+        #: Callable[[level, message], None] for operator-facing notices (the UI
+        #: shows them as toasts). Set by the web layer; never required.
+        self.on_notice = None
         
         # Threads for monitoring and task execution
         
@@ -376,6 +380,7 @@ class ApplicationController:
                     
             except Exception as e:
                 self.logger.error(f"Initialization failed for device {device.device_id}: {e}", exc_info=True)
+                self._notice("error", f"Initialization failed for {device.device_id}: {e}")
                 self.set_state(ControllerState.FAULTED)
                 raise Exception(f"Initialization failed for device {device.device_id}: {e}")
         
@@ -504,6 +509,7 @@ class ApplicationController:
                 context=self.context,
                 manual_action_key=manual_action_key,
                 is_detached=self.is_detached,
+                notify=self._notice,
             )
             self.logger.info(
                 "Starting task thread: name=%s type=%s manual_action_key=%s",
@@ -660,6 +666,15 @@ class ApplicationController:
 
     # --- Per-device link control ---
 
+    def _notice(self, level: str, message: str) -> None:
+        callback = self.on_notice
+        if callback is None:
+            return
+        try:
+            callback(level, message)
+        except Exception:
+            self.logger.debug("Notice callback failed.", exc_info=True)
+
     def is_detached(self, device_id: str) -> bool:
         return device_id in self._detached
 
@@ -729,6 +744,7 @@ class ApplicationController:
                        else f"{device_id} disconnected.")
         else:
             message = f"{device_id} detached with an error: {error}"
+        self._notice("info" if error is None else "warning", message)
         return {"success": error is None, "message": message, "link": link, "detached": True}
 
     def connect_device(self, device_id: str) -> Dict[str, Any]:
@@ -760,9 +776,11 @@ class ApplicationController:
                 if error is None:
                     self._detached.pop(device_id, None)
 
+        message = f"{device_id} connected." if error is None else f"Connect of {device_id} failed: {error}"
+        self._notice("info" if error is None else "error", message)
         return {
             "success": error is None,
-            "message": f"{device_id} connected." if error is None else f"Connect of {device_id} failed: {error}",
+            "message": message,
             "link": self._safe_link(device),
             "detached": device_id in self._detached,
         }
@@ -890,6 +908,7 @@ class ApplicationController:
                 if faulted:
                     if self.get_state() != ControllerState.FAULTED:
                         self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state and aborting task.")
+                        self._notice("error", f"{device.device_id} faulted: the cell is stopped. Clear faults to resume.")
                         self.context.apply_event("fault")
                         self.context.metrics.mark_prod_running(False)
                         self.context.steps.abandon_open_steps("faulted")
