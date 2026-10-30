@@ -9,6 +9,9 @@
 
 -r requirements.txt
 
+# Tests (app_logic/tests/: the alignment on a simulated cell)
+pytest==9.1.1
+
 # Notebook workflow
 jupyterlab==4.4.10
 notebook==7.4.7
