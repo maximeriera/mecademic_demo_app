@@ -2201,3 +2201,73 @@ button:active { transform: scale(0.98); }
     background: var(--color-accent);
     box-shadow: 0 0 6px var(--color-accent);
 }
+
+/* --- Production tab: cycle timeline (Gantt) --- */
+.timeline-strip svg,
+.timeline-chart svg {
+    display: block;
+}
+.timeline-strip {
+    margin-bottom: 8px;
+    cursor: pointer;
+}
+.timeline-strip-bar {
+    opacity: 0.55;
+}
+.timeline-strip-bar:hover,
+.timeline-strip-bar.selected {
+    opacity: 1;
+}
+.timeline-strip-bar.selected {
+    stroke: var(--color-text);
+    stroke-width: 1.5;
+}
+.timeline-caption {
+    font-size: 0.82em;
+    color: var(--color-muted);
+    margin-bottom: 10px;
+}
+.timeline-caption strong {
+    color: var(--color-text);
+}
+.timeline-caption .link-btn {
+    font-size: 0.95em;
+    margin-left: 8px;
+}
+.timeline-chart {
+    overflow-x: auto;
+}
+.gantt-grid {
+    stroke: rgba(255,255,255,0.07);
+    stroke-width: 1;
+}
+.gantt-tick,
+.gantt-label {
+    fill: var(--color-muted);
+    font-size: 11px;
+    font-family: inherit;
+}
+.gantt-label {
+    fill: var(--color-text);
+    font-size: 12px;
+}
+.gantt-row-alt {
+    fill: rgba(255,255,255,0.025);
+}
+.gantt-bar { opacity: 0.85; }
+.gantt-avg {
+    fill: none;
+    stroke: var(--color-text);
+    stroke-opacity: 0.45;
+    stroke-dasharray: 3 3;
+}
+.gantt-ok        { fill: var(--color-accent); }
+.gantt-failed,
+.gantt-faulted   { fill: var(--color-red); }
+.gantt-aborted   { fill: var(--color-yellow); }
+.gantt-abandoned { fill: var(--color-muted); }
+.gantt-sub.gantt-ok { fill: var(--color-accent-soft); }
+.gantt-text-ok        { color: var(--color-accent); }
+.gantt-text-failed,
+.gantt-text-faulted   { color: var(--color-red); }
+.gantt-text-aborted   { color: var(--color-yellow); }

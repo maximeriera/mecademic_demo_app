@@ -130,7 +130,8 @@ def _parse_bool(value, default=False):
 # endpoints are therefore excluded from per-request logging; what actually
 # matters about them — the controller state and device health — is logged by
 # _log_state_change() / _log_device_health_change() only when it *changes*.
-_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/metrics', '/api/context'})
+_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/metrics', '/api/context',
+                         '/api/prod/timelines', '/api/system'})
 
 _last_logged_state = None
 _last_logged_health = None
@@ -141,7 +142,8 @@ _state_log_lock = threading.Lock()
 
 def _is_noisy_path(path):
     return (path in _POLL_PATHS or path.startswith('/static/') or path.startswith('/api/logs/')
-            or path.startswith('/api/data') or path.startswith('/view/'))
+            or path.startswith('/api/data') or path.startswith('/view/')
+            or (path.startswith('/api/devices/') and path.endswith('/live')))
 
 
 def _log_state_change(state):
@@ -628,6 +630,27 @@ def get_prod_metrics():
     except Exception as e:
         logger.error(f"Failed to get production metrics: {e}", exc_info=True)
         return jsonify({'message': f'Failed to get production metrics: {e}'}), 500
+
+
+@app.route('/api/prod/timelines', methods=['GET'])
+def get_prod_timelines():
+    """Last finished PROD cycles with their step offsets, for the Gantt chart.
+
+    ``?after_rev=N`` answers ``{"rev": N, "unchanged": true}`` when nothing
+    finished since revision N, so the 1 Hz Production tab poll stays cheap.
+    """
+    getter = getattr(APPLICATION, 'get_prod_timelines', None)
+    if getter is None:
+        return jsonify({'rev': 0, 'order': [], 'timelines': [], 'avg_s': {}}), 200
+    try:
+        data = getter()
+    except Exception as e:
+        logger.error(f"Failed to get cycle timelines: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get cycle timelines: {e}'}), 500
+    after = request.args.get('after_rev', type=int)
+    if after is not None and after == data.get('rev'):
+        return jsonify({'rev': after, 'unchanged': True}), 200
+    return jsonify(_jsonable(data)), 200
 
 
 @app.route('/api/prod/runs', methods=['GET'])

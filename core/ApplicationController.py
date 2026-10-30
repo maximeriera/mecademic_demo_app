@@ -578,6 +578,14 @@ class ApplicationController:
             "steps": self.context.steps.snapshot(),
         }
 
+    def get_prod_timelines(self) -> Dict[str, Any]:
+        """Finished PROD cycle timelines (Gantt chart), with each top-level step's average."""
+        data = self.context.steps.timelines()
+        stats = self.context.steps.snapshot()["stats"]
+        data["avg_s"] = {s["name"]: s["avg_s"] for s in stats
+                         if s["depth"] == 0 and s["avg_s"] is not None}
+        return data
+
     def get_context_snapshot(self) -> Dict[str, Any]:
         """Params/variables for the Variables tab. ``enabled`` is False without a context file."""
         snapshot = self.context.store.snapshot()

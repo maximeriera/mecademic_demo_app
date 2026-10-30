@@ -942,6 +942,159 @@ function renderProdSnapshot(data) {
     renderProdMetrics(data);
     renderProdSteps(data);
     restoreScrollState('tab-production', scrollState);
+    refreshProdTimelines(data.steps ? data.steps.timeline_rev : undefined);
+}
+
+/* ---- Cycle timeline (Gantt) ----
+ * One row per top-level step, in declared order (steps a cycle skipped keep
+ * an empty row, so a conditional branch shows as such); nested steps are thin
+ * bars inside their parent's row, and a dashed box marks each step's average.
+ * Hand-drawn SVG: no chart library on a show floor. Fetched only when a cycle
+ * finished (timeline_rev changed).
+ */
+let prodTimelines = { rev: -1, order: [], timelines: [], avg_s: {} };
+let prodTimelineSelected = null;   // "run_id:cycle", or null to follow the latest
+let prodTimelineFetching = false;
+const TIMELINE_SLOTS = 30;
+
+function refreshProdTimelines(rev) {
+    if (rev === undefined || rev === prodTimelines.rev || prodTimelineFetching) return;
+    prodTimelineFetching = true;
+    fetch(`/api/prod/timelines?after_rev=${prodTimelines.rev}`)
+        .then(r => r.json())
+        .then((data) => {
+            if (data.unchanged) return;
+            prodTimelines = data;
+            renderProdTimelines();
+        })
+        .catch(() => {})
+        .finally(() => { prodTimelineFetching = false; });
+}
+
+function timelineKey(t) {
+    return `${t.run_id}:${t.cycle}`;
+}
+
+function selectTimeline(key) {
+    prodTimelineSelected = key;
+    renderProdTimelines();
+}
+
+function niceTimelineStep(span, target = 6) {
+    const steps = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    return steps.find((s) => span / s <= target) || steps[steps.length - 1];
+}
+
+function renderProdTimelines() {
+    const strip = document.getElementById('prod-timeline-strip');
+    const chart = document.getElementById('prod-timeline-chart');
+    const caption = document.getElementById('prod-timeline-caption');
+    if (!strip || !chart || !caption) return;
+
+    const timelines = Array.isArray(prodTimelines.timelines) ? prodTimelines.timelines : [];
+    if (timelines.length === 0) {
+        strip.innerHTML = '';
+        chart.innerHTML = '';
+        caption.textContent = 'No finished cycle yet. Start production to fill the timeline.';
+        return;
+    }
+    let selected = timelines.find((t) => timelineKey(t) === prodTimelineSelected);
+    if (!selected) {
+        prodTimelineSelected = null;
+        selected = timelines[timelines.length - 1];
+    }
+
+    // --- Strip: one bar per finished cycle, height = duration ---
+    const stripW = Math.max(strip.clientWidth || 600, 200);
+    const stripH = 44;
+    const slotW = stripW / Math.max(TIMELINE_SLOTS, timelines.length);
+    const maxDuration = Math.max(...timelines.map((t) => t.duration_s || 0), 0.001);
+    const bars = timelines.map((t, i) => {
+        const h = Math.max(3, (t.duration_s / maxDuration) * (stripH - 4));
+        const key = timelineKey(t);
+        const cls = `timeline-strip-bar gantt-${escapeHtml(t.status)}${t === selected ? ' selected' : ''}`;
+        return `<rect class="${cls}" data-key="${escapeHtml(key)}" x="${(i * slotW + 1).toFixed(1)}" y="${(stripH - h).toFixed(1)}"`
+            + ` width="${Math.max(2, slotW - 2).toFixed(1)}" height="${h.toFixed(1)}">`
+            + `<title>Cycle ${escapeHtml(t.cycle)} · ${formatDurationSeconds(t.duration_s)} · ${escapeHtml(t.status)}</title></rect>`;
+    }).join('');
+    strip.innerHTML = `<svg width="${stripW}" height="${stripH}" role="img" aria-label="Duration of the last ${timelines.length} cycles">${bars}</svg>`;
+
+    // --- Chart: the selected cycle ---
+    const frames = Array.isArray(selected.frames) ? selected.frames : [];
+    const order = (Array.isArray(prodTimelines.order) ? prodTimelines.order : []).slice();
+    frames.forEach((f) => { if (f.depth === 0 && !order.includes(f.name)) order.push(f.name); });
+    const rowOf = new Map(order.map((name, i) => [name, i]));
+
+    const width = Math.max(chart.clientWidth || 600, 320);
+    const labelW = Math.min(190, Math.round(width * 0.34));
+    const plotW = width - labelW - 14;
+    const rowH = 26;
+    const top = 22;
+    const height = top + order.length * rowH + 4;
+    const span = Math.max(selected.duration_s || 0, 0.001);
+    const x = (seconds) => labelW + (Math.max(0, seconds) / span) * plotW;
+
+    const parts = [];
+    const tickStep = niceTimelineStep(span);
+    for (let t = 0; t <= span + 1e-9; t += tickStep) {
+        const tx = x(t).toFixed(1);
+        parts.push(`<line class="gantt-grid" x1="${tx}" y1="${top - 4}" x2="${tx}" y2="${height}"></line>`);
+        parts.push(`<text class="gantt-tick" x="${tx}" y="${top - 8}" text-anchor="middle">${+t.toFixed(2)} s</text>`);
+    }
+    order.forEach((name, i) => {
+        const y = top + i * rowH;
+        if (i % 2 === 1) parts.push(`<rect class="gantt-row-alt" x="0" y="${y}" width="${width}" height="${rowH}"></rect>`);
+        const label = name.length > 26 ? name.slice(0, 25) + '…' : name;
+        parts.push(`<text class="gantt-label" x="${labelW - 8}" y="${y + rowH / 2 + 4}" text-anchor="end">`
+            + `${escapeHtml(label)}<title>${escapeHtml(name)}</title></text>`);
+    });
+
+    let busy = 0;
+    frames.forEach((f) => {
+        const rootName = f.depth === 0 ? f.name : String(f.path || '').split(' / ')[0];
+        const row = rowOf.get(rootName);
+        if (row === undefined) return;
+        const y = top + row * rowH;
+        const bx = x(f.offset_s);
+        const bw = Math.max(1.5, x(f.offset_s + f.duration_s) - bx);
+        const tip = `<title>${escapeHtml(f.path || f.name)}: ${formatDurationSeconds(f.duration_s)} (${escapeHtml(f.status)}), from +${(+f.offset_s).toFixed(2)} s</title>`;
+        if (f.depth === 0) {
+            busy += f.duration_s;
+            parts.push(`<rect class="gantt-bar gantt-${escapeHtml(f.status)}" x="${bx.toFixed(1)}" y="${y + 5}" width="${bw.toFixed(1)}" height="${rowH - 12}">${tip}</rect>`);
+            const avg = prodTimelines.avg_s ? prodTimelines.avg_s[f.name] : null;
+            if (avg) {
+                const aw = Math.max(1.5, x(f.offset_s + avg) - bx);
+                parts.push(`<rect class="gantt-avg" x="${bx.toFixed(1)}" y="${y + 3}" width="${aw.toFixed(1)}" height="${rowH - 8}"><title>${escapeHtml(f.name)} average: ${formatDurationSeconds(avg)}</title></rect>`);
+            }
+        } else {
+            parts.push(`<rect class="gantt-sub gantt-${escapeHtml(f.status)}" x="${bx.toFixed(1)}" y="${y + rowH - 8}" width="${bw.toFixed(1)}" height="4">${tip}</rect>`);
+        }
+    });
+    chart.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="Steps of cycle ${escapeHtml(selected.cycle)}">${parts.join('')}</svg>`;
+
+    const idle = Math.max(0, (selected.duration_s || 0) - busy);
+    const follow = prodTimelineSelected
+        ? ' <button type="button" class="link-btn" onclick="selectTimeline(null)">Follow latest &rarr;</button>'
+        : '';
+    caption.innerHTML = `<strong>Cycle ${escapeHtml(selected.cycle)}</strong> · ${escapeHtml(formatDurationSeconds(selected.duration_s))}`
+        + ` · <span class="timeline-status gantt-text-${escapeHtml(selected.status)}">${escapeHtml(selected.status)}</span>`
+        + ` · steps ${escapeHtml(formatDurationSeconds(busy))}, idle ${escapeHtml(formatDurationSeconds(idle))}`
+        + ` · ${escapeHtml(formatTimestamp(selected.started_at))}${follow}`;
+}
+
+function initProdTimeline() {
+    const strip = document.getElementById('prod-timeline-strip');
+    if (strip) {
+        strip.addEventListener('click', (event) => {
+            const bar = event.target.closest('[data-key]');
+            if (bar) selectTimeline(bar.dataset.key);
+        });
+    }
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(renderProdTimelines, 150);
+    });
 }
 
 function refreshProdMetrics() {
@@ -2239,3 +2392,4 @@ renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
 initCustomViewLink();
 loadSystemInfo();
+initProdTimeline();

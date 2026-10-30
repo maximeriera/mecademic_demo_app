@@ -341,13 +341,19 @@ class Task(threading.Thread):
                 self.context.metrics.mark_cycle_start()
                 self.context.steps.begin_cycle(cycle_number)
                 self.context.data.mark("cycle_start", cycle=cycle_number)
+                # Closes the cycle's timeline on every exit path, exactly once
+                # (end_cycle is a no-op if the monitor already closed it on a
+                # fault). "aborted" covers a BaseException escaping the cycle.
+                cycle_status = "aborted"
                 try:
                     prod_cycle(self.devices, self.context)
+                    cycle_status = "ok"
                     self.context.metrics.mark_cycle_end()
                     self.context.data.mark("cycle_end", cycle=cycle_number)
                     self.context.steps.log_cycle_summary(cycle_number)
                     self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:
+                    cycle_status = "aborted" if self.stopped() else "failed"
                     self.context.metrics.mark_cycle_error(str(e))
                     self.context.data.mark("cycle_error", cycle=cycle_number, error=str(e))
                     if self.stopped():
@@ -356,6 +362,8 @@ class Task(threading.Thread):
                         self.context.metrics.mark_prod_running(False)
                         return
                     raise  # genuine device error → propagate → FAULTED
+                finally:
+                    self.context.steps.end_cycle(cycle_status)
             # stop() called between cycles: finish the loop cleanly
             self.context.apply_event("prod_stop")
             self.context.metrics.mark_prod_running(False)

@@ -16,13 +16,20 @@ stats are keyed by the full path so a parent and child never collide.
 
 Step tracking is framework behaviour, not user configuration: it works whether
 or not the workspace defines a context file.
+
+PROD cycles are also recorded as timelines (:meth:`StepTracker.end_cycle`):
+each finished cycle keeps its frames with their offset from the cycle start,
+which is what the Production tab draws as a Gantt chart.
 """
 
 import contextlib
 import threading
 import time
+import uuid
+from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from functools import partial
+from typing import Any, Callable, Dict, List, Tuple
 
 
 class StepTracker:
@@ -32,6 +39,7 @@ class StepTracker:
     _MAX_STEP_HISTORY = 200     # completed step frames retained
     _MAX_STEP_STATS = 200       # distinct step paths aggregated
     _MAX_STEP_NAME_LEN = 120
+    _MAX_TIMELINES = 30         # finished PROD cycles kept for the Gantt chart
 
     def __init__(self, logger, sequences: Dict[str, List[str]] | None = None):
         self.logger = logger
@@ -52,6 +60,18 @@ class StepTracker:
         self._run_seq = 0           # monotonic task-run ids, see log_cycle_summary
         self._rev = 0               # bumped on every transition, for cheap change detection
         self._stats_capped_warned = False
+
+        # Per-cycle timelines. _cycle_open is the PROD cycle being recorded
+        # (None between cycles); frames opened while it is open carry a
+        # reference to it, so a late close can never land in the next cycle.
+        self._cycle_open: Dict[str, Any] | None = None
+        self._timelines: deque = deque(maxlen=self._MAX_TIMELINES)
+        self._timeline_rev = 0
+        #: Called with each finished cycle timeline, outside the lock.
+        self.on_cycle_end: Callable[[Dict[str, Any]], None] | None = None
+
+        # Logging and callbacks queued while _lock is held, run after release.
+        self._deferred: List[Callable[[], None]] = []
 
         # IMMUTABLE live snapshot, or None when idle.
         #
@@ -88,6 +108,26 @@ class StepTracker:
 
     def _utc_now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """Hold _lock, then run what was deferred while it was held.
+
+        Logging and the cycle callback go through :meth:`_defer`: the lock is
+        never held during I/O, so the 10 Hz live-step reads stay fast.
+        """
+        with self._lock:
+            yield
+            pending, self._deferred = self._deferred, []
+        for fn in pending:
+            try:
+                fn()
+            except Exception:
+                self.logger.exception("Step tracker deferred call failed.")
+
+    def _defer(self, fn: Callable[[], None]) -> None:
+        """Queue *fn* to run once _lock is released. Caller holds _lock."""
+        self._deferred.append(fn)
 
     def _rebuild_live_locked(self) -> None:
         """Rebuild the immutable live-step snapshot. Caller holds _lock."""
@@ -191,6 +231,17 @@ class StepTracker:
         if len(self._history) > self._MAX_STEP_HISTORY:
             del self._history[: -self._MAX_STEP_HISTORY]
 
+        cycle = frame.get("_cycle_ref")
+        if cycle is not None and cycle is self._cycle_open:
+            cycle["frames"].append({
+                "name": frame["name"],
+                "path": frame["key"],
+                "depth": frame["depth"],
+                "offset_s": round(frame["_started_monotonic"] - cycle["_t0"], 4),
+                "duration_s": round(duration_s, 4),
+                "status": status,
+            })
+
         key = frame["key"]
         stat = self._stats.get(key)
         if stat is None:
@@ -200,11 +251,12 @@ class StepTracker:
                 # growing without bound.
                 if not self._stats_capped_warned:
                     self._stats_capped_warned = True
-                    self.logger.warning(
+                    self._defer(partial(
+                        self.logger.warning,
                         "Step stats cap (%d distinct steps) reached; new step names are no longer "
                         "aggregated. Step names should be stable identifiers, not per-part data.",
                         self._MAX_STEP_STATS,
-                    )
+                    ))
                 return
             stat = {
                 "path": key, "name": frame["name"], "depth": frame["depth"],
@@ -229,25 +281,48 @@ class StepTracker:
             stat["abandon_count"] += 1
 
         if status == "ok":
-            self.logger.debug("Step end: %s in %.3f s", key, duration_s)
+            self._defer(partial(self.logger.debug, "Step end: %s in %.3f s", key, duration_s))
         else:
-            self.logger.warning("Step %s: %s after %.3f s%s", status, key, duration_s,
-                                f" ({error})" if error else "")
+            self._defer(partial(self.logger.warning, "Step %s: %s after %.3f s%s", status, key,
+                                duration_s, f" ({error})" if error else ""))
+
+    def _close_cycle_locked(self, status: str) -> None:
+        """Archive the open cycle's timeline. Idempotent. Caller holds _lock."""
+        cycle = self._cycle_open
+        if cycle is None:
+            return
+        self._cycle_open = None
+        record = {
+            "run_id": cycle["run_id"],
+            "cycle": cycle["cycle"],
+            "task": cycle["task"],
+            "started_at": cycle["started_at"],
+            "duration_s": round(max(0.0, time.monotonic() - cycle["_t0"]), 4),
+            "status": status,
+            "frames": list(cycle["frames"]),
+        }
+        self._timelines.append(record)
+        self._timeline_rev += 1
+        self._rev += 1
+        callback = self.on_cycle_end
+        if callback is not None:
+            self._defer(partial(callback, record))
 
     def begin_step(self, name: str, managed: bool = True) -> Tuple[int, int] | None:
         """Open a step. Returns an opaque token for :meth:`end_step`, or None if rejected."""
         name = str(name).strip()[: self._MAX_STEP_NAME_LEN] or "(unnamed step)"
-        with self._lock:
+        with self._locked():
             # An unmanaged (set_step) frame is replaced by the next set_step at
             # the same level, so the operator sees one current step, not a pile.
             if not managed and self._stack and not self._stack[-1].get("managed"):
                 self._close_frame_locked(self._stack.pop(), "ok")
 
             if len(self._stack) >= self._MAX_STEP_DEPTH:
-                self.logger.warning(
+                self._defer(partial(
+                    self.logger.warning,
                     "Step nesting limit (%d) reached; '%s' is not tracked.",
                     self._MAX_STEP_DEPTH, name,
-                )
+                ))
                 return None
 
             self._frame_seq += 1
@@ -266,6 +341,7 @@ class StepTracker:
                 "cycle": self._cycle,
                 "run_id": (self._task or {}).get("run_id"),
                 "seq_index": None,
+                "_cycle_ref": self._cycle_open,
             }
             self._stack.append(frame)
 
@@ -284,12 +360,13 @@ class StepTracker:
         if token is None:
             return
         frame_id, epoch = token
-        with self._lock:
+        with self._locked():
             if epoch != self._epoch:
                 # abandon_open_steps() already closed this frame (abort/fault).
                 # Must be a no-op: raising here would throw a second exception
                 # out of a `with` block that is already unwinding.
-                self.logger.debug("Ignoring stale step close (frame=%s epoch=%s).", frame_id, epoch)
+                self._defer(partial(self.logger.debug,
+                                    "Ignoring stale step close (frame=%s epoch=%s).", frame_id, epoch))
                 return
 
             index = next((i for i, f in enumerate(self._stack) if f["frame_id"] == frame_id), None)
@@ -330,7 +407,7 @@ class StepTracker:
 
     def clear_step(self) -> None:
         """Close the innermost unmanaged step, if any."""
-        with self._lock:
+        with self._locked():
             if self._stack and not self._stack[-1].get("managed"):
                 self._close_frame_locked(self._stack.pop(), "ok")
                 self._rebuild_live_locked()
@@ -343,13 +420,17 @@ class StepTracker:
         "Pick part — 48 s and counting" while the task thread is stuck in a
         non-interruptible SDK call. Bumping the epoch makes every outstanding
         token stale so the task thread's later end_step() is a quiet no-op.
+
+        Also closes the PROD cycle being recorded (with *reason* as its
+        status), even when no step was open at that instant.
         """
-        with self._lock:
-            if not self._stack:
-                return
+        with self._locked():
             open_keys = [f["key"] for f in self._stack]
             while self._stack:
                 self._close_frame_locked(self._stack.pop(), reason)
+            self._close_cycle_locked(reason)
+            if not open_keys:
+                return
             self._epoch += 1
             self._rebuild_live_locked()
         self.logger.warning("Abandoned %d open step(s) (%s): %s",
@@ -385,7 +466,9 @@ class StepTracker:
                         or [])
             self._run_seq += 1
             self._task = {
-                "run_id": self._run_seq,
+                # Unique across restarts: persisted run and cycle history is
+                # keyed by it.
+                "run_id": uuid.uuid4().hex[:12],
                 "label": label,
                 "sequence_key": sequence_key,
                 "declared": list(declared),
@@ -399,22 +482,60 @@ class StepTracker:
 
     def end_task(self) -> None:
         """Stop step tracking, keeping stats so they stay readable after STOP."""
-        with self._lock:
+        with self._locked():
             while self._stack:
                 self._close_frame_locked(self._stack.pop(), "abandoned")
+            self._close_cycle_locked("abandoned")
             self._epoch += 1
             self._task = None
             self._cycle = None
             self._rebuild_live_locked()
 
     def begin_cycle(self, cycle_number: int | None) -> None:
-        """Mark the start of a PROD cycle: tag new frames with it and refill the progress bar."""
-        with self._lock:
+        """Mark the start of a PROD cycle: tag new frames with it and refill the progress bar.
+
+        A number also starts recording the cycle's timeline, closed by
+        :meth:`end_cycle`. ``None`` (between cycles, e.g. the exit home) records nothing.
+        """
+        with self._locked():
+            self._close_cycle_locked("abandoned")   # a cycle nobody closed
             self._cycle = cycle_number
+            if cycle_number is not None:
+                self._cycle_open = {
+                    "run_id": (self._task or {}).get("run_id"),
+                    "cycle": cycle_number,
+                    "task": (self._task or {}).get("label"),
+                    "started_at": self._utc_now(),
+                    "_t0": time.monotonic(),
+                    "frames": [],
+                }
             if self._task is not None:
                 self._task["cursor"] = 0
                 self._task["off_sequence"] = False
             self._rebuild_live_locked()
+
+    def end_cycle(self, status: str) -> None:
+        """Close the PROD cycle being recorded: ``ok``, ``failed``, ``aborted``...
+
+        Idempotent: the monitor thread may already have closed it on a fault
+        or abort, and then this is a no-op.
+        """
+        with self._locked():
+            self._close_cycle_locked(status)
+
+    def timelines(self) -> Dict[str, Any]:
+        """The last finished cycle timelines, oldest first, with the row order to draw them in."""
+        with self._lock:
+            timelines = list(self._timelines)
+            declared = (self._sequences_runtime.get("prod_cycle")
+                        or self._sequences.get("prod_cycle") or [])
+            rev = self._timeline_rev
+        order = list(declared)
+        for timeline in timelines:
+            for frame in timeline["frames"]:
+                if frame["depth"] == 0 and frame["name"] not in order:
+                    order.append(frame["name"])
+        return {"rev": rev, "order": order, "declared": list(declared), "timelines": timelines}
 
     def snapshot(self) -> Dict[str, Any]:
         """Full step state for ``/api/prod/metrics``."""
@@ -454,6 +575,7 @@ class StepTracker:
             "stats": stats,
             "history": history,
             "stats_truncated": capped,
+            "timeline_rev": self._timeline_rev,
         }
 
     def log_cycle_summary(self, cycle_number: int) -> None:
