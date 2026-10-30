@@ -95,7 +95,9 @@ except Exception as e:
         def _unavailable(self, device_id):
             return {'success': False, 'message': 'Controller failed to start; see app.log.'}
         connect_device = disconnect_device = clear_device_fault = _unavailable
+        config_issues = []
     APPLICATION = MockApplicationController()
+    APPLICATION.load_error = f"{type(e).__name__}: {e}"
 
 BACKUP_DIR = os.path.join(workspace_path, "backups")
 BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
@@ -458,6 +460,24 @@ def clear_device_fault(device_id):
         return jsonify(result), 200
     status = 404 if str(result.get('message', '')).startswith('Unknown device') else 409
     return jsonify(result), status
+
+
+@app.route('/api/system', methods=['GET'])
+def get_system():
+    """The workspace in use and the problems found in its config.yaml."""
+    return jsonify({
+        'workspace': os.path.basename(os.path.normpath(workspace_path)),
+        'workspace_path': workspace_path,
+        'config_issues': list(getattr(APPLICATION, 'config_issues', None) or []),
+        'controller_error': getattr(APPLICATION, 'load_error', None),
+    }), 200
+
+
+@app.route('/api/devices/types', methods=['GET'])
+def get_device_types():
+    """Every device type config.yaml accepts, with its keys (from devices.registry)."""
+    from devices.registry import describe_types
+    return jsonify({'types': describe_types()}), 200
 
 
 @app.route('/api/state_values', methods=['GET'])

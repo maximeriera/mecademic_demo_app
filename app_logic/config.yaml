@@ -4,6 +4,19 @@
 # Each entry has a unique name (used as the device_id in code) and a `type`
 # that tells the ApplicationController which driver class to instantiate.
 #
+# Entries are checked at startup (devices/registry.py): an unknown type, a
+# missing required value or a wrong value type is an error that blocks
+# INITIALIZE; an unknown key (usually a typo) is a warning and is ignored. Both
+# are listed in a banner at the top of the UI.
+#
+# Any entry may also carry:
+#   enabled: false               # keep it in the file without creating the device
+#
+# A workspace can bring its own driver (a Device subclass importable from the
+# workspace folder); every other key is passed to its constructor:
+#   type: "custom"
+#   driver: "my_package.my_module:MyDevice"
+#
 # ============================================================
 # SUPPORTED DEVICE TYPES — copy, uncomment and fill in values
 # ============================================================
@@ -20,7 +33,7 @@
 #
 # --- Arduino / Firmata I/O board (ArduinoBoard) ---
 #   type: "arduino"
-#   Port: "COM3"                    # Serial port the Arduino is connected to
+#   port: "COM3"                    # Serial port the Arduino is connected to
 #
 # --- Planar Motor System (PlanarMotor) ---
 #   type: "planarmotor"
@@ -38,20 +51,6 @@
 #   address: 1                       # ED address (optional, default: 1)
 #   port: 9500                       # TCP port (optional, default: 9500)
 #   timeout: 5.0                     # seconds (optional)
-#
-# --- Brainboxes ED Analogue Input (BrainboxesEDAnalogueInput) ---
-#   type: "brainboxes_ed_analogue_input"
-#   ip_address: "192.168.0.75"
-#   address: 1
-#   port: 9500
-#   timeout: 5.0
-#
-# --- Brainboxes ED Analogue Output (BrainboxesEDAnalogueOutput) ---
-#   type: "brainboxes_ed_analogue_output"
-#   ip_address: "192.168.0.76"
-#   address: 1
-#   port: 9500
-#   timeout: 5.0
 #
 # --- LMI Gocator 3D Sensor (LMISensor) ---
 #   type: "lmi"

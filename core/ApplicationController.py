@@ -31,6 +31,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 from devices import Device
+from devices.registry import create_device, validate_devices_config
 
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
@@ -98,6 +99,7 @@ class ApplicationController:
         self.logger.info(f"Loading controller config from: {config_path}")
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
+        self.config_issues: list[Dict[str, str]] = []
         self._manual_actions = self._load_manual_actions_config()
         
         self.context = self._create_context(config_path, context_path)
@@ -260,158 +262,29 @@ class ApplicationController:
         return get_controller_logger()
     
     def _create_devices(self):
-        """Instantiate all devices declared in the config and store them in
-        :attr:`devices`.
+        """Instantiate every device declared under ``devices:`` in the config.
 
-        Supported ``type`` values (case-insensitive):
-        ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``,
-        ``brainboxes_ed_digital``, ``zaber``, ``gige_camera``, ``lmi``,
-        ``thorlabs_pm`` (alias: ``thorlabs_power_meter``),
-        ``smaract_mcs2`` (aliases: ``mcs2``, ``smaract``),
-        ``simulated`` (aliases: ``dummy``, ``fake``).
-        Unknown types are skipped with a warning.
+        Types, aliases and the keys each one accepts come from
+        :mod:`devices.registry`. Problems never stop the controller from
+        starting: they are collected in :attr:`config_issues` (shown by the UI),
+        and an entry with an error is not created. :meth:`initialize` refuses
+        to run while any error remains.
         """
-        devices_config = self.config.get('devices', {})
-        if devices_config is None:
-            devices_config = {}
-        for device_name, device_info in devices_config.items():
-            device_type = device_info.get('type', '').lower()
-            if device_type == 'mecademic':
-                from devices.MecaRobot import MecaRobot
-                self.logger.info(f"Creating Mecademic Robot API for device: {device_name}")
-                device = MecaRobot(ip_address=device_info.get('ip_address', ''), name=device_name)
-                self.devices[device_name] = device
-            
-            elif device_type == 'zaber':
-                from devices.OLD_ZaberAxis import ZaberAxis
-                self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
-                device = ZaberAxis(
-                    port=device_info.get('port', 'COM3'),
-                    axis_number=device_info.get('axis_number', 1),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
+        entries, issues = validate_devices_config(self.config.get('devices'))
+        for entry in entries:
+            try:
+                self.logger.info(f"Creating {entry.type} device: {entry.name}")
+                self.devices[entry.name] = create_device(entry)
+            except Exception as e:
+                # Typically a driver SDK that is not installed (pyvisa, harvesters...).
+                self.logger.error(f"Could not create device '{entry.name}': {e}", exc_info=True)
+                issues.append({"device": entry.name, "level": "error",
+                               "message": f"could not be created: {type(e).__name__}: {e}"})
+        for item in issues:
+            log = self.logger.error if item["level"] == "error" else self.logger.warning
+            log(f"config.yaml devices.{item['device']}: {item['message']}")
+        self.config_issues = issues
 
-            elif device_type == 'planarmotor':
-                from devices.PlanarMotor import PlanarMotor
-                self.logger.info(f"Creating Planar Motor API for device: {device_name}")
-                device = PlanarMotor(ip_address=device_info.get('ip_address', '192.168.10.200'), name=device_name)
-                self.devices[device_name] = device
-
-            elif device_type == 'asyril':
-                from devices.Asyril import AsyrilEyePlus
-                self.logger.info(f"Creating Asyril API for device: {device_name}")
-                device = AsyrilEyePlus(ip_address=device_info.get('ip_address', ''), recipe=device_info.get('recipe', 0), name=device_name)
-                self.devices[device_name] = device
-                
-            elif device_type == 'arduino':
-                from devices.ArduinoBoard import ArduinoBoard
-                self.logger.info(f"Creating Arduino IO API for device: {device_name}")
-                device = ArduinoBoard(port=device_info.get('port', 'COM3'), name=device_name)
-                self.devices[device_name] = device
-
-            elif device_type == 'iologik':
-                from devices.IoLogikE1212 import IoLogikE1212
-                self.logger.info(f"Creating ioLogik E1212 API for device: {device_name}")
-                device = IoLogikE1212(
-                    ip_address=device_info.get('ip_address', ''),
-                    port=device_info.get('port', 502),
-                    slave_id=device_info.get('slave_id', 1),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('brainboxes_ed_digital', 'brainboxes_dio', 'ed_digital'):
-                from devices.BrainboxesED import BrainboxesEDDigital
-                self.logger.info(f"Creating Brainboxes ED Digital API for device: {device_name}")
-                device = BrainboxesEDDigital(
-                    ip_address=device_info.get('ip_address', ''),
-                    address=device_info.get('address', 0x01),
-                    port=device_info.get('port', 9500),
-                    timeout=device_info.get('timeout', 5.0),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type == 'lmi':
-                from devices.LMISensor import LMISensor
-                self.logger.info(f"Creating LMI Sensor API for device: {device_name}")
-                device = LMISensor(
-                    ip_address=device_info.get('ip_address', ''),
-                    control_port=device_info.get('control_port', 3190),
-                    data_port=device_info.get('data_port', 3192),
-                    health_port=device_info.get('health_port', 3194),
-                    delimiter=device_info.get('delimiter', ','),
-                    terminator=device_info.get('terminator', '\r\n'),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type == 'gige_camera':
-                from devices.GigEVisionDevice import GigEVisionDevice
-
-                cti_path = device_info.get('cti_path', '')
-                if not cti_path:
-                    raise ValueError(
-                        f"Missing required 'cti_path' for gige_camera device '{device_name}'."
-                    )
-
-                self.logger.info(f"Creating GigE Vision camera API for device: {device_name}")
-                device = GigEVisionDevice(
-                    cti_path=cti_path,
-                    camera_index=device_info.get('camera_index', 0),
-                    autostart_stream=device_info.get('autostart_stream', False),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('thorlabs_pm', 'thorlabs_power_meter'):
-                from devices.ThorlabsPowerMeter import ThorlabsPowerMeter
-                self.logger.info(f"Creating Thorlabs power meter API for device: {device_name}")
-                device = ThorlabsPowerMeter(
-                    resource=device_info.get('resource'),
-                    backend=device_info.get('backend'),
-                    timeout_ms=device_info.get('timeout_ms', 5000),
-                    wavelength=device_info.get('wavelength'),
-                    averaging=device_info.get('averaging'),
-                    power_unit=device_info.get('power_unit'),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('smaract_mcs2', 'mcs2', 'smaract'):
-                from devices.SmarActMCS2 import SmarActMCS2
-                self.logger.info(f"Creating SmarAct MCS2 API for device: {device_name}")
-                device = SmarActMCS2(
-                    ip_address=device_info.get('ip_address', ''),
-                    port=device_info.get('port', 55551),
-                    timeout=device_info.get('timeout', 5.0),
-                    channels=device_info.get('channels'),
-                    reference=device_info.get('reference', 'if_needed'),
-                    reference_reverse=device_info.get('reference_reverse', False),
-                    reference_timeout_s=device_info.get('reference_timeout_s', 120.0),
-                    velocity_mm_s=device_info.get('velocity_mm_s'),
-                    acceleration_mm_s2=device_info.get('acceleration_mm_s2'),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('simulated', 'dummy', 'fake'):
-                from devices.SimulatedDevice import SimulatedDevice
-                self.logger.info(f"Creating Simulated (no-hardware) device for: {device_name}")
-                device = SimulatedDevice(
-                    name=device_name,
-                    connect_delay=device_info.get('connect_delay', 0.0),
-                    fail_to_connect=device_info.get('fail_to_connect', False),
-                    fail_rate=device_info.get('fail_rate', 0.0),
-                    info=device_info.get('info'),
-                    supports_monitoring=device_info.get('supports_monitoring', False),
-                )
-                self.devices[device_name] = device
-
-            else:
-                self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
-                
     def initialize(self):
         """Connect and initialise every device, then transition to ``READY``.
 
@@ -428,6 +301,11 @@ class ApplicationController:
             Re-raised from the failing device's ``initialize()`` after the
             controller is transitioned to ``FAULTED``.
         """
+        config_errors = [i for i in self.config_issues if i["level"] == "error"]
+        if config_errors:
+            details = "; ".join(f"{i['device']}: {i['message']}" if i['device'] else i['message']
+                                for i in config_errors)
+            raise RuntimeError(f"Fix the devices in config.yaml first ({details})")
         with self._command_lock:
             if self._current_task and self._current_task.is_alive():
                 raise RuntimeError("Cannot initialize while a task is running. Stop or abort it first.")

@@ -170,7 +170,40 @@ function sendAbort() {
 function sendInitialize() {
     fetch('/api/initialize', { method: 'POST' })
         .then(r => r.json()).then(d => setMessage(d.message))
-        .catch(() => setMessage('Error sending initialization command.'));
+        .catch(() => setMessage('Error sending initialization command.'))
+        .finally(loadSystemInfo);
+}
+
+/* ---- Workspace / config problems ---- */
+function loadSystemInfo() {
+    fetch('/api/system')
+        .then(r => r.json())
+        .then(renderConfigBanner)
+        .catch(() => {});
+}
+
+function renderConfigBanner(info) {
+    const banner = document.getElementById('config-banner');
+    if (!banner) return;
+    const issues = Array.isArray(info?.config_issues) ? info.config_issues : [];
+    const lines = [];
+    if (info?.controller_error) {
+        lines.push({ level: 'error', text: `Controller failed to start: ${info.controller_error}` });
+    }
+    issues.forEach((item) => {
+        lines.push({ level: item.level, text: `${item.device ? item.device + ': ' : ''}${item.message}` });
+    });
+    if (lines.length === 0) {
+        banner.hidden = true;
+        banner.innerHTML = '';
+        return;
+    }
+    const hasError = lines.some((l) => l.level === 'error');
+    banner.className = 'config-banner ' + (hasError ? 'config-banner-error' : 'config-banner-warning');
+    banner.innerHTML = `<strong>config.yaml ${hasError ? 'errors' : 'warnings'}</strong>`
+        + (hasError ? ' &mdash; INITIALIZE is blocked until they are fixed.' : '')
+        + '<ul>' + lines.map((l) => `<li class="config-issue-${escapeHtml(l.level)}">${escapeHtml(l.text)}</li>`).join('') + '</ul>';
+    banner.hidden = false;
 }
 function sendClearFaults() {
     fetch('/api/clear_faults', { method: 'POST' })
@@ -2088,3 +2121,4 @@ renderBackupRestoreSelectMenu('backup-robot-picker');
 renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
 initCustomViewLink();
+loadSystemInfo();

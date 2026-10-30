@@ -2102,3 +2102,31 @@ button:active { transform: scale(0.98); }
 .device-card-actions[hidden] {
     display: none;
 }
+
+/* --- config.yaml problems banner --- */
+.config-banner {
+    margin: 0 0 16px;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 0.85em;
+    line-height: 1.5;
+}
+.config-banner[hidden] {
+    display: none;
+}
+.config-banner ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+}
+.config-banner-error {
+    background: rgba(255,90,107,0.12);
+    border: 1px solid rgba(255,90,107,0.4);
+    color: #ffc2c8;
+}
+.config-banner-warning {
+    background: rgba(255,212,71,0.10);
+    border: 1px solid rgba(255,212,71,0.35);
+    color: #ffe9a6;
+}
+.config-issue-warning::marker { color: var(--color-yellow); }
+.config-issue-error::marker   { color: var(--color-red); }
