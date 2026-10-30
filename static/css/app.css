@@ -612,7 +612,8 @@ button:active { transform: scale(0.98); }
 }
 
 /* --- Device Cards --- */
-#robot-info-container {
+#robot-info-container,
+.devices-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 16px;
@@ -2028,38 +2029,8 @@ button:active { transform: scale(0.98); }
     filter: none;
 }
 
-.device-health-strip {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-.device-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-control);
-    background: rgba(255,255,255,0.03);
-    font-size: 0.82em;
-}
-.device-chip-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--color-muted);
-    flex: none;
-}
-.device-chip-dot.ok       { background: var(--color-accent); }
-.device-chip-dot.warn     { background: var(--color-yellow); }
-.device-chip-dot.error    { background: var(--color-red); }
-.device-chip-dot.info     { background: var(--color-blue); }
-.device-chip-link {
-    color: var(--color-muted);
-    font-size: 0.9em;
-}
-
-.devices-grid {
+/* Settings > Devices: below the action log. */
+#robot-info-container {
     margin-top: 14px;
 }
 .device-card.device-detached {
@@ -2306,17 +2277,30 @@ a.link-btn {
 }
 
 /* --- Workspace picker --- */
-.workspace-name {
-    margin-top: 6px;
-    font-size: 0.78em;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--color-accent-soft);
-    overflow-wrap: anywhere;
+.workspace-current {
+    margin-bottom: 10px;
+    font-size: 0.85em;
+    color: var(--color-muted);
 }
-.workspace-name:empty {
-    display: none;
+.workspace-current strong {
+    color: var(--color-text);
+}
+.workspace-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+    align-items: stretch;
+}
+@media (max-width: 640px) {
+    .workspace-row {
+        grid-template-columns: 1fr 1fr;
+    }
+    .workspace-row .workspace-select {
+        grid-column: 1 / -1;
+    }
+}
+.workspace-row button {
+    padding: 10px 16px;
 }
 .workspace-select {
     width: 100%;
@@ -2328,17 +2312,7 @@ a.link-btn {
     font: inherit;
     font-size: 0.85em;
 }
-.workspace-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-top: 8px;
-}
-.workspace-buttons button {
-    padding: 10px 6px;
-    font-size: 0.75em;
-}
-.workspace-buttons button:disabled,
+.workspace-row button:disabled,
 .workspace-select:disabled {
     cursor: not-allowed;
     opacity: 0.45;
@@ -2375,3 +2349,39 @@ a.link-btn {
 .toast-error   { border-color: rgba(255,90,107,0.6);  color: #ffc2c8; }
 .toast-warning { border-color: rgba(255,212,71,0.5);  color: #ffe9a6; }
 .toast-info    { border-color: rgba(59,184,255,0.45); color: var(--color-text); }
+
+/* --- Settings tab: section switcher --- */
+.settings-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--color-accent-2);
+}
+.settings-nav-btn {
+    flex: 0 1 auto;
+    padding: 9px 16px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--color-border);
+    color: rgba(255,255,255,0.62);
+    font-size: 0.78em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.settings-nav-btn:hover {
+    color: var(--color-accent);
+}
+.settings-nav-btn.active {
+    color: var(--color-bg);
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+}
+@media (max-width: 640px) {
+    .settings-nav-btn {
+        flex: 1 1 auto;
+    }
+}
+.settings-section[hidden] {
+    display: none;
+}

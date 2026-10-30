@@ -30,22 +30,62 @@ function switchTab(name, btn) {
     document.querySelector('.main-content').scrollTop = 0;
     btn.classList.add('active');
     btn.setAttribute('aria-selected', 'true');
-    if (name === 'logs') populateLogFileList();
     if (name === 'production') {
         refreshProdMetrics();
     }
     if (name === 'variables') {
         refreshContext();
     }
-    if (name === 'backup-restore') {
-        loadBackupRestoreRobots();
-    }
     if (name === 'manual') {
         loadManualActions();
     }
-    if (name === 'devices') {
-        loadRobotInfo();
+    if (name === 'settings') {
+        switchSettingsSection(activeSettingsSection);
     }
+}
+
+/* ---- Settings tab sections (Workspace, Devices, Backup / Restore, Logs) ---- */
+const SETTINGS_SECTIONS = ['workspace', 'devices', 'backup-restore', 'logs'];
+const SETTINGS_SECTION_KEY = 'mecademic.settingsSection';
+let activeSettingsSection = 'workspace';
+try {
+    const saved = window.localStorage.getItem(SETTINGS_SECTION_KEY);
+    if (SETTINGS_SECTIONS.includes(saved)) activeSettingsSection = saved;
+} catch (err) {
+    // Storage blocked (private window...): start on the first section.
+}
+
+function switchSettingsSection(name) {
+    if (!SETTINGS_SECTIONS.includes(name)) name = SETTINGS_SECTIONS[0];
+    activeSettingsSection = name;
+    try {
+        window.localStorage.setItem(SETTINGS_SECTION_KEY, name);
+    } catch (err) {
+        // Only a convenience: the section is simply not remembered.
+    }
+    SETTINGS_SECTIONS.forEach((section) => {
+        const panel = document.getElementById('settings-' + section);
+        const button = document.getElementById('settings-btn-' + section);
+        const active = section === name;
+        if (panel) {
+            panel.hidden = !active;
+            panel.classList.toggle('active', active);
+        }
+        if (button) {
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', String(active));
+        }
+    });
+    if (!isTabActive('settings')) return;
+    if (name === 'workspace') loadWorkspaces();
+    if (name === 'devices') loadRobotInfo();
+    if (name === 'backup-restore') loadBackupRestoreRobots();
+    if (name === 'logs') populateLogFileList();
+}
+
+// True when the Settings tab is open on *name*: what the per-section pollers check.
+function isSettingsSectionActive(name) {
+    return isTabActive('settings') && activeSettingsSection === name;
 }
 
 /* ---- Status polling ---- */
@@ -199,11 +239,11 @@ function loadWorkspaces() {
 
 function renderWorkspaces(data) {
     const select = document.getElementById('workspace-select');
-    const nameEl = document.getElementById('workspace-name');
+    const nameEl = document.getElementById('workspace-current-name');
     const hint = document.getElementById('workspace-hint');
     const items = Array.isArray(data.workspaces) ? data.workspaces : [];
     const current = items.find((w) => w.current);
-    if (nameEl) nameEl.textContent = current ? (current.title || current.name) : (data.current || '');
+    if (nameEl) nameEl.textContent = current ? (current.title || current.name) : (data.current || '—');
     if (select) {
         select.innerHTML = items.map((w) => {
             const label = w.title ? `${w.title} (${w.name})` : w.name;
@@ -1598,43 +1638,35 @@ function loadRobotInfo() {
         .catch(() => {
             const msg = '<p class="empty-state empty-state-error">Error loading device info.</p>';
             document.getElementById('robot-info-container').innerHTML = msg;
-            document.getElementById('device-health-strip').innerHTML = msg;
+            document.getElementById('control-devices-container').innerHTML = msg;
         });
 }
 
 function renderDevices(devices) {
     latestDevices = devices;
-    renderDeviceHealthStrip(devices);
+    renderControlDeviceCards(devices);
     renderDeviceCards(devices);
 }
 
-// One summary per device: [dot class, short text].
-function deviceHealth(device) {
-    if (device.in_transition) return ['info', 'Switching…'];
-    if (device.detached) {
-        return device.link === 'monitoring' ? ['info', 'Released · monitoring'] : ['info', 'Released'];
+// Control tab: the same badges and info as Settings > Devices, read-only.
+// Rebuilt only when the content changes; it holds no controls.
+function renderControlDeviceCards(devices) {
+    const container = document.getElementById('control-devices-container');
+    if (!container) return;
+    const html = devices.length === 0
+        ? '<p class="empty-state">No devices configured.</p>'
+        : devices.map((device) => `
+            <div class="device-card${device.detached ? ' device-detached' : ''}">
+                <div class="device-card-header">
+                    <span>${escapeHtml(device.device_id || 'device')}</span>
+                    <span>${deviceBadgesHtml(device)}</span>
+                </div>
+                <div class="device-card-body">${deviceTableHtml(device)}</div>
+            </div>`).join('');
+    if (container.dataset.html !== html) {
+        container.innerHTML = html;
+        container.dataset.html = html;
     }
-    if (device.faulted) return ['error', 'Faulted'];
-    if (!device.connected) return ['', 'Disconnected'];
-    if (!device.ready) return ['warn', 'Not ready'];
-    return ['ok', 'Ready'];
-}
-
-// Rebuilt every second: it holds no controls, so nothing loses focus.
-function renderDeviceHealthStrip(devices) {
-    const strip = document.getElementById('device-health-strip');
-    if (!strip) return;
-    if (devices.length === 0) {
-        strip.innerHTML = '<p class="empty-state">No devices configured.</p>';
-        return;
-    }
-    strip.innerHTML = devices.map((device) => {
-        const [dot, text] = deviceHealth(device);
-        return `<span class="device-chip" title="${escapeHtml(text)}">`
-            + `<span class="device-chip-dot ${dot}"></span>`
-            + `<span>${escapeHtml(device.device_id || 'device')}</span>`
-            + `<span class="device-chip-link">${escapeHtml(text)}</span></span>`;
-    }).join('');
 }
 
 function deviceBadgesHtml(device) {
@@ -1807,8 +1839,7 @@ function writeDeviceIo(deviceId, name, value) {
 }
 
 function pollDeviceLive() {
-    const tab = document.getElementById('tab-devices');
-    if (!tab || !tab.classList.contains('active') || document.hidden) return;
+    if (!isSettingsSectionActive('devices') || document.hidden) return;
     deviceLiveOpen.forEach(refreshDeviceLive);
 }
 
@@ -2517,16 +2548,15 @@ function loadSelectedLog() {
         .catch(() => { output.innerText = 'Error loading log file.'; });
 }
 
-// Auto-refresh log if the Logs tab is visible
+// Auto-refresh the log while Settings > Logs is visible
 setInterval(() => {
-    if (document.getElementById('tab-logs').classList.contains('active')) {
+    if (isSettingsSectionActive('logs')) {
         loadSelectedLog();
     }
 }, 3000);
 
 setInterval(() => {
-    const tab = document.getElementById('tab-backup-restore');
-    if (tab && tab.classList.contains('active')) {
+    if (isSettingsSectionActive('backup-restore')) {
         loadBackupRestoreRobots();
     }
 }, 5000);

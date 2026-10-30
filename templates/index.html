@@ -17,8 +17,6 @@
                     width="1868"
                     height="619"
                 >
-                <h1>Demo Application Controller</h1>
-                <div id="workspace-name" class="workspace-name" title="Active workspace"></div>
             </div>
 
             <div class="global-status-wrap">
@@ -46,20 +44,19 @@
                 <span id="step-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></span>
             </div>
 
+            <!-- The workspace's optional custom view (custom_view/ next to
+                 config.yaml), first in the navigation. Unhidden by app.js only
+                 when the workspace has one; opens in this tab, and its top bar
+                 links back here. -->
+            <a id="custom-view-link" class="custom-view-link" href="/view/" hidden>Custom view &rarr;</a>
+
             <nav class="tab-bar" role="tablist" aria-label="Application panels">
                 <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-control" id="tab-btn-control" onclick="switchTab('control', this)">Control</button>
-                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-devices" id="tab-btn-devices" onclick="switchTab('devices', this)">Devices</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-production" id="tab-btn-production" onclick="switchTab('production', this)">Production</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-variables" id="tab-btn-variables" onclick="switchTab('variables', this)">Variables</button>
                 <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-manual" id="tab-btn-manual" onclick="switchTab('manual', this)">Manual</button>
-                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-backup-restore" id="tab-btn-backup-restore" onclick="switchTab('backup-restore', this)">Backup/Restore</button>
-                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-logs" id="tab-btn-logs" onclick="switchTab('logs', this)">Logs</button>
+                <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-settings" id="tab-btn-settings" onclick="switchTab('settings', this)">Settings</button>
             </nav>
-
-            <!-- The workspace's optional custom view (custom_view/ next to
-                 config.yaml). Unhidden by app.js only when the workspace has
-                 one; opens in this tab, and its top bar links back here. -->
-            <a id="custom-view-link" class="custom-view-link" href="/view/" hidden>Custom view &rarr;</a>
         </aside>
 
         <main class="main-content">
@@ -89,17 +86,6 @@
                                 <div id="control-step-indicator-fill" class="step-progress-fill"></div>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- Folders next to the startup workspace that hold a config.yaml. -->
-                    <div class="section">
-                        <div class="section-title">Workspace</div>
-                        <select id="workspace-select" class="workspace-select" aria-label="Workspace"></select>
-                        <div class="workspace-buttons">
-                            <button type="button" class="btn-task" id="workspace-load-btn" onclick="loadSelectedWorkspace()">LOAD</button>
-                            <button type="button" class="btn-task" id="workspace-reload-btn" onclick="reloadCurrentWorkspace()">RELOAD CODE</button>
-                        </div>
-                        <div id="workspace-hint" class="workspace-hint"></div>
                     </div>
                 </div>
 
@@ -140,27 +126,10 @@
 
             <div id="message-log" class="message-log">No recent command activity.</div>
 
+            <!-- Read-only status; connect/disconnect, live data and I/O are in Settings > Devices. -->
             <div class="section">
-                <div class="section-title section-title-row">
-                    <span>Device Network</span>
-                    <button type="button" class="link-btn" onclick="switchTab('devices', document.getElementById('tab-btn-devices'))">Manage devices &rarr;</button>
-                </div>
-                <!-- Compact health only; connect/disconnect and details live on the Devices tab. -->
-                <div id="device-health-strip" class="device-health-strip">Loading device info...</div>
-            </div>
-        </div>
-
-        <!-- ===== DEVICES TAB ===== -->
-        <div id="tab-devices" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-devices" hidden>
-            <div class="section">
-                <div class="section-title">Devices</div>
-                <div class="manual-state-hint">
-                    Release a device to drive it from another program (e.g. a robot from its web portal).
-                    A released robot keeps a read-only link, so the custom view still receives its position.
-                    While any device is released, only manual actions run.
-                </div>
-                <div id="devices-action-log" class="message-log">No recent device action.</div>
-                <div id="robot-info-container" class="devices-grid">Loading device info...</div>
+                <div class="section-title">Device Network</div>
+                <div id="control-devices-container" class="devices-grid">Loading device info...</div>
             </div>
         </div>
 
@@ -272,8 +241,47 @@
             </div>
         </div>
 
-        <!-- ===== BACKUP / RESTORE TAB ===== -->
-        <div id="tab-backup-restore" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-backup-restore" hidden>
+        <!-- ===== SETTINGS TAB ===== -->
+        <!-- Cell setup and maintenance, one section at a time (switchSettingsSection). -->
+        <div id="tab-settings" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-settings" hidden>
+            <nav class="settings-nav" role="tablist" aria-label="Settings sections">
+                <button type="button" class="settings-nav-btn active" role="tab" aria-selected="true" aria-controls="settings-workspace" id="settings-btn-workspace" data-section="workspace" onclick="switchSettingsSection('workspace')">Workspace</button>
+                <button type="button" class="settings-nav-btn" role="tab" aria-selected="false" aria-controls="settings-devices" id="settings-btn-devices" data-section="devices" onclick="switchSettingsSection('devices')">Devices</button>
+                <button type="button" class="settings-nav-btn" role="tab" aria-selected="false" aria-controls="settings-backup-restore" id="settings-btn-backup-restore" data-section="backup-restore" onclick="switchSettingsSection('backup-restore')">Backup / Restore</button>
+                <button type="button" class="settings-nav-btn" role="tab" aria-selected="false" aria-controls="settings-logs" id="settings-btn-logs" data-section="logs" onclick="switchSettingsSection('logs')">Logs</button>
+            </nav>
+
+        <!-- ----- Settings: Workspace ----- -->
+        <div id="settings-workspace" class="settings-section active" role="tabpanel" aria-labelledby="settings-btn-workspace">
+            <!-- Folders next to the startup workspace that hold a config.yaml. -->
+            <div class="section">
+                <div class="section-title">Workspace</div>
+                <div class="workspace-current">Active workspace: <strong id="workspace-current-name">—</strong></div>
+                <div class="workspace-row">
+                    <select id="workspace-select" class="workspace-select" aria-label="Workspace"></select>
+                    <button type="button" class="btn-task" id="workspace-load-btn" onclick="loadSelectedWorkspace()">LOAD</button>
+                    <button type="button" class="btn-task" id="workspace-reload-btn" onclick="reloadCurrentWorkspace()">RELOAD CODE</button>
+                </div>
+                <div id="workspace-hint" class="workspace-hint"></div>
+            </div>
+        </div>
+
+        <!-- ----- Settings: Devices ----- -->
+        <div id="settings-devices" class="settings-section" role="tabpanel" aria-labelledby="settings-btn-devices" hidden>
+            <div class="section">
+                <div class="section-title">Devices</div>
+                <div class="manual-state-hint">
+                    Release a device to drive it from another program (e.g. a robot from its web portal).
+                    A released robot keeps a read-only link, so the custom view still receives its position.
+                    While any device is released, only manual actions run.
+                </div>
+                <div id="devices-action-log" class="message-log">No recent device action.</div>
+                <div id="robot-info-container" class="devices-grid">Loading device info...</div>
+            </div>
+        </div>
+
+        <!-- ----- Settings: Backup / Restore ----- -->
+        <div id="settings-backup-restore" class="settings-section" role="tabpanel" aria-labelledby="settings-btn-backup-restore" hidden>
 
             <div class="section">
                 <div class="section-title">Backup</div>
@@ -355,8 +363,8 @@
 
         </div>
 
-        <!-- ===== LOGS TAB ===== -->
-        <div id="tab-logs" class="tab-panel panel-body" role="tabpanel" aria-labelledby="tab-btn-logs" hidden>
+        <!-- ----- Settings: Logs ----- -->
+        <div id="settings-logs" class="settings-section" role="tabpanel" aria-labelledby="settings-btn-logs" hidden>
 
             <div class="section">
                 <div class="section-title">Log Viewer</div>
@@ -410,6 +418,7 @@
             </div>
 
         </div>
+        </div><!-- /#tab-settings -->
         </main>
     </div>
 

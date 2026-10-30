@@ -27,11 +27,10 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [Production history](#production-history)
   - [Web UI](#web-ui)
     - [Control tab](#control-tab)
-    - [Devices tab](#devices-tab)
     - [Production tab](#production-tab)
     - [Variables tab](#variables-tab)
     - [Manual tab](#manual-tab)
-    - [Logs tab](#logs-tab)
+    - [Settings tab](#settings-tab)
     - [Live updates](#live-updates)
   - [Releasing a device](#releasing-a-device)
   - [Workspaces](#workspaces)
@@ -71,7 +70,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
 | **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 and Brainboxes ED remote I/O, LMI Gocator 3D sensor, GigE Vision cameras, Thorlabs PM-series power meters, SmarAct MCS2 linear stages, Zaber axes, and a hardware-free simulated device |
 | **Device registry & config validation** | Every `type` and its keys are declared in `devices/registry.py`; typos and bad values in `config.yaml` are listed in a UI banner instead of failing silently |
 | **Per-device link control** | Release one device to another program and connect it again; a released Mecademic robot keeps a read-only link so the live view keeps its position |
-| **Live data & I/O** | Device telemetry (robot joints/pose, stage positions, power...) and digital I/O with output toggles on the Devices tab |
+| **Live data & I/O** | Device telemetry (robot joints/pose, stage positions, power...) and digital I/O with output toggles in Settings > Devices |
 | **Cycle timeline** | Gantt chart of every PROD cycle's steps, with averages and idle time |
 | **Production history** | Runs and cycles saved locally, per-day summary, CSV export |
 | **Workspace picker** | Switch between demo workspaces, or reload the current one's code, without restarting |
@@ -187,35 +186,17 @@ history:
 
 ## Web UI
 
-The single-page UI at `http://localhost:5000` is divided into tabs, listed in the sidebar. The sidebar also shows the active workspace.
+The single-page UI at `http://localhost:5000` is divided into tabs, listed in the sidebar under the system status and current step. When the workspace ships a custom view, its link comes first, above the tabs.
 
 ### Control tab
 
 | Section | Description |
 |---|---|
 | **System Status** | Live state badge and last status message |
-| **Workspace** | Pick another workspace (**LOAD**) or reload the current one's code and config (**RELOAD CODE**), see [Workspaces](#workspaces) |
 | **Tasks — Manual** | HOME, SHIPMENT, CALIBRATION (single-run) |
 | **Tasks — Auto** | PROD (infinite loop), STOP (graceful), ABORT (immediate) |
 | **System Control** | INITIALIZE, CLEAR FAULTS, SHUTDOWN |
-| **Device Network** | One health chip per device; **Manage devices** opens the Devices tab |
-
-### Devices tab
-
-One card per device with its badges (OK/FAULTED, Connected/Monitoring/Disconnected, Ready, Released) and static info, plus:
-
-- **Release control / Disconnect** and **Connect**, for drivers that support reconnecting, see [Releasing a device](#releasing-a-device)
-- **Clear fault** on a faulted device
-- **Show live data**: the driver's telemetry and I/O points, refreshed twice a second while the panel is open. Writable outputs toggle on click. That is refused while a task runs or while the device is released.
-
-| Driver | Live data |
-|---|---|
-| `mecademic` | Activated, homed, paused and error flags; target joints and pose; gripper state; I/O module inputs and outputs (read-only). Works over the monitoring link too. |
-| `iologik` | DI 0–7 and DO 0–7 (writable) |
-| `brainboxes_ed_digital` | DI/DO over `channels` (writable outputs) |
-| `smaract_mcs2` | Position, moving and referenced state per channel |
-| `thorlabs_pm` | Power, unit and wavelength |
-| `simulated` | Fake telemetry, 4 DI and 4 writable DO (`di2` loops `do1` back) |
+| **Device Network** | One read-only card per device: status badges and static info. Device actions are in **Settings > Devices**. |
 
 ### Production tab
 
@@ -236,7 +217,36 @@ The params and variables declared in the optional `context.yaml` (see [Context](
 - **ABORT** and **CLEAR FAULTS** sit above the actions. CLEAR FAULTS is disabled while a task runs, since clearing faults would abort it, and it reports which devices are still faulted.
 - Below them: HOME, SHIPMENT, CALIBRATION and the workspace's manual actions. When a device is released, the confirmation lists it.
 
-### Logs tab
+### Settings tab
+
+The last tab gathers cell setup and maintenance in four sections. The section you used last is remembered by the browser.
+
+#### Workspace
+
+The active workspace. Pick another one and press **LOAD**, or reload the current one's code and config with **RELOAD CODE**, see [Workspaces](#workspaces).
+
+#### Devices
+
+One card per device with its badges (OK/FAULTED, Connected/Monitoring/Disconnected, Ready, Released) and static info, plus:
+
+- **Release control / Disconnect** and **Connect**, for drivers that support reconnecting, see [Releasing a device](#releasing-a-device)
+- **Clear fault** on a faulted device
+- **Show live data**: the driver's telemetry and I/O points, refreshed twice a second while the panel is open. Writable outputs toggle on click. That is refused while a task runs or while the device is released.
+
+| Driver | Live data |
+|---|---|
+| `mecademic` | Activated, homed, paused and error flags; target joints and pose; gripper state; I/O module inputs and outputs (read-only). Works over the monitoring link too. |
+| `iologik` | DI 0–7 and DO 0–7 (writable) |
+| `brainboxes_ed_digital` | DI/DO over `channels` (writable outputs) |
+| `smaract_mcs2` | Position, moving and referenced state per channel |
+| `thorlabs_pm` | Power, unit and wavelength |
+| `simulated` | Fake telemetry, 4 DI and 4 writable DO (`di2` loops `do1` back) |
+
+#### Backup / Restore
+
+Back up all connected Mecademic robots, or one, as a downloadable archive; restore an archive to a selected robot. Only robots this app controls are offered: a released robot is not.
+
+#### Logs
 
 Browse and auto-refresh any rotating log file from `logs/app/` or `logs/devices/`.
 
@@ -252,7 +262,7 @@ Behind nginx, the stream's `X-Accel-Buffering: no` header disables proxy bufferi
 
 ## Releasing a device
 
-A device whose driver supports reconnecting can be released from its card on the Devices tab and connected again later, while the rest of the cell keeps running. Typical use: drive the robot from its web portal (or another script) while the custom view keeps plotting a sensor.
+A device whose driver supports reconnecting can be released from its card in **Settings > Devices** and connected again later, while the rest of the cell keeps running. Typical use: drive the robot from its web portal (or another script) while the custom view keeps plotting a sensor.
 
 - **Mecademic robots: Release control.**
   - The app clears its motion queue and drops its control connection. The robot is *not* deactivated, so it stays homed.
@@ -285,7 +295,7 @@ Always pass `synchronous_update=False`. The default (`True`) sends a query to th
 
 A workspace is a folder holding the cell's `config.yaml` (optionally `context.yaml`, `custom_view/`) and its task modules. They sit either directly in the folder (as made by the superproject's `create_project.bat`) or in an `app_logic/` subfolder (like this repository).
 
-The Control tab's **Workspace** picker lists the workspaces next to the startup one: the subfolders of the parent of `--workspace` that hold a `config.yaml`. Override the folder with `--workspaces-root` or `MECADEMIC_WORKSPACES_ROOT`. An optional `title:` in `config.yaml` names a workspace in the list.
+The workspace picker (**Settings > Workspace**) lists the workspaces next to the startup one: the subfolders of the parent of `--workspace` that hold a `config.yaml`. Override the folder with `--workspaces-root` or `MECADEMIC_WORKSPACES_ROOT`. An optional `title:` in `config.yaml` names a workspace in the list.
 
 - **LOAD** switches to the selected workspace inside the running process:
   - every device is disconnected
@@ -553,7 +563,7 @@ A driver only needed by one workspace can stay in that workspace and use `type: 
 
 | Member | Purpose |
 |---|---|
-| `supports_reconnect = True` | Offer Disconnect/Connect on the Devices tab. `connect()` defaults to `initialize()` and `disconnect()` to `shutdown()`, so these must work in any order and more than once. |
+| `supports_reconnect = True` | Offer Disconnect/Connect in Settings > Devices. `connect()` defaults to `initialize()` and `disconnect()` to `shutdown()`, so these must work in any order and more than once. |
 | `supports_monitoring = True`, `disconnect(keep_monitoring)`, `link` | Keep a read-only link while released (see `MecaRobot`) |
 | `telemetry()` → `dict` | Values for the Live panel. It is polled from a web thread, so use cached values or the driver's own lock. |
 | `io_points()` → `[{name, kind, value, writable}]`, `write_io(name, value)` | I/O points for the Live panel. `kind` is `di`, `do`, `ai` or `ao`. |
