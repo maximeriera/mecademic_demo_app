@@ -381,6 +381,7 @@ def get_APPLICATION_info():
                 entry['in_transition'] = APPLICATION.is_in_transition(device_id)
                 entry['supports_reconnect'] = bool(getattr(dev, 'supports_reconnect', False))
                 entry['supports_monitoring'] = bool(getattr(dev, 'supports_monitoring', False))
+                entry['has_live_data'] = bool(getattr(dev, 'has_live_data', False))
             info_list.append(entry)
         # Polled at 1 Hz; log only when device health actually changes.
         _log_device_health_change(info_list)
@@ -459,6 +460,35 @@ def clear_device_fault(device_id):
     if result.get('success'):
         return jsonify(result), 200
     status = 404 if str(result.get('message', '')).startswith('Unknown device') else 409
+    return jsonify(result), status
+
+
+@app.route('/api/devices/<device_id>/live', methods=['GET'])
+def get_device_live(device_id):
+    """Telemetry and I/O points of one device (Devices tab, polled only while its panel is open)."""
+    getter = getattr(APPLICATION, 'get_device_live', None)
+    live = getter(device_id) if getter else None
+    if live is None:
+        return jsonify({'message': f"Unknown device '{device_id}'."}), 404
+    return jsonify(_jsonable(live)), 200
+
+
+@app.route('/api/devices/<device_id>/io', methods=['POST'])
+def write_device_io(device_id):
+    """Set one writable I/O point: ``{"name": "do3", "value": true}``."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    if not name or 'value' not in payload:
+        return jsonify({'message': "Payload needs 'name' and 'value'.", 'success': False}), 400
+    writer = getattr(APPLICATION, 'write_device_io', None)
+    if writer is None:
+        return jsonify({'message': 'Controller failed to start; see app.log.', 'success': False}), 409
+    result = writer(device_id, name, payload['value'])
+    if result.get('success'):
+        return jsonify(result), 200
+    if str(result.get('message', '')).startswith('Unknown device'):
+        return jsonify(result), 404
+    status = 400 if result.pop('bad_request', False) else 409
     return jsonify(result), status
 
 

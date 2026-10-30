@@ -9,6 +9,16 @@ class _Status:
     def __init__(self, error=False):
         self.error_status = error
         self.error_code = None
+        self.activation_state = True
+        self.homing_state = True
+        self.pause_motion_status = False
+        self.simulation_mode = 0
+
+
+class _Gripper:
+    holding_part = False
+    closed = False
+    opened = True
 
 
 class _Pose:
@@ -56,7 +66,22 @@ class FakeRobot:
     def GetRtTargetCartPos(self, include_timestamp=False, synchronous_update=True):
         if synchronous_update and self.monitor_mode:
             raise AssertionError("synchronous getter used on the monitoring link")
-        return _Pose(1, [1.0, 2.0, 3.0, 0, 0, 0])
+        pose = _Pose(1, [1.0, 2.0, 3.0, 0, 0, 0])
+        return pose if include_timestamp else pose.data
+
+    def GetRtTargetJointPos(self, include_timestamp=False, synchronous_update=True):
+        if synchronous_update:
+            raise AssertionError("telemetry must use cached getters")
+        return [0.0, -60.0, 60.0, 0.0, 0.0, 0.0]
+
+    def GetRtGripperState(self, synchronous_update=False):
+        return _Gripper()
+
+    def GetRtInputState(self, synchronous_update=False):
+        return [1, 0]
+
+    def GetRtOutputState(self, synchronous_update=False):
+        return [0, 0]
 
     def __getattr__(self, name):
         # Commands: refused on a monitoring link, like the real Robot.
@@ -90,6 +115,17 @@ def test_release_opens_monitoring_before_dropping_control(robot):
     assert robot.ready is False
     # Cached getters keep working over the monitoring link.
     assert robot.rt.GetRtTargetCartPos(include_timestamp=True, synchronous_update=False).data[:2] == [1.0, 2.0]
+
+
+def test_telemetry_uses_cached_getters_over_the_monitoring_link(robot):
+    robot.disconnect(keep_monitoring=True)
+    data = robot.telemetry()
+    assert data["link"] == "monitoring"
+    assert data["joints_deg"] == [0.0, -60.0, 60.0, 0.0, 0.0, 0.0]
+    assert data["pose_mm_deg"][:3] == [1.0, 2.0, 3.0]
+    assert data["gripper"] == "open"
+    points = {p["name"]: p for p in robot.io_points()}
+    assert points["in1"]["value"] is True and not points["out1"]["writable"]
 
 
 def test_abort_and_clear_fault_never_command_a_released_robot(robot):

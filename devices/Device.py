@@ -213,3 +213,26 @@ class Device(ABC):
         without :attr:`supports_monitoring` ignore it.
         """
         self.shutdown()
+
+    # --- Optional live data and I/O (Devices tab "Live" panel) ----------
+    # Polled at ~2 Hz from a Flask thread, only while the panel is open, so
+    # implementations must be safe alongside the task thread: cached values,
+    # or calls serialised by the driver's own lock.
+
+    def telemetry(self) -> dict:
+        """Live read-only values to display, ``{label: JSON-serialisable value}``."""
+        return {}
+
+    def io_points(self) -> list:
+        """Digital/analog points: ``[{name, kind: di|do|ai|ao, value, writable}]``."""
+        return []
+
+    def write_io(self, name: str, value) -> None:
+        """Set the writable point *name* (from :meth:`io_points`) to *value*."""
+        raise NotImplementedError(f"{self.device_id} has no writable I/O.")
+
+    @property
+    def has_live_data(self) -> bool:
+        """True when the driver implements :meth:`telemetry` or :meth:`io_points`."""
+        cls = type(self)
+        return cls.telemetry is not Device.telemetry or cls.io_points is not Device.io_points

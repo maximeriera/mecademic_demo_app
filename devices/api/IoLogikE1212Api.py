@@ -1,7 +1,31 @@
 import logging
+import threading
 
 from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
+
+
+class _SerializedClient:
+    """Proxy running every call on a ModbusTcpClient under one lock.
+
+    The task thread, the Devices tab's I/O panel and the info route can all
+    use the unit at once, and the client is not safe for concurrent
+    transactions on one connection.
+    """
+
+    def __init__(self, client: ModbusTcpClient):
+        self._client = client
+        self._lock = threading.RLock()
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args, **kwargs):
+            with self._lock:
+                return attr(*args, **kwargs)
+        return call
 
 
 class IoLogikE1212Api:
@@ -91,7 +115,7 @@ class IoLogikE1212Api:
         self._slave_id = slave_id
         self._connected = False
         self._faulted = True
-        self._client: ModbusTcpClient | None = None
+        self._client: _SerializedClient | None = None
 
     # ------------------------------------------------------------------
     # Connection management
@@ -103,7 +127,7 @@ class IoLogikE1212Api:
         if self._client is not None:
             # A second connect() without disconnect() used to leak this socket.
             self._client.close()
-        self._client = ModbusTcpClient(host=self._ip_address, port=self._port)
+        self._client = _SerializedClient(ModbusTcpClient(host=self._ip_address, port=self._port))
         if not self._client.connect():
             msg = f"Could not reach ioLogik E1212 at {self._ip_address}:{self._port}"
             self.logger.error(msg)

@@ -173,6 +173,17 @@ class SmarActMCS2(Device):
     def faulted(self) -> bool:
         return self._fault is not None
 
+    def telemetry(self) -> dict:
+        # A few queries per channel, serialised with the task's by the session lock.
+        if not self.connected:
+            return {}
+        out = {}
+        for ch in self._channels:
+            out[f"ch{ch}_position_mm"] = round(self._api.position_mm(ch), 6)
+            out[f"ch{ch}_moving"] = self._api.is_moving(ch)
+            out[f"ch{ch}_referenced"] = self._api.is_referenced(ch)
+        return out
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

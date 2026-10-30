@@ -146,6 +146,16 @@ class ThorlabsPowerMeter(Device):
     def faulted(self) -> bool:
         return self._fault is not None
 
+    def telemetry(self) -> dict:
+        # One SCPI reading, serialised with the task's by the session lock.
+        if not self.connected:
+            return {}
+        return {
+            "power": self._api.read_power(),
+            "unit": self._api.power_unit,
+            "wavelength_nm": self._api.wavelength,
+        }
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

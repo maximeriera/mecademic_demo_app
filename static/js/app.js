@@ -1253,7 +1253,7 @@ const devicePending = new Set();   // device ids with a link request in flight
 // Live/status fields the cards show as badges or buttons, not as table rows.
 const DEVICE_STATUS_KEYS = new Set([
     'connected', 'ready', 'faulted', 'device_id', 'link', 'detached',
-    'in_transition', 'supports_reconnect', 'supports_monitoring',
+    'in_transition', 'supports_reconnect', 'supports_monitoring', 'has_live_data',
 ]);
 
 function setDevicesMessage(text, isError = false) {
@@ -1361,12 +1361,127 @@ function createDeviceCard(deviceId) {
             <button type="button" class="btn-init" data-link-action="connect">Connect</button>
             <button type="button" class="btn-clear" data-link-action="clear_fault">Clear fault</button>
         </div>
-        <div class="device-card-body"></div>`;
+        <div class="device-card-body"></div>
+        <div class="device-live-toggle-row" hidden>
+            <button type="button" class="link-btn device-live-toggle" aria-expanded="false">Show live data</button>
+        </div>
+        <div class="device-live" hidden>
+            <div class="device-live-error" hidden></div>
+            <div class="device-live-telemetry"></div>
+            <div class="device-live-io"></div>
+        </div>`;
     card.querySelector('.device-card-title').textContent = deviceId;
     card.querySelectorAll('[data-link-action]').forEach((btn) => {
         btn.addEventListener('click', () => deviceLinkAction(deviceId, btn.dataset.linkAction));
     });
+    card.querySelector('.device-live-toggle').addEventListener('click', () => toggleDeviceLive(deviceId));
     return card;
+}
+
+/* ---- Devices: live data and I/O panel ---- */
+// Polled only for open panels while the Devices tab is visible, so no device
+// I/O happens for nobody.
+const deviceLiveOpen = new Set();
+const deviceLiveInFlight = new Set();
+
+function toggleDeviceLive(deviceId) {
+    const card = document.querySelector(`.device-card[data-device-id="${CSS.escape(deviceId)}"]`);
+    if (!card) return;
+    const open = !deviceLiveOpen.has(deviceId);
+    if (open) deviceLiveOpen.add(deviceId); else deviceLiveOpen.delete(deviceId);
+    card.querySelector('.device-live').hidden = !open;
+    const toggle = card.querySelector('.device-live-toggle');
+    toggle.textContent = open ? 'Hide live data' : 'Show live data';
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) refreshDeviceLive(deviceId);
+}
+
+function formatLiveValue(value) {
+    if (value === null || value === undefined) return '—';
+    if (typeof value === 'boolean') return value ? 'yes' : 'no';
+    if (typeof value === 'number') {
+        if (Number.isInteger(value)) return String(value);
+        return (value !== 0 && Math.abs(value) < 0.01) ? value.toExponential(3) : String(+value.toFixed(4));
+    }
+    if (Array.isArray(value)) return value.map(formatLiveValue).join(', ');
+    return String(value);
+}
+
+function refreshDeviceLive(deviceId) {
+    if (deviceLiveInFlight.has(deviceId)) return;
+    deviceLiveInFlight.add(deviceId);
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/live`)
+        .then(r => r.json())
+        .then((live) => renderDeviceLive(deviceId, live))
+        .catch(() => renderDeviceLive(deviceId, { telemetry: {}, io: [], error: 'Could not reach the server.' }))
+        .finally(() => deviceLiveInFlight.delete(deviceId));
+}
+
+function renderDeviceLive(deviceId, live) {
+    const card = document.querySelector(`.device-card[data-device-id="${CSS.escape(deviceId)}"]`);
+    if (!card) return;
+    const errorEl = card.querySelector('.device-live-error');
+    errorEl.hidden = !live.error;
+    errorEl.textContent = live.error || '';
+
+    const telemetry = live.telemetry || {};
+    const rows = Object.keys(telemetry).map((key) =>
+        `<tr><td>${escapeHtml(key.replace(/_/g, ' '))}</td><td>${escapeHtml(formatLiveValue(telemetry[key]))}</td></tr>`);
+    const telemetryHtml = rows.length ? `<table>${rows.join('')}</table>` : '';
+    const telemetryEl = card.querySelector('.device-live-telemetry');
+    if (telemetryEl.dataset.html !== telemetryHtml) {
+        telemetryEl.innerHTML = telemetryHtml;
+        telemetryEl.dataset.html = telemetryHtml;
+    }
+
+    // I/O points are built once per point list and then only re-classed, so
+    // a toggle keeps focus while the values refresh.
+    const points = Array.isArray(live.io) ? live.io : [];
+    const ioEl = card.querySelector('.device-live-io');
+    const signature = points.map((p) => `${p.name}:${p.kind}:${p.writable}`).join('|');
+    if (ioEl.dataset.signature !== signature) {
+        ioEl.dataset.signature = signature;
+        ioEl.innerHTML = '';
+        points.forEach((point) => {
+            const el = document.createElement(point.writable ? 'button' : 'span');
+            el.className = 'io-point' + (point.writable ? ' io-toggle' : '');
+            el.dataset.point = point.name;
+            el.title = `${point.name} (${point.kind})` + (point.writable ? ': click to switch' : '');
+            el.innerHTML = `<span class="io-led"></span><span>${escapeHtml(point.name)}</span>`;
+            if (point.writable) {
+                el.type = 'button';
+                el.addEventListener('click', () => writeDeviceIo(deviceId, point.name, !el.classList.contains('on')));
+            }
+            ioEl.appendChild(el);
+        });
+    }
+    const status = normalizeStatus(latestControllerStatus);
+    const device = latestDevices.find((d) => d.device_id === deviceId) || {};
+    const writeLocked = status === 'BUSY' || status === 'INITIALIZING' || !!device.detached;
+    points.forEach((point) => {
+        const el = ioEl.querySelector(`[data-point="${CSS.escape(point.name)}"]`);
+        if (!el) return;
+        el.classList.toggle('on', !!point.value);
+        if (point.writable) el.disabled = writeLocked;
+    });
+}
+
+function writeDeviceIo(deviceId, name, value) {
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/io`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, value }),
+    })
+        .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => setDevicesMessage(data.message, !ok || data.success === false))
+        .catch(() => setDevicesMessage(`Error writing ${deviceId}.${name}.`, true))
+        .finally(() => refreshDeviceLive(deviceId));
+}
+
+function pollDeviceLive() {
+    const tab = document.getElementById('tab-devices');
+    if (!tab || !tab.classList.contains('active') || document.hidden) return;
+    deviceLiveOpen.forEach(refreshDeviceLive);
 }
 
 // Cards are created once per device and patched in place, so their buttons
@@ -1430,6 +1545,7 @@ function renderDeviceCards(devices) {
 
         card.querySelector('.device-card-actions').hidden =
             releaseBtn.hidden && connectBtn.hidden && clearBtn.hidden;
+        card.querySelector('.device-live-toggle-row').hidden = !device.has_live_data;
     });
     existing.forEach((card) => card.remove());
 }
@@ -2110,6 +2226,7 @@ function initCustomViewLink() {
 /* ---- Startup ---- */
 setInterval(updateRobotStatus, 100);
 setInterval(loadRobotInfo, 1000);
+setInterval(pollDeviceLive, 500);
 updateRobotStatus();
 loadRobotInfo();
 refreshProdMetrics();

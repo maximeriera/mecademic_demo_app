@@ -344,6 +344,7 @@ register_device(DeviceSpec(
         "address": _p("int", 1, "ED address"),
         "port": _p("int", 9500, "TCP port"),
         "timeout": _p("float", 5.0, "seconds per exchange"),
+        "channels": _p("int", 8, "I/O channels shown on the Devices tab"),
     },
     aliases=("brainboxes_dio", "ed_digital"),
     doc="Brainboxes ED digital I/O module.",

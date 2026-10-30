@@ -22,6 +22,7 @@ class BrainboxesEDDigital(Device):
         address: int = 0x01,
         port: int = 9500,
         timeout: float = 5.0,
+        channels: int = 8,
         name: str | None = None,
     ) -> None:
         if name is None:
@@ -32,6 +33,10 @@ class BrainboxesEDDigital(Device):
         self._address = address
         self._port = port
         self._timeout = float(timeout)
+        self._channels = int(channels)
+        # Read once per connection: /api/info polls this every second, and
+        # every ED exchange opens its own TCP connection.
+        self._identity: dict[str, Any] = {}
 
         self._connected = False
         self._faulted = False
@@ -53,12 +58,8 @@ class BrainboxesEDDigital(Device):
             "address": self._address,
             "port": self._port,
         }
-        if self._connected and self._device is not None:
-            try:
-                result["device_name"] = self._device.read_device_name()
-                result["firmware_version"] = self._device.read_firmware_version()
-            except Exception:
-                pass
+        if self._connected:
+            result.update(self._identity)
         return result
 
     @property
@@ -81,8 +82,12 @@ class BrainboxesEDDigital(Device):
                 port=self._port,
                 timeout_sec=self._timeout,
             )
-            # Connectivity probe.
-            device.read_device_name()
+            # Connectivity probe, also the identity shown on the device card.
+            self._identity = {"device_name": device.read_device_name()}
+            try:
+                self._identity["firmware_version"] = device.read_firmware_version()
+            except Exception:
+                pass
             self._device = device
             self._connected = True
             self._faulted = False
@@ -104,6 +109,21 @@ class BrainboxesEDDigital(Device):
 
     def abort(self) -> None:
         self.logger.warning(f"[{self.device_id}] Abort requested (no motion to clear).")
+
+    def io_points(self) -> list:
+        if self._device is None:
+            return []
+        inputs = self._device.read_inputs_as_int()
+        outputs = self._device.read_outputs_as_int()
+        return ([{"name": f"di{i}", "kind": "di", "value": bool(inputs >> i & 1), "writable": False}
+                 for i in range(self._channels)]
+                + [{"name": f"do{i}", "kind": "do", "value": bool(outputs >> i & 1), "writable": True}
+                   for i in range(self._channels)])
+
+    def write_io(self, name: str, value) -> None:
+        if not name.startswith("do") or not name[2:].isdigit() or int(name[2:]) >= self._channels:
+            raise ValueError(f"Unknown or read-only point '{name}'.")
+        self._assert_initialized().set_single_output(int(name[2:]), bool(value))
 
     def read_device_name(self) -> str:
         return self._assert_initialized().read_device_name()

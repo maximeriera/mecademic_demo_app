@@ -133,6 +133,51 @@ class MecaRobot(Device):
             }
 
     # ------------------------------------------------------------------
+    # Live data (cached getters only: works over the monitoring link too)
+    # ------------------------------------------------------------------
+
+    def telemetry(self) -> dict:
+        robot = self.rt
+        if not robot.IsConnected():
+            return {"link": "disconnected"}
+        status = robot.GetStatusRobot()
+        error_code = status.error_code
+        out = {
+            "link": self.link,
+            "activated": status.activation_state,
+            "homed": status.homing_state,
+            "paused": status.pause_motion_status,
+            "error": status.error_status,
+            "error_code": int(error_code) if error_code is not None else None,
+            "simulation": getattr(status.simulation_mode, "name", str(status.simulation_mode)),
+            "joints_deg": [round(v, 3) for v in robot.GetRtTargetJointPos(synchronous_update=False)],
+            "pose_mm_deg": [round(v, 3) for v in robot.GetRtTargetCartPos(synchronous_update=False)],
+        }
+        try:
+            gripper = robot.GetRtGripperState(synchronous_update=False)
+            out["gripper"] = ("holding part" if gripper.holding_part
+                              else "closed" if gripper.closed
+                              else "open" if gripper.opened else "—")
+        except Exception:
+            pass  # no gripper / older firmware
+        return out
+
+    def io_points(self) -> list:
+        """I/O module bank (MVK01...), read-only: robot outputs are task code's job."""
+        robot = self.rt
+        if not robot.IsConnected():
+            return []
+        try:
+            inputs = robot.GetRtInputState(synchronous_update=False)
+            outputs = robot.GetRtOutputState(synchronous_update=False)
+        except Exception:
+            return []
+        return ([{"name": f"in{i + 1}", "kind": "di", "value": bool(v), "writable": False}
+                 for i, v in enumerate(inputs)]
+                + [{"name": f"out{i + 1}", "kind": "do", "value": bool(v), "writable": False}
+                   for i, v in enumerate(outputs)])
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

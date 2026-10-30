@@ -726,6 +726,48 @@ class ApplicationController:
         self._leave_faulted_if_healthy()
         return {"success": True, "message": f"Fault cleared on {device_id}. Controller is {self.get_state().value}."}
 
+    # --- Live data and I/O (Devices tab) ---
+
+    def get_device_live(self, device_id: str) -> Dict[str, Any] | None:
+        """Telemetry and I/O points of one device, or None if it does not exist.
+
+        Read errors are returned in ``error``, never raised: the panel polls
+        this while the device may be disconnecting.
+        """
+        device = self.devices.get(device_id)
+        if device is None:
+            return None
+        result: Dict[str, Any] = {"telemetry": {}, "io": [], "error": None}
+        if device_id in self._in_transition:
+            result["error"] = "Connecting or disconnecting..."
+            return result
+        try:
+            result["telemetry"] = device.telemetry() or {}
+            result["io"] = device.io_points() or []
+        except Exception as e:
+            result["error"] = f"{type(e).__name__}: {e}"
+        return result
+
+    def write_device_io(self, device_id: str, name: str, value: Any) -> Dict[str, Any]:
+        """Set one writable I/O point from the UI. Refused while a task runs or the device is detached."""
+        with self._command_lock:
+            reason = self._link_refusal_locked(device_id)
+            if reason is None and device_id in self._detached:
+                reason = f"{device_id} is released. Connect it first."
+            if reason:
+                return {"success": False, "message": reason}
+            device = self.devices[device_id]
+        try:
+            device.write_io(name, value)
+        except (ValueError, NotImplementedError) as e:
+            return {"success": False, "message": str(e), "bad_request": True}
+        except Exception as e:
+            self.logger.warning(f"I/O write {device_id}.{name}={value!r} failed: {e}", exc_info=True)
+            return {"success": False, "message": f"Write failed: {e}"}
+        self.logger.info(f"I/O write from UI: {device_id}.{name} = {value!r}")
+        shown = ("ON" if value else "OFF") if isinstance(value, bool) else value
+        return {"success": True, "message": f"{device_id}.{name} set to {shown}."}
+
     def _attached_devices(self) -> list[Device]:
         """Devices the cell currently owns: every device that is not detached."""
         return [d for d in self.devices.values() if d.device_id not in self._detached]

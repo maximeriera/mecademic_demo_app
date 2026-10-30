@@ -45,6 +45,8 @@ class IoLogikE1212(Device):
             slave_id=slave_id,
             logger=self.logger,
         )
+        # Read once per connection: /api/info polls this every second.
+        self._identity = {"model_name": None, "firmware_version": None, "lan_ip": None}
 
     # ------------------------------------------------------------------
     # Device interface
@@ -57,19 +59,7 @@ class IoLogikE1212(Device):
 
     @property
     def info(self) -> dict:
-        try:
-            model = self._api.get_model_name()
-            fw    = self._api.get_firmware_version()
-            ip    = self._api.get_lan_ip()
-        except Exception:
-            model, fw, ip = None, None, None
-        return {
-            "ip_address":       self._ip_address,
-            "port":             self._port,
-            "model_name":       model,
-            "firmware_version": fw,
-            "lan_ip":           ip,
-        }
+        return {"ip_address": self._ip_address, "port": self._port, **self._identity}
 
     @property
     def connected(self) -> bool:
@@ -89,6 +79,14 @@ class IoLogikE1212(Device):
 
     def initialize(self):
         self._api.connect()
+        try:
+            self._identity = {
+                "model_name": self._api.get_model_name(),
+                "firmware_version": self._api.get_firmware_version(),
+                "lan_ip": self._api.get_lan_ip(),
+            }
+        except Exception as e:
+            self.logger.warning(f"[{self.device_id}] Could not read the unit identity: {e}")
 
     def shutdown(self):
         self._api.disconnect()
@@ -99,3 +97,22 @@ class IoLogikE1212(Device):
 
     def abort(self):
         self.logger.warning(f"[{self.device_id}] Abort requested (no motion to clear).")
+
+    # ------------------------------------------------------------------
+    # Live I/O (Devices tab)
+    # ------------------------------------------------------------------
+
+    def io_points(self) -> list:
+        if not self._api.is_connected:
+            return []
+        inputs = self._api.read_all_di()
+        outputs = self._api.read_all_do()
+        return ([{"name": f"di{i}", "kind": "di", "value": bool(v), "writable": False}
+                 for i, v in enumerate(inputs)]
+                + [{"name": f"do{i}", "kind": "do", "value": bool(v), "writable": True}
+                   for i, v in enumerate(outputs)])
+
+    def write_io(self, name: str, value) -> None:
+        if not name.startswith("do") or not name[2:].isdigit():
+            raise ValueError(f"Unknown or read-only point '{name}'.")
+        self._api.write_do(int(name[2:]), bool(value))
