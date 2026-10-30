@@ -1,7 +1,7 @@
 # Mecademic Demo App
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/license/mit)
-[![Python 3.10+](https://shields.io/badge/Python-3.10+-blue?logo=Python)](https://www.python.org/downloads/)
+[![Python 3.12+](https://shields.io/badge/Python-3.12+-blue?logo=Python)](https://www.python.org/downloads/)
 
 
 A Flask-based web application for controlling a robotic cell built around [Mecademic](https://www.mecademic.com/) robots.
@@ -23,11 +23,18 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [Typical workflow](#typical-workflow)
   - [Configuration](#configuration)
     - [Supported device types](#supported-device-types)
+    - [Config validation](#config-validation)
+    - [Production history](#production-history)
   - [Web UI](#web-ui)
     - [Control tab](#control-tab)
+    - [Devices tab](#devices-tab)
     - [Production tab](#production-tab)
     - [Variables tab](#variables-tab)
+    - [Manual tab](#manual-tab)
     - [Logs tab](#logs-tab)
+    - [Live updates](#live-updates)
+  - [Releasing a device](#releasing-a-device)
+  - [Workspaces](#workspaces)
   - [State Machine](#state-machine)
   - [Stop vs. Abort](#stop-vs-abort)
   - [Build your own application logic](#build-your-own-application-logic)
@@ -40,14 +47,18 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [Example — a simple pick-and-place cycle](#example--a-simple-pick-and-place-cycle)
   - [Adding a New Device](#adding-a-new-device)
   - [Logging](#logging)
+  - [Tests](#tests)
   - [Architecture](#architecture)
   - [Project Structure](#project-structure)
   - [REST API](#rest-api)
     - [System](#system)
+    - [Devices](#devices)
     - [Tasks](#tasks)
     - [Logs](#logs)
     - [Production](#production)
     - [Context](#context)
+    - [Workspaces](#workspaces-1)
+    - [Live events](#live-events)
 
 ---
 
@@ -57,8 +68,14 @@ Users can build their own application logic in `app_logic/` and trigger it via t
 |---|---|
 | **Multi-device architecture** | Abstract `Device` base class with per-device rotating log files |
 | **Mecademic robot support** | Wraps [mecademicpy](https://github.com/Mecademic/mecademicpy) — connection, homing, motion, fault detection, and clearing |
-| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 remote I/O, LMI Gocator 3D sensor, Thorlabs PM-series power meters, SmarAct MCS2 linear stages |
-| **Web UI** | Real-time status badges, manual/auto task controls, device cards, integrated log viewer |
+| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 and Brainboxes ED remote I/O, LMI Gocator 3D sensor, GigE Vision cameras, Thorlabs PM-series power meters, SmarAct MCS2 linear stages, Zaber axes, and a hardware-free simulated device |
+| **Device registry & config validation** | Every `type` and its keys are declared in `devices/registry.py`; typos and bad values in `config.yaml` are listed in a UI banner instead of failing silently |
+| **Per-device link control** | Release one device to another program and connect it again; a released Mecademic robot keeps a read-only link so the live view keeps its position |
+| **Live data & I/O** | Device telemetry (robot joints/pose, stage positions, power...) and digital I/O with output toggles on the Devices tab |
+| **Cycle timeline** | Gantt chart of every PROD cycle's steps, with averages and idle time |
+| **Production history** | Runs and cycles saved locally, per-day summary, CSV export |
+| **Workspace picker** | Switch between demo workspaces, or reload the current one's code, without restarting |
+| **Web UI** | Real-time status badges, manual/auto task controls, device cards, integrated log viewer, pushed over server-sent events |
 | **REST API** | Full endpoint set for status, task management, initialization, shutdown, and fault clearing |
 | **Thread-safe state machine** | `ControllerState` (OFF → INITIALIZING → READY → BUSY → FAULTED) with lock-protected transitions |
 | **Task system** | Background `Task` thread — PROD loop, HOME, SHIPMENT, and CALIBRATION |
@@ -69,7 +86,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
 
 ## Requirements
 
-- **Python 3.10+** (uses `match`/`case` and `X | Y` union type hints)
+- **Python 3.12+** (`devices/api/ed_device.py` uses PEP 695 `type` aliases)
 
 Install all dependencies:
 
@@ -100,8 +117,13 @@ python app.py
 
 Open **http://localhost:5000** in a browser.
 
-On Windows you can also double-click **`autostart.bat`** to launch the app.
-> Path need to be adjusted in the batch file to match your Python installation.
+To run against a workspace kept outside this repository (the usual setup, see [Workspaces](#workspaces)):
+
+```bash
+python app.py --workspace ../my_client_workspace
+```
+
+On Windows, the `mecademic_demo` superproject's **`start_demo.bat`** creates the virtual environment, installs the requirements and starts the app on a workspace.
 
 ### Typical workflow
 
@@ -129,34 +151,159 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 | `lmi` | `LMISensor` | LMI Gocator 3D sensor (Ethernet ASCII) |
 | `thorlabs_pm` | `ThorlabsPowerMeter` | Thorlabs PM-series power meter (SCPI via PyVISA, USB or TCPIP) |
 | `smaract_mcs2` | `SmarActMCS2` | SmarAct MCS2 positioner controller and its linear stages (Ethernet ASCII) |
+| `brainboxes_ed_digital` | `BrainboxesEDDigital` | Brainboxes ED digital I/O module |
+| `gige_camera` | `GigEVisionDevice` | GigE Vision camera (harvesters / GenTL) |
+| `zaber` | `ZaberAxis` | Zaber linear axis (legacy driver) |
+| `simulated` | `SimulatedDevice` | Hardware-free stand-in for any of the above |
+| `custom` | your class | A workspace driver: `driver: "module:ClassName"`, every other key goes to its constructor |
+
+Aliases and the keys each type accepts (with defaults) are listed in the reference comments at the top of [`app_logic/config.yaml`](app_logic/config.yaml) and returned by `GET /api/devices/types`.
+
+### Config validation
+
+Every `devices:` entry is checked against [`devices/registry.py`](devices/registry.py) when the app starts:
+
+- **Errors** keep the device from being created and block INITIALIZE until they are fixed. Examples: an unknown type ("did you mean 'mecademic'?"), a missing required key, a value of the wrong type, a value outside the allowed choices, or a driver whose SDK is not installed.
+- **Warnings** are reported and the key is ignored. Example: an unknown key, usually a typo ("did you mean 'port'?").
+
+Both are listed in a banner at the top of the UI. Add `enabled: false` to an entry to keep it in the file without creating the device.
+
+### Production history
+
+Every archived PROD run and every finished cycle, including its step timeline, is written locally under `logs/history/<workspace folder>/`:
+
+- `runs.jsonl`: one line per run
+- `cycles-YYYY-MM-DD.jsonl`: one line per cycle
+
+The Production tab's History section reads them back, so runs survive restarts. Two CSV exports are available: all runs, and every cycle of one day with one column per top-level step. Nothing is sent anywhere.
+
+```yaml
+history:
+  enabled: true          # default
+  retention_days: 30     # cycle files older than this are deleted at startup
+```
 
 ---
 
 ## Web UI
 
-The single-page UI at `http://localhost:5000` is divided into tabs, listed in the sidebar:
+The single-page UI at `http://localhost:5000` is divided into tabs, listed in the sidebar. The sidebar also shows the active workspace.
 
 ### Control tab
 
 | Section | Description |
 |---|---|
 | **System Status** | Live state badge and last status message |
+| **Workspace** | Pick another workspace (**LOAD**) or reload the current one's code and config (**RELOAD CODE**), see [Workspaces](#workspaces) |
 | **Tasks — Manual** | HOME, SHIPMENT, CALIBRATION (single-run) |
 | **Tasks — Auto** | PROD (infinite loop), STOP (graceful), ABORT (immediate) |
 | **System Control** | INITIALIZE, CLEAR FAULTS, SHUTDOWN |
-| **Devices** | One card per device showing connected / ready / faulted badges and static info |
+| **Device Network** | One health chip per device; **Manage devices** opens the Devices tab |
+
+### Devices tab
+
+One card per device with its badges (OK/FAULTED, Connected/Monitoring/Disconnected, Ready, Released) and static info, plus:
+
+- **Release control / Disconnect** and **Connect**, for drivers that support reconnecting, see [Releasing a device](#releasing-a-device)
+- **Clear fault** on a faulted device
+- **Show live data**: the driver's telemetry and I/O points, refreshed twice a second while the panel is open. Writable outputs toggle on click. That is refused while a task runs or while the device is released.
+
+| Driver | Live data |
+|---|---|
+| `mecademic` | Activated, homed, paused and error flags; target joints and pose; gripper state; I/O module inputs and outputs (read-only). Works over the monitoring link too. |
+| `iologik` | DI 0–7 and DO 0–7 (writable) |
+| `brainboxes_ed_digital` | DI/DO over `channels` (writable outputs) |
+| `smaract_mcs2` | Position, moving and referenced state per channel |
+| `thorlabs_pm` | Power, unit and wavelength |
+| `simulated` | Fake telemetry, 4 DI and 4 writable DO (`di2` loops `do1` back) |
 
 ### Production tab
 
-START / STOP / ABORT for the PROD loop, the live step and declared sequence, and cycle/run metrics (completed cycles, run time, last/average cycle time, last error). **Show Details** adds per-step timings and the recent cycle/run history; **Export Runs** downloads the archived runs as JSON.
+- **Controls and metrics**: START / STOP / ABORT for the PROD loop, the live step and declared sequence, and cycle/run metrics (completed cycles, run time, last/average cycle time, last error).
+- **Cycle Timeline**:
+  - a strip of the last 30 cycles: bar height is the duration, colour is the status, click one to select it
+  - a Gantt chart of the selected cycle: one row per top-level step in declared order, nested steps as thin bars, each step's average as a dashed box, and the idle time in the caption
+- **History**: a per-day summary and the last runs from disk, with CSV downloads.
+- **Show Details** adds per-step timings and the recent cycle/run history.
+- **Export Runs** downloads the runs kept in memory as JSON.
 
 ### Variables tab
 
 The params and variables declared in the optional `context.yaml` (see [Context](#context-params--variables-optional)), with their current value, default, reset policy and persistence. Values can be edited and reset while no task is running. Without a context file the tab explains how to add one.
 
+### Manual tab
+
+- **ABORT** and **CLEAR FAULTS** sit above the actions. CLEAR FAULTS is disabled while a task runs, since clearing faults would abort it, and it reports which devices are still faulted.
+- Below them: HOME, SHIPMENT, CALIBRATION and the workspace's manual actions. When a device is released, the confirmation lists it.
+
 ### Logs tab
 
 Browse and auto-refresh any rotating log file from `logs/app/` or `logs/devices/`.
+
+### Live updates
+
+Each page holds one server-sent events stream (`/api/events`) carrying the controller status and live step, device health, production metrics and the context. It sends only what changed: the step timer streams at 10 Hz while a task runs, and an idle cell sends heartbeats only.
+
+Faults, failed tasks and device link changes arrive as toasts. When the stream is down, the page falls back to polling the REST endpoints until it reconnects.
+
+Behind nginx, the stream's `X-Accel-Buffering: no` header disables proxy buffering, so no proxy change is needed.
+
+---
+
+## Releasing a device
+
+A device whose driver supports reconnecting can be released from its card on the Devices tab and connected again later, while the rest of the cell keeps running. Typical use: drive the robot from its web portal (or another script) while the custom view keeps plotting a sensor.
+
+- **Mecademic robots: Release control.**
+  - The app clears its motion queue and drops its control connection. The robot is *not* deactivated, so it stays homed.
+  - The robot pauses when the control client disconnects, so the other client must **resume motion** before moving it.
+  - The app keeps a read-only monitoring connection, so `robot.rt` and the custom view still get the robot's position.
+- **Other devices: Disconnect.** The connection is closed.
+- **While any device is released:**
+  - the cell stays READY and ignores that device's health
+  - only manual actions run (with a warning); PROD, HOME, SHIPMENT and CALIBRATION are refused until it is reconnected
+  - INITIALIZE, CLEAR FAULTS and ABORT leave released devices alone
+- **Connect** takes the device back:
+  - A robot activates and homes.
+  - If another client still holds the robot's control port, the attempt fails with a clear message and the monitoring link stays up.
+  - SHUTDOWN reconnects nothing and forgets every release.
+
+Release and connect are refused while a task runs or the cell initializes. They are offered for: `mecademic` (with monitoring), `iologik`, `brainboxes_ed_digital`, `asyril`, `smaract_mcs2`, `thorlabs_pm` and `simulated`. Set `supports_monitoring: true` on a simulated device to rehearse the robot flow without hardware.
+
+In workspace code, read a robot's real-time data through the link that is up:
+
+```python
+robot = devices["my_meca_robot"]
+pose = robot.rt.GetRtTargetCartPos(include_timestamp=True, synchronous_update=False)
+```
+
+Always pass `synchronous_update=False`. The default (`True`) sends a query to the robot, which is not thread-safe from a DataHub source and is refused on the monitoring link. A DataHub source can name its device (`hub.add_source(..., device="my_meca_robot")`), so it pauses while that device is fully disconnected.
+
+---
+
+## Workspaces
+
+A workspace is a folder holding the cell's `config.yaml` (optionally `context.yaml`, `custom_view/`) and its task modules. They sit either directly in the folder (as made by the superproject's `create_project.bat`) or in an `app_logic/` subfolder (like this repository).
+
+The Control tab's **Workspace** picker lists the workspaces next to the startup one: the subfolders of the parent of `--workspace` that hold a `config.yaml`. Override the folder with `--workspaces-root` or `MECADEMIC_WORKSPACES_ROOT`. An optional `title:` in `config.yaml` names a workspace in the list.
+
+- **LOAD** switches to the selected workspace inside the running process:
+  - every device is disconnected
+  - the old workspace's modules are unloaded
+  - the new workspace starts OFF; press INITIALIZE
+- **RELOAD CODE** does the same with the current workspace, which is the quick way to try an edited `prod.py` or `config.yaml`.
+- Every open page reloads after a switch.
+- Both are refused while a task runs.
+- Threads that workspace code starts itself are not stopped by a switch.
+
+In Docker, mount the workspaces and point the picker at them:
+
+```yaml
+environment:
+  MECADEMIC_WORKSPACES_ROOT: /workspaces
+volumes:
+  - ../:/workspaces:ro
+```
 
 ---
 
@@ -372,7 +519,7 @@ def prod_cycle(devices: Dict[str, Device], context=None):
 
 ## Adding a New Device
 
-1. **Create the driver class** in `devices/` extending `Device`. Implement all abstract members:
+1. **Create the driver class** in `devices/` extending `Device`. Its constructor takes the config keys as keyword arguments, plus `name`. Implement all abstract members:
 
    | Properties | Methods |
    |---|---|
@@ -382,11 +529,34 @@ def prod_cycle(devices: Dict[str, Device], context=None):
    | `faulted` → `bool` | `abort()` |
    | `api` | |
 
-2. **Export** the new class in [`devices/__init__.py`](devices/__init__.py).
+2. **Register** the type in [`devices/registry.py`](devices/registry.py). The target is a string, so the driver's SDK is only imported when a config uses it:
 
-3. **Register** the `type` string in `_create_devices()` in [`core/ApplicationController.py`](core/ApplicationController.py).
+   ```python
+   register_device(DeviceSpec(
+       "my_gripper", "devices.MyGripper:MyGripper",
+       {
+           "ip_address": _p("str", doc="gripper IP address"),     # required
+           "port": _p("int", 502),                                # optional, default 502
+           "mode": _p("str", "fast", choices=("fast", "gentle")),
+       },
+       aliases=("gripper",),
+   ))
+   ```
 
-4. **Declare** one or more instances under `devices:` in [`config.yaml`](config.yaml).
+3. **Export** the class in [`devices/__init__.py`](devices/__init__.py), for type hints in workspace code.
+
+4. **Declare** one or more instances under `devices:` in [`config.yaml`](app_logic/config.yaml).
+
+A driver only needed by one workspace can stay in that workspace and use `type: "custom"` with `driver: "module:ClassName"` instead of steps 2–3.
+
+**Optional members** (not abstract, so existing drivers keep working):
+
+| Member | Purpose |
+|---|---|
+| `supports_reconnect = True` | Offer Disconnect/Connect on the Devices tab. `connect()` defaults to `initialize()` and `disconnect()` to `shutdown()`, so these must work in any order and more than once. |
+| `supports_monitoring = True`, `disconnect(keep_monitoring)`, `link` | Keep a read-only link while released (see `MecaRobot`) |
+| `telemetry()` → `dict` | Values for the Live panel. It is polled from a web thread, so use cached values or the driver's own lock. |
+| `io_points()` → `[{name, kind, value, writable}]`, `write_io(name, value)` | I/O points for the Live panel. `kind` is `di`, `do`, `ai` or `ao`. |
 
 ---
 
@@ -404,20 +574,36 @@ All log files use the format: `<timestamp> | <level> | <message>`.
 
 Logs are viewable in the browser via the **Logs** tab or the `/api/logs` endpoints.
 
+The production history (see [Production history](#production-history)) is written next to them, under `logs/history/<workspace folder>/`.
+
+---
+
+## Tests
+
+The `tests/` suite runs against simulated devices and a fake mecademicpy robot, so it needs no hardware:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q tests
+```
+
 ---
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Browser (index.html + app.js)                              │
-│  ─ polls /api/status, /api/info every second                │
+│  Browser (index.html + live.js + app.js)                    │
+│  ─ one /api/events stream (status, devices, prod, notices)  │
+│    falls back to polling the REST routes when it is down    │
 │  ─ sends POST to /api/task/*, /api/initialize, …            │
 └──────────────────────────┬──────────────────────────────────┘
                            │  HTTP (port 5000)
 ┌──────────────────────────▼──────────────────────────────────┐
 │  Flask server  (app.py)                                     │
 │  ─ routes map to ApplicationController methods              │
+│  ─ LivePublisher + EventBus feed /api/events                │
+│  ─ switches workspaces in-process (new controller)          │
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -433,7 +619,9 @@ Logs are viewable in the browser via the **Logs** tab or the `/api/logs` endpoin
 ┌──────────────────────────▼──────────────────────────────────┐
 │  Devices  (devices/)                                        │
 │  MecaRobot · AsyrilEyePlus · PlanarMotor · ArduinoBoard     │
-│  IoLogikE1212 · LMISensor                                   │
+│  IoLogikE1212 · BrainboxesED · LMISensor · GigE · Thorlabs  │
+│  SmarActMCS2 · Zaber · SimulatedDevice                      │
+│  ─ types and config keys declared in devices/registry.py    │
 │  ─ each extends abstract Device base class                  │
 │  ─ each has a dedicated rotating log under logs/devices/    │
 └─────────────────────────────────────────────────────────────┘
@@ -444,21 +632,28 @@ Logs are viewable in the browser via the **Logs** tab or the `/api/logs` endpoin
 ## Project Structure
 
 ```
-app.py                        # Flask server — all REST API endpoints
+app.py                        # Flask server — REST API, /api/events, workspace switching
 requirements.txt              # Python dependencies
-autostart.bat                 # Windows quick-launch script
+requirements-dev.txt          # + pytest and notebook tooling
 
 core/
-    ApplicationController.py  # Orchestrator: devices, tasks, monitor thread
+    ApplicationController.py  # Orchestrator: devices, tasks, monitor thread, device links
     ControllerState.py        # ControllerState enum (OFF → INITIALIZING → READY → BUSY → FAULTED)
     Task.py                   # Task thread — TaskType enum + execution logic
     AppContext.py             # The `context` passed to task functions (facade below)
     ContextStore.py           # Optional params/variables from context.yaml
-    StepTracker.py            # Live step reporting, per-step timings, sequences
+    StepTracker.py            # Live step reporting, per-step timings, sequences, cycle timelines
     ProductionMetrics.py      # PROD cycle/run statistics
+    History.py                # Production history on disk (JSON Lines, CSV export)
+    DataHub.py                # Dynamic data for the optional custom view
+    EventBus.py               # Server-sent events fan-out
+    LivePublisher.py          # Publishes changed state to the event bus
+    Workspaces.py             # Workspace discovery and module purge for switching
 
 devices/
     Device.py                 # Abstract base class — contract for all devices
+    registry.py               # Device types, their config keys, and config validation
+    SimulatedDevice.py        # Hardware-free stand-in
     MecaRobot.py              # Mecademic robot (mecademicpy)
     Asyril.py                 # Asyril Eye+ intelligent feeder
     PlanarMotor.py            # Planar motor system
@@ -479,11 +674,15 @@ app_logic/
 
 templates/index.html          # Single-page web UI (Jinja2)
 static/css/app.css            # Styles
-static/js/app.js              # UI logic and REST polling
+static/js/live.js             # /api/events client
+static/js/app.js              # UI logic (fallback polling when the stream is down)
+
+tests/                        # pytest suite (simulated devices, no hardware)
 
 logs/
     app/                      # Rotating logs for Flask + ApplicationController
     devices/                  # Per-device rotating log files
+    history/<workspace>/      # Production history (runs.jsonl, cycles-<date>.jsonl)
 ```
 
 ---
@@ -499,7 +698,21 @@ logs/
 | `GET` | `/api/state_values` | List all valid `ControllerState` enum values |
 | `POST` | `/api/initialize` | Connect and home all devices → READY |
 | `POST` | `/api/shutdown` | Graceful shutdown of all devices and threads → OFF |
-| `POST` | `/api/clear_faults` | Reset faults on all devices |
+| `POST` | `/api/clear_faults` | Reset faults on all devices that are not released |
+| `GET` | `/api/system` | Active workspace and the problems found in its `config.yaml` |
+
+### Devices
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/devices/types` | Every device type `config.yaml` accepts, with its keys |
+| `POST` | `/api/devices/<id>/disconnect` | Release one device (a robot keeps a monitoring link). 409 while a task runs |
+| `POST` | `/api/devices/<id>/connect` | Connect one device again |
+| `POST` | `/api/devices/<id>/clear_fault` | Clear one device's fault |
+| `GET` | `/api/devices/<id>/live` | Telemetry and I/O points |
+| `POST` | `/api/devices/<id>/io` | Set a writable point: `{"name": "do3", "value": true}`. 409 while a task runs or the device is released |
+
+`/api/info` entries also carry `link` (`control` / `monitoring` / `disconnected`), `detached`, `in_transition`, `supports_reconnect`, `supports_monitoring` and `has_live_data`.
 
 ### Tasks
 
@@ -524,7 +737,12 @@ logs/
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/prod/metrics` | Cycle/run metrics, the live step, the declared sequence and per-step timings |
-| `GET` | `/api/prod/runs` | Archived run summaries, each with a snapshot of the context variables |
+| `GET` | `/api/prod/runs` | Archived run summaries kept in memory, each with a snapshot of the context variables |
+| `GET` | `/api/prod/timelines` | Last 30 cycle timelines with the row order and step averages (`?after_rev=N` answers `unchanged` when nothing finished) |
+| `GET` | `/api/history/days` | Per-day cycle summary from the history on disk |
+| `GET` | `/api/history/runs` | Archived runs from disk (`?limit=50`) |
+| `GET` | `/api/history/runs.csv` | All runs as CSV (variables and step averages as columns) |
+| `GET` | `/api/history/cycles.csv?date=YYYY-MM-DD` | Every cycle of one day as CSV (one column per top-level step) |
 
 ### Context
 
@@ -545,3 +763,23 @@ logs/
     ```json
     { "namespace": "variables", "key": "part_count" }
     ```
+
+### Workspaces
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/workspaces` | The workspaces the picker offers, the current one and the folder scanned |
+| `POST` | `/api/workspaces/switch` | Load a workspace by folder name: `{"name": "mecademic_client_line1"}`. The current name reloads it. 409 while a task runs |
+
+### Live events
+
+`GET /api/events` is a `text/event-stream`. It starts with a snapshot of every source, then sends changes only, with a comment heartbeat every 5 s.
+
+| Event | Data |
+|---|---|
+| `status` | Same as `/api/status` |
+| `devices` | Same as `/api/info` |
+| `prod` | Same as `/api/prod/metrics` |
+| `context` | Same as `/api/context` |
+| `notice` | `{level, message, time}`: device faulted, task failed, device released/connected... |
+| `workspace` | `{name}` after a workspace switch |
