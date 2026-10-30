@@ -1,28 +1,30 @@
-"""SHIPMENT task: fold the robot into its transport/storage pose.
+"""SHIPMENT task — fold the cell into its transport/storage pose."""
 
-Like HOME, it first backs out of the alignment station if needed, and it
-never opens the gripper.
-"""
-
+import time
 from typing import Dict
 
 from core import AppContext
 from devices import Device
 
-try:
-    from .fiber_alignment import cell, poses, process
-except ImportError as e:  # pragma: no cover - depends on how the workspace is loaded
-    if e.name is not None:
-        raise  # a module is really missing (e.g. a dependency): report that, not the fallback
-    from fiber_alignment import cell, poses, process
 
+def shipment(devices: Dict[str, Device], context: AppContext | None = None):
+    """Release any held part, then move the robot to its shipment pose."""
+    robot = devices["my_meca_robot"]
 
-def shipment(devices: Dict[str, Device], context: AppContext):
-    """Back out of the alignment station if needed, then move to SHIPMENT_JOINTS."""
-    if context.get_variable("at_alignment", False):
-        process.retract_from_alignment(devices, context)
+    if context is None:
+        robot.api.GripperOpen()
+        robot.api.MoveJoints(0, -60, 60, 0, 90, 0)
+        robot.api.WaitIdle()
+        return
+
+    move_time_s = context.get_param("move_time_s", 0.4)
+
+    with context.step("Open gripper"):
+        robot.api.GripperOpen()
+        robot.api.WaitIdle()
+        time.sleep(move_time_s / 4)
 
     with context.step("Move to shipment position"):
-        robot = cell.prepare_robot(devices, context)
-        robot.MoveJoints(*poses.SHIPMENT_JOINTS)
-        robot.WaitIdle()
+        robot.api.MoveJoints(0, -60, 60, 0, 90, 0)
+        robot.api.WaitIdle()
+        time.sleep(move_time_s)
