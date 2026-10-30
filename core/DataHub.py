@@ -29,6 +29,8 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from .VideoStream import VideoStream
+
 EVENTS_CHANNEL = "events"
 
 Sample = Tuple[float, Any]
@@ -74,6 +76,7 @@ class DataHub:
         self._channels: Dict[str, deque] = {}
         self._seq = 0
         self._sources: Dict[str, _Source] = {}
+        self._videos: Dict[str, VideoStream] = {}
         self._callbacks: Dict[str, List[Callable[["DataHub", Dict[str, Any]], None]]] = {}
         self._open_marks: Dict[str, float] = {}
         self._queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
@@ -235,6 +238,30 @@ class DataHub:
             self._sources[name] = _Source(name, read, rate_hz, device)
             self._channels[name] = deque(maxlen=max(1, int(rate_hz * history_s)))
 
+    def add_video(self, name: str, grab: Callable[[], Any], fps: float = 10.0, quality: int = 75,
+                  max_width: int | None = 1280, device: Optional[str] = None,
+                  always_on: bool = False) -> None:
+        """Serve a camera as a live MJPEG feed at ``/api/data/video/<name>.mjpg``.
+
+        ``grab()`` returns one frame (a NumPy array, mono ``H×W`` or RGB
+        ``H×W×3``; ``None`` to skip) and runs on the stream's own thread, only
+        while a page is watching unless ``always_on``. Each frame is shrunk to
+        at most ``max_width`` pixels and JPEG-compressed at ``quality``
+        (1-95) once, for every viewer. See :mod:`core.VideoStream`.
+        """
+        with self._lock:
+            if self._run_stop is not None:
+                raise RuntimeError("Videos must be added before the hub is started.")
+            if name in self._videos:
+                raise ValueError(f"Video '{name}' is already registered.")
+            self._videos[name] = VideoStream(name, grab, fps=fps, quality=quality, max_width=max_width,
+                                             device=device, always_on=always_on, logger=self.logger)
+
+    def video(self, name: str) -> Optional[VideoStream]:
+        """The video registered as *name*, or None."""
+        with self._lock:
+            return self._videos.get(name)
+
     def on(self, event_name: str, fn: Callable[["DataHub", Dict[str, Any]], None]) -> None:
         """Run ``fn(hub, event)`` on the analysis worker each time ``event_name`` is marked."""
         with self._lock:
@@ -254,11 +281,17 @@ class DataHub:
             stop = threading.Event()
             self._run_stop = stop
             sources = list(self._sources.values())
+            videos = list(self._videos.values())
             has_callbacks = bool(self._callbacks)
         threads = [
             threading.Thread(target=self._run_source, args=(source, stop),
                              name=f"DataHub-{source.name}", daemon=True)
             for source in sources
+        ]
+        threads += [
+            threading.Thread(target=video.run, args=(stop, self.device_available),
+                             name=f"DataHub-video-{video.name}", daemon=True)
+            for video in videos
         ]
         if has_callbacks:
             threads.append(threading.Thread(target=self._run_analysis, args=(stop,),
@@ -266,15 +299,19 @@ class DataHub:
         self._threads = threads
         for thread in threads:
             thread.start()
-        self.logger.info("DataHub started: %d source(s), analysis=%s.", len(sources), has_callbacks)
+        self.logger.info("DataHub started: %d source(s), %d video(s), analysis=%s.",
+                         len(sources), len(videos), has_callbacks)
 
     def stop(self, timeout: float = 2.0) -> None:
         """Signal every thread of the current run and wait up to ``timeout`` in total."""
         with self._lock:
             stop, self._run_stop = self._run_stop, None
+            videos = list(self._videos.values())
         if stop is None:
             return
         stop.set()
+        for video in videos:
+            video.close()   # ends every open MJPEG response
         deadline = time.monotonic() + timeout
         for thread in self._threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
@@ -290,6 +327,7 @@ class DataHub:
         with self._lock:
             self._channels.clear()
             self._sources.clear()
+            self._videos.clear()
             self._callbacks.clear()
             self._open_marks.clear()
             self._queue = queue.Queue()
@@ -318,6 +356,7 @@ class DataHub:
                 "epoch_utc": self._epoch_utc,
                 "now": self.now(),
                 "channels": channels,
+                "videos": {name: video.describe() for name, video in self._videos.items()},
                 "analysis_errors": self._analysis_errors,
                 "last_analysis_error": self._last_analysis_error,
             }

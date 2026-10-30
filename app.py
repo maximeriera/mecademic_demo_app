@@ -963,6 +963,55 @@ def read_data():
     return jsonify({'now': hub.now(), 'cursor': cursor, 'data': _jsonable(data)}), 200
 
 
+def _hub_video(name):
+    hub = _data_hub()
+    video = hub.video(name) if hub is not None and hasattr(hub, 'video') else None
+    if video is None:
+        abort(404)
+    return video
+
+
+@app.route('/api/data/video/<name>.mjpg', methods=['GET'])
+def stream_video(name):
+    """Live MJPEG feed of a video registered with ``hub.add_video()``: ``<img src=...>``.
+
+    Each frame is JPEG-compressed once on the server and the same bytes go to
+    every viewer. The response ends when the hub stops (Initialize, shutdown);
+    the page reopens it when the manifest's ``stream_id`` changes.
+    """
+    video = _hub_video(name)
+
+    def generate():
+        with video.viewer():
+            seq = None
+            while True:
+                frame = video.wait_frame(seq, timeout=5.0)
+                if video.closed:
+                    return
+                if frame is None:
+                    continue
+                seq = frame.seq
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '
+                       + str(len(frame.jpeg)).encode() + b'\r\n\r\n' + frame.jpeg + b'\r\n')
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame',
+                    headers={'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/data/video/<name>.jpg', methods=['GET'])
+def video_snapshot(name):
+    """One JPEG frame of a video (waits up to 5 s for the camera if nobody is watching)."""
+    video = _hub_video(name)
+    with video.viewer():
+        frame = video.wait_frame(None, timeout=5.0)
+    if frame is None:
+        return jsonify({'message': f"No frame from video '{name}'.", 'last_error': video.last_error}), 503
+    return Response(frame.jpeg, mimetype='image/jpeg', headers={
+        'Cache-Control': 'no-cache, no-store',
+        'Content-Disposition': f'inline; filename="{secure_filename(name)}.jpg"',
+    })
+
+
 @app.route('/view/')
 @app.route('/view/<path:filename>')
 def custom_view(filename='index.html'):

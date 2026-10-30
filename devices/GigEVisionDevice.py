@@ -1,7 +1,33 @@
 from __future__ import annotations
 
+import re
+
+import numpy as np
+
 from .Device import Device
 from .api.gigE_vision import GigECamera
+
+# Offsets of the R and B sites in each 2×2 Bayer tile, by pattern name.
+_BAYER_RB = {"RG": ((0, 0), (1, 1)), "BG": ((1, 1), (0, 0)), "GR": ((0, 1), (1, 0)), "GB": ((1, 0), (0, 1))}
+
+
+def _bit_depth(pixel_format: str | None) -> int | None:
+    """Bits per sample of a GenICam pixel format name ("Mono12" -> 12), or None."""
+    match = re.search(r"(\d+)(?:p|Packed)?$", pixel_format or "")
+    return int(match.group(1)) if match else None
+
+
+def _debayer_half(raw: np.ndarray, pattern: str) -> np.ndarray:
+    """RGB at half resolution from a Bayer mosaic: one pixel per 2×2 tile, no interpolation.
+
+    Plenty for a live view, and needs no OpenCV.
+    """
+    (ry, rx), (by, bx) = _BAYER_RB[pattern]
+    raw = raw[: raw.shape[0] // 2 * 2, : raw.shape[1] // 2 * 2].astype(np.uint32)
+    red = raw[ry::2, rx::2]
+    blue = raw[by::2, bx::2]
+    green = (raw[ry::2, 1 - rx::2] + raw[1 - ry::2, rx::2]) // 2
+    return np.dstack((red, green, blue))
 
 
 class GigEVisionDevice(Device):
@@ -64,6 +90,10 @@ class GigEVisionDevice(Device):
     @property
     def api(self) -> GigECamera | None:
         return self._api
+
+    @property
+    def streaming(self) -> bool:
+        return self._streaming
 
     def _ensure_api(self):
         if self._api is None:
@@ -145,6 +175,27 @@ class GigEVisionDevice(Device):
         except Exception:
             self._faulted = True
             raise
+
+    def capture_frame_8bit(self, timeout_sec: float = 2.0) -> np.ndarray:
+        """One frame ready to display: 8-bit mono ``H×W``, or RGB ``H×W×3``.
+
+        Samples deeper than 8 bits are scaled by the pixel format's bit depth
+        (not by the image content, so brightness does not pump), and Bayer
+        mosaics become half-resolution RGB. Starts the stream if needed, e.g.
+        after an abort stopped it.
+        """
+        if not self._streaming:
+            self.start_stream()
+        frame = self.capture_frame(timeout_sec=timeout_sec)
+        pixel_format = self._api.last_pixel_format or ""
+        bits = _bit_depth(pixel_format) or 8
+        if pixel_format.startswith("Bayer") and frame.ndim == 2:
+            frame = _debayer_half(frame, pixel_format[5:7])
+        if frame.dtype != np.uint8 or bits > 8:
+            frame = (frame >> max(0, bits - 8)).astype(np.uint8)
+        if pixel_format.startswith("BGR") and frame.ndim == 3:
+            frame = frame[:, :, 2::-1]
+        return frame
 
     def set_feature(self, feature_name: str, value):
         if not self._api:

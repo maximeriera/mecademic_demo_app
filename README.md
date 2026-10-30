@@ -34,6 +34,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [Live updates](#live-updates)
   - [Releasing a device](#releasing-a-device)
   - [Workspaces](#workspaces)
+  - [Camera feed in a custom view](#camera-feed-in-a-custom-view)
   - [State Machine](#state-machine)
   - [Stop vs. Abort](#stop-vs-abort)
   - [Build your own application logic](#build-your-own-application-logic)
@@ -58,6 +59,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
     - [Context](#context)
     - [Workspaces](#workspaces-1)
     - [Live events](#live-events)
+    - [Camera feeds](#camera-feeds)
 
 ---
 
@@ -314,6 +316,42 @@ environment:
 volumes:
   - ../:/workspaces:ro
 ```
+
+---
+
+## Camera feed in a custom view
+
+A custom view can show a camera live. Register the feed in the view's `setup(hub, devices)`:
+
+```python
+def setup(hub, devices):
+    camera = devices["camera"]                      # a gige_camera device
+    hub.add_video("camera", lambda: camera.capture_frame_8bit(timeout_sec=2.0),
+                  fps=15, quality=75, max_width=1280, device="camera")
+```
+
+Then show it in the page with a plain image:
+
+```html
+<img src="/api/data/video/camera.mjpg">
+```
+
+How the feed works:
+
+- **Compressed once, on the server.** One thread grabs each frame and shrinks it by an integer factor to at most `max_width` pixels. It then compresses it to JPEG at `quality` (1–95) and sends the same bytes to every viewer as an MJPEG stream. For example, a 5 MP mono frame is ~5 MB raw and ~150 kB as a 1280-px JPEG at quality 75. Lower `quality` or `max_width` on a slow network; the manifest shows the size of each frame.
+- **Only while someone watches.** The camera is read only while a page shows the feed (pass `always_on=True` to keep it running). The feed pauses while its `device` is released.
+- **One reader.** That thread is the camera's only reader, so task code must not fetch frames from the same camera concurrently.
+- **8-bit, colour-correct frames.** `GigEVisionDevice.capture_frame_8bit()` scales 10–16-bit pixels by their pixel format. It turns Bayer mosaics into half-resolution RGB and BGR into RGB, and restarts the stream if an abort stopped it.
+- **Reconnecting.** `/api/data` lists each video's size, measured fps, kB per frame and `stream_id`. The stream ends at INITIALIZE, so a page reopens it when the `stream_id` changes.
+- **Snapshot.** `/api/data/video/<name>.jpg` returns one frame.
+
+A complete example is in [`examples/gige_live_view`](examples/gige_live_view): one `gige_camera` (Spinnaker GenTL producer) and a page with the feed and its stats. Run it with:
+
+```bash
+python app.py --workspace examples/gige_live_view
+```
+
+Then press INITIALIZE and open **Custom view**. Switch the device to `type: "simulated"` to see a moving test pattern without a camera.
 
 ---
 
@@ -656,6 +694,7 @@ core/
     ProductionMetrics.py      # PROD cycle/run statistics
     History.py                # Production history on disk (JSON Lines, CSV export)
     DataHub.py                # Dynamic data for the optional custom view
+    VideoStream.py            # Live camera feed: grab, reduce, JPEG, MJPEG
     EventBus.py               # Server-sent events fan-out
     LivePublisher.py          # Publishes changed state to the event bus
     Workspaces.py             # Workspace discovery and module purge for switching
@@ -688,6 +727,7 @@ static/js/live.js             # /api/events client
 static/js/app.js              # UI logic (fallback polling when the stream is down)
 
 tests/                        # pytest suite (simulated devices, no hardware)
+examples/gige_live_view/      # Example workspace: a GigE camera's live feed in the custom view
 
 logs/
     app/                      # Rotating logs for Flask + ApplicationController
@@ -793,3 +833,12 @@ logs/
 | `context` | Same as `/api/context` |
 | `notice` | `{level, message, time}`: device faulted, task failed, device released/connected... |
 | `workspace` | `{name}` after a workspace switch |
+
+### Camera feeds
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/data/video/<name>.mjpg` | Live MJPEG feed of a video registered with `hub.add_video()`; use it as an `<img>` source |
+| `GET` | `/api/data/video/<name>.jpg` | One JPEG frame |
+
+`GET /api/data` lists each video under `videos` with its URL, size, measured fps, kB per frame, viewers, errors and `stream_id`.

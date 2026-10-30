@@ -1,0 +1,23 @@
+# Example workspace: a GigE Vision camera and its live feed in the custom view.
+#
+#   python app.py --workspace examples/gige_live_view
+#
+# Press INITIALIZE, then open "Custom view" in the sidebar. The feed is
+# compressed to JPEG on the server (see custom_view/__init__.py for the frame
+# rate, quality and width), so it stays fluid over the network.
+
+title: "GigE camera live view"
+
+devices:
+  camera:
+    type: "gige_camera"
+    cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+    camera_index: 0              # first camera the GenTL producer finds
+    autostart_stream: true
+
+  # No camera at hand? Replace the entry above with this one: the custom view
+  # then shows a synthetic test pattern through the same JPEG pipeline.
+  # camera:
+  #   type: "simulated"
+  #   info:
+  #     model: "Test pattern"
