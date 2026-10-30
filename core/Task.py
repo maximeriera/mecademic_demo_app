@@ -199,7 +199,8 @@ class Task(threading.Thread):
         )
 
         faulted = False
-        self.context.steps.begin_task(self.task_type.value, self._sequence_key())
+        run_id = self.context.metrics.current_run_id() if self.task_type == TaskType.PROD else None
+        self.context.steps.begin_task(self.task_type.value, self._sequence_key(), run_id=run_id)
 
         try:
             match self.task_type:

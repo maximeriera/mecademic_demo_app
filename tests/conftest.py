@@ -77,6 +77,7 @@ def controller(cell_dir):
         ctrl.shutdown()
     except Exception:
         pass
+    ctrl.close()
 
 
 @pytest.fixture

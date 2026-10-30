@@ -186,6 +186,15 @@
                 </div>
 
                 <div class="section">
+                    <div class="section-title section-title-row">
+                        <span>History</span>
+                        <a class="link-btn" href="/api/history/runs.csv" download>Runs CSV &darr;</a>
+                    </div>
+                    <!-- Runs and cycles saved to disk (logs/history/<workspace>/): survives restarts. -->
+                    <div id="prod-history-container">Loading history...</div>
+                </div>
+
+                <div class="section">
                     <div id="prod-action-log" class="message-log">No recent production action.</div>
                     <div class="prod-toolbar">
                         <button type="button" class="btn-task" onclick="refreshProdMetrics()">Refresh</button>

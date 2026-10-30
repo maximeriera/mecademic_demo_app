@@ -943,6 +943,14 @@ function renderProdSnapshot(data) {
     renderProdSteps(data);
     restoreScrollState('tab-production', scrollState);
     refreshProdTimelines(data.steps ? data.steps.timeline_rev : undefined);
+    // A run was archived (or this is the first load): the disk history changed.
+    // Keyed on the last run's end, since the in-memory list is capped.
+    const runs = (data.metrics || {}).run_history || [];
+    const runKey = runs.length ? `${runs.length}|${runs[runs.length - 1].run_end}` : '0';
+    if (runKey !== prodHistoryRunKey) {
+        prodHistoryRunKey = runKey;
+        refreshProdHistory();
+    }
 }
 
 /* ---- Cycle timeline (Gantt) ----
@@ -1080,6 +1088,70 @@ function renderProdTimelines() {
         + ` · <span class="timeline-status gantt-text-${escapeHtml(selected.status)}">${escapeHtml(selected.status)}</span>`
         + ` · steps ${escapeHtml(formatDurationSeconds(busy))}, idle ${escapeHtml(formatDurationSeconds(idle))}`
         + ` · ${escapeHtml(formatTimestamp(selected.started_at))}${follow}`;
+}
+
+/* ---- Production history (on disk) ---- */
+let prodHistoryRunKey = null;
+
+function refreshProdHistory() {
+    Promise.all([
+        fetch('/api/history/days').then(r => r.json()),
+        fetch('/api/history/runs?limit=10').then(r => r.json()),
+    ])
+        .then(([days, runs]) => renderProdHistory(days, runs))
+        .catch(() => {
+            const container = document.getElementById('prod-history-container');
+            if (container) container.innerHTML = '<p class="empty-state empty-state-error">Could not load the history.</p>';
+        });
+}
+
+function renderProdHistory(daysData, runsData) {
+    const container = document.getElementById('prod-history-container');
+    if (!container) return;
+    if (daysData.enabled === false) {
+        container.innerHTML = '<p class="empty-state">Production history is disabled (<code>history: {enabled: false}</code> in config.yaml).</p>';
+        return;
+    }
+    const days = Array.isArray(daysData.days) ? daysData.days : [];
+    const runs = Array.isArray(runsData.runs) ? runsData.runs.slice().reverse() : [];
+    const dash = (v) => (v === null || v === undefined ? '—' : v);
+
+    const dayRows = days.map((d) => `
+        <tr>
+            <td>${escapeHtml(d.date)}</td>
+            <td>${escapeHtml(d.cycles)}</td>
+            <td>${escapeHtml(d.ok)}</td>
+            <td>${escapeHtml(d.failed)}</td>
+            <td>${escapeHtml(d.interrupted)}</td>
+            <td>${escapeHtml(formatDurationSeconds(d.average_ok_cycle_s))}</td>
+            <td>${escapeHtml(formatDurationSeconds(d.cycle_time_s))}</td>
+            <td><a class="link-btn" href="/api/history/cycles.csv?date=${encodeURIComponent(d.date)}" download>CSV &darr;</a></td>
+        </tr>`).join('');
+    const runRows = runs.map((r) => `
+        <tr>
+            <td>${escapeHtml(formatTimestamp(r.run_start))}</td>
+            <td>${escapeHtml(dash(r.end_event))}</td>
+            <td>${escapeHtml(dash(r.cycle_count))}</td>
+            <td>${escapeHtml(dash(r.failed_cycles))}</td>
+            <td>${escapeHtml(formatDurationSeconds(r.average_cycle_duration_s))}</td>
+            <td>${escapeHtml(formatDurationSeconds(r.elapsed_production_s))}</td>
+        </tr>`).join('');
+
+    container.innerHTML = `
+        <div class="history-block">
+            <div class="prod-metric-history-title">Per day</div>
+            ${days.length ? `<div class="history-table-wrap"><table class="history-table">
+                <thead><tr><th>Date</th><th>Cycles</th><th>OK</th><th>Failed</th><th>Interrupted</th><th>Avg OK cycle</th><th>Cycle time</th><th></th></tr></thead>
+                <tbody>${dayRows}</tbody></table></div>`
+                : '<p class="prod-metric-empty">No cycle recorded yet.</p>'}
+        </div>
+        <div class="history-block">
+            <div class="prod-metric-history-title">Last runs</div>
+            ${runs.length ? `<div class="history-table-wrap"><table class="history-table">
+                <thead><tr><th>Started</th><th>Ended by</th><th>Cycles</th><th>Failed</th><th>Avg cycle</th><th>Duration</th></tr></thead>
+                <tbody>${runRows}</tbody></table></div>`
+                : '<p class="prod-metric-empty">No archived run yet.</p>'}
+        </div>`;
 }
 
 function initProdTimeline() {
@@ -2355,6 +2427,13 @@ setInterval(() => {
         loadBackupRestoreRobots();
     }
 }, 5000);
+
+// The per-day cycle counts grow with every cycle: refresh them now and then.
+setInterval(() => {
+    if (document.getElementById('tab-production').classList.contains('active')) {
+        refreshProdHistory();
+    }
+}, 10000);
 
 setInterval(() => {
     if (document.getElementById('tab-production').classList.contains('active')) {

@@ -653,6 +653,60 @@ def get_prod_timelines():
     return jsonify(_jsonable(data)), 200
 
 
+def _history_store():
+    return getattr(APPLICATION, 'history', None)
+
+
+def _csv_response(text, filename):
+    from flask import Response
+    return Response(text, mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.route('/api/history/days', methods=['GET'])
+def get_history_days():
+    """Per-day cycle summary from the production history on disk."""
+    store = _history_store()
+    if store is None:
+        return jsonify({'enabled': False, 'days': []}), 200
+    return jsonify({'enabled': True, 'workspace': getattr(APPLICATION, 'workspace_name', None),
+                    'days': store.days()}), 200
+
+
+@app.route('/api/history/runs', methods=['GET'])
+def get_history_runs():
+    """Archived runs from disk, newest last: ``?limit=50``."""
+    store = _history_store()
+    if store is None:
+        return jsonify({'enabled': False, 'runs': []}), 200
+    limit = max(1, min(request.args.get('limit', default=50, type=int) or 50, 1000))
+    return jsonify({'enabled': True, 'runs': _jsonable(store.runs(limit=limit))}), 200
+
+
+@app.route('/api/history/runs.csv', methods=['GET'])
+def get_history_runs_csv():
+    store = _history_store()
+    if store is None:
+        return jsonify({'message': 'Production history is disabled.'}), 404
+    name = getattr(APPLICATION, 'workspace_name', 'workspace')
+    return _csv_response(store.runs_csv(), f'{secure_filename(name)}_runs.csv')
+
+
+@app.route('/api/history/cycles.csv', methods=['GET'])
+def get_history_cycles_csv():
+    """Every cycle of one day: ``?date=YYYY-MM-DD``."""
+    store = _history_store()
+    if store is None:
+        return jsonify({'message': 'Production history is disabled.'}), 404
+    day = request.args.get('date', '')
+    try:
+        text = store.cycles_csv(day)
+    except ValueError as e:
+        return jsonify({'message': str(e)}), 400
+    name = getattr(APPLICATION, 'workspace_name', 'workspace')
+    return _csv_response(text, f'{secure_filename(name)}_cycles_{day}.csv')
+
+
 @app.route('/api/prod/runs', methods=['GET'])
 def get_prod_runs():
     """Return archived production run summaries for export or reporting."""
@@ -853,6 +907,12 @@ def shutdown_APPLICATION_controller():
         APPLICATION.shutdown()
     except Exception as e:
         logger.warning(f"Error during controller shutdown at exit: {e}", exc_info=True)
+    closer = getattr(APPLICATION, 'close', None)
+    if closer is not None:
+        try:
+            closer()
+        except Exception as e:
+            logger.warning(f"Error closing the controller at exit: {e}", exc_info=True)
 
 
 atexit.register(shutdown_APPLICATION_controller)

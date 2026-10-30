@@ -128,6 +128,19 @@
 # context_file: "context.yaml"
 
 # ============================================================
+# PRODUCTION HISTORY (optional)
+# ============================================================
+#
+# Every archived PROD run and every finished cycle (with its step timeline) is
+# saved under logs/history/<workspace folder>/ as JSON Lines, so the
+# Production tab's History survives restarts and can be exported as CSV.
+# Local files only. Defaults shown:
+#
+# history:
+#   enabled: true
+#   retention_days: 30           # cycle files older than this are deleted at startup
+
+# ============================================================
 # DEFAULT EXAMPLE CELL — simulated devices, no hardware needed
 # ============================================================
 # Everything below runs out of the box: all three devices are

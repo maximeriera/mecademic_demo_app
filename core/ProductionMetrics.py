@@ -7,16 +7,21 @@ start/stop timestamps, last error, and a capped history of archived runs.
 Framework-owned and always present. It holds no user data of its own: an
 archived run carries a snapshot of the context variables handed in by the
 caller, so it never needs to know any variable by name.
+
+Persistence is the caller's: :attr:`ProductionMetrics.on_run_archived`
+receives each archived run (the controller writes it to the history store),
+and :meth:`ProductionMetrics.restore_run_history` reloads past runs at start.
 """
 
 import copy
 import threading
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List
 
 
 class ProductionMetrics:
-    """Thread-safe PROD cycle/run bookkeeping. In memory only."""
+    """Thread-safe PROD cycle/run bookkeeping."""
 
     _MAX_CYCLE_HISTORY = 100
     _MAX_RUN_HISTORY = 20
@@ -40,7 +45,11 @@ class ProductionMetrics:
             "last_fault": None,
             "last_initialize": None,
             "last_error": None,
+            "run_id": None,
+            "failed_cycles": 0,
         }
+        #: Called with each archived run summary, outside the lock.
+        self.on_run_archived: Callable[[Dict[str, Any]], None] | None = None
 
     def _utc_now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -74,11 +83,13 @@ class ProductionMetrics:
         total_cycle_time_s = float(self._metadata.get("total_cycle_time_s", 0.0))
 
         return {
+            "run_id": self._metadata.get("run_id"),
             "run_start": run_start,
             "run_end": end_time,
             "end_event": end_event,
             "running": bool(self._metadata.get("running")),
             "cycle_count": cycle_count,
+            "failed_cycles": int(self._metadata.get("failed_cycles", 0)),
             "elapsed_production_s": elapsed_s,
             "last_cycle_duration_s": self._metadata.get("last_cycle_duration_s"),
             "average_cycle_duration_s": (total_cycle_time_s / cycle_count) if cycle_count > 0 else None,
@@ -89,14 +100,16 @@ class ProductionMetrics:
             "variables": copy.deepcopy(variables),
         }
 
-    def _archive_run_locked(self, end_event: str, end_time: str, variables: Dict[str, Any]) -> None:
+    def _archive_run_locked(self, end_event: str, end_time: str,
+                            variables: Dict[str, Any]) -> Dict[str, Any] | None:
+        """Archive the current run; returns its summary, or None if nothing was archived."""
         summary = self._build_current_run_summary_locked(end_event, end_time, variables)
         if summary is None:
-            return
+            return None
 
         run_start = summary.get("run_start")
         if run_start and self._metadata.get("last_archived_run_start") == run_start:
-            return
+            return None
 
         run_history = self._metadata.setdefault("run_history", [])
         run_history.append(summary)
@@ -104,6 +117,19 @@ class ProductionMetrics:
             self._metadata["last_archived_run_start"] = run_start
         if len(run_history) > self._MAX_RUN_HISTORY:
             del run_history[:-self._MAX_RUN_HISTORY]
+        return copy.deepcopy(summary)
+
+    def restore_run_history(self, runs: List[Dict[str, Any]]) -> None:
+        """Seed the run history with runs archived before a restart (oldest first)."""
+        with self._lock:
+            restored = [copy.deepcopy(r) for r in (runs or []) if isinstance(r, dict)]
+            self._metadata["run_history"] = (restored + self._metadata.get("run_history", []))[
+                -self._MAX_RUN_HISTORY:]
+
+    def current_run_id(self) -> str | None:
+        """Id of the PROD run in progress (or last started); shared with its cycle timelines."""
+        with self._lock:
+            return self._metadata.get("run_id")
 
     def record_event(self, event: str, variables: Dict[str, Any] | None = None) -> None:
         """Timestamp a lifecycle event and archive the run it ends, if any.
@@ -113,6 +139,7 @@ class ProductionMetrics:
         produced rather than freshly reset counters.
         """
         variables = variables or {}
+        archived = None
         with self._lock:
             now = self._utc_now()
             if event == "initialize":
@@ -123,7 +150,9 @@ class ProductionMetrics:
                     or self._metadata.get("last_cycle_start")
                     or self._metadata.get("last_cycle_end")
                 ) and self._metadata.get("last_archived_run_start") != self._metadata.get("last_prod_start"):
-                    self._archive_run_locked("superseded", now, variables)
+                    archived = self._archive_run_locked("superseded", now, variables)
+                self._metadata["run_id"] = uuid.uuid4().hex[:12]
+                self._metadata["failed_cycles"] = 0
                 self._metadata["last_prod_start"] = now
                 self._metadata["last_prod_stop"] = None
                 self._metadata["cycle_count"] = 0
@@ -137,13 +166,20 @@ class ProductionMetrics:
                 self._metadata["last_error"] = None
             elif event == "prod_stop":
                 self._metadata["last_prod_stop"] = now
-                self._archive_run_locked(event, now, variables)
+                archived = self._archive_run_locked(event, now, variables)
             elif event == "abort":
                 self._metadata["last_abort"] = now
-                self._archive_run_locked(event, now, variables)
+                archived = self._archive_run_locked(event, now, variables)
             elif event == "fault":
                 self._metadata["last_fault"] = now
-                self._archive_run_locked(event, now, variables)
+                archived = self._archive_run_locked(event, now, variables)
+
+        callback = self.on_run_archived
+        if archived is not None and callback is not None:
+            try:
+                callback(archived)
+            except Exception:
+                self.logger.exception("Run archive callback failed.")
 
     def mark_prod_running(self, running: bool) -> None:
         with self._lock:
@@ -179,6 +215,7 @@ class ProductionMetrics:
     def mark_cycle_error(self, error_text: str) -> None:
         with self._lock:
             self._metadata["last_error"] = str(error_text)
+            self._metadata["failed_cycles"] = int(self._metadata.get("failed_cycles", 0)) + 1
 
     def get_cycle_count(self) -> int:
         """Authoritative completed-cycle count for the current run."""
@@ -210,7 +247,9 @@ class ProductionMetrics:
 
             return {
                 "running": bool(self._metadata.get("running")),
+                "run_id": self._metadata.get("run_id"),
                 "completed_cycles": completed_cycles,
+                "failed_cycles": int(self._metadata.get("failed_cycles", 0)),
                 "elapsed_production_s": elapsed_s,
                 "current_cycle_elapsed_s": current_cycle_elapsed_s,
                 "last_cycle_duration_s": self._metadata.get("last_cycle_duration_s"),

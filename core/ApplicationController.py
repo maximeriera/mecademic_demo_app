@@ -38,10 +38,11 @@ from .ControllerState import ControllerState
 from .AppContext import AppContext
 from .ContextStore import ContextStore
 from .DataHub import DataHub
+from .History import HistoryStore
 from .ProductionMetrics import ProductionMetrics
 from .StepTracker import StepTracker
 from .ManualActions import load_manual_actions_registry, normalize_manual_actions_config
-from .LogSetup import get_controller_logger
+from .LogSetup import get_controller_logger, log_root_dir
 
 #: Workspace module candidates for the optional custom view, tried in order
 #: (same flat-then-package convention as ``Task.TASK_FUNCTION_MODULES``).
@@ -171,7 +172,54 @@ class ApplicationController:
         steps = StepTracker(self.logger, StepTracker.normalize_sequences(sequences, self.logger))
         hub = DataHub(self.logger)
         hub.device_available = self._device_available
-        return AppContext(store=store, steps=steps, metrics=ProductionMetrics(self.logger), data=hub)
+        metrics = ProductionMetrics(self.logger)
+
+        self.workspace_name = self._workspace_name(config_path)
+        self.history = self._create_history()
+        if self.history is not None:
+            steps.on_cycle_end = self.history.record_cycle
+            metrics.on_run_archived = self._on_run_archived
+            # The Production tab keeps showing the last runs after a restart.
+            metrics.restore_run_history(self.history.runs(limit=20))
+        return AppContext(store=store, steps=steps, metrics=metrics, data=hub)
+
+    @staticmethod
+    def _workspace_name(config_path: str) -> str:
+        """Folder name of the workspace (the parent of app_logic/ when config.yaml sits there)."""
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        if os.path.basename(config_dir) == "app_logic":
+            config_dir = os.path.dirname(config_dir)
+        return os.path.basename(config_dir) or "workspace"
+
+    def _create_history(self) -> HistoryStore | None:
+        """Production history on disk (``history:`` in config.yaml), or None if disabled."""
+        settings = self.config.get('history') or {}
+        if not isinstance(settings, dict):
+            self.logger.warning("'history' in config.yaml must be a mapping; using defaults.")
+            settings = {}
+        if settings.get('enabled', True) is False:
+            self.logger.info("Production history disabled in config.yaml.")
+            return None
+        root = os.path.join(log_root_dir(), 'history', self.workspace_name)
+        try:
+            store = HistoryStore(root, self.logger, retention_days=int(settings.get('retention_days', 30)))
+        except Exception as e:
+            self.logger.error(f"Production history unavailable ({root}): {e}", exc_info=True)
+            return None
+        self.logger.info(f"Production history: {root}")
+        return store
+
+    def _on_run_archived(self, run: Dict[str, Any]) -> None:
+        """Persist an archived run, with the workspace and each top-level step's average."""
+        record = dict(run)
+        record["workspace"] = self.workspace_name
+        try:
+            stats = self.context.steps.snapshot()["stats"]
+            record["step_avg_s"] = {s["name"]: round(s["avg_s"], 4) for s in stats
+                                    if s["depth"] == 0 and s["avg_s"] is not None}
+        except Exception:
+            pass
+        self.history.record_run(record)
 
     def _device_available(self, device_id: str) -> bool:
         """False while *device_id* is detached with no link left (DataHub sources pause)."""
@@ -1009,11 +1057,19 @@ class ApplicationController:
             self._detached.clear()
 
         self.set_state(ControllerState.OFF) # Final state after shutdown
+        # The abort above archived the run: get it on disk before the process may exit.
+        if self.history is not None:
+            self.history.flush()
         self.logger.info("Controller shutdown complete.")
         if monitor_stuck:
             raise Exception("Monitor thread did not shut down gracefully.")
         
         
+    def close(self) -> None:
+        """Release what outlives :meth:`shutdown` (the history writer). Call once, last."""
+        if self.history is not None:
+            self.history.close()
+
     @staticmethod
     def get_devices_config(config_file_path: str = 'config.yaml') -> Dict[str, Any]:
         """Load and return the raw configuration from a YAML file.

@@ -105,3 +105,4 @@ def test_controller_reports_issues_and_blocks_initialize(tmp_path):
             ctrl.initialize()
     finally:
         ctrl.shutdown()
+        ctrl.close()

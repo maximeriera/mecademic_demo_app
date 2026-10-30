@@ -453,8 +453,12 @@ class StepTracker:
                 self._task["off_sequence"] = False
             self._rebuild_live_locked()
 
-    def begin_task(self, label: str, sequence_key: str | None = None) -> None:
-        """Start step tracking for a task run, clearing the previous run's stats."""
+    def begin_task(self, label: str, sequence_key: str | None = None, run_id: str | None = None) -> None:
+        """Start step tracking for a task run, clearing the previous run's stats.
+
+        ``run_id`` ties the run's cycle timelines to its archived PROD run;
+        a fresh id is generated when none is given.
+        """
         with self._lock:
             self._stack.clear()
             self._stats.clear()
@@ -468,7 +472,7 @@ class StepTracker:
             self._task = {
                 # Unique across restarts: persisted run and cycle history is
                 # keyed by it.
-                "run_id": uuid.uuid4().hex[:12],
+                "run_id": run_id or uuid.uuid4().hex[:12],
                 "label": label,
                 "sequence_key": sequence_key,
                 "declared": list(declared),
