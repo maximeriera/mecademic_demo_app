@@ -1727,6 +1727,7 @@ function createDeviceCard(deviceId) {
         </div>
         <div class="device-live" hidden>
             <div class="device-live-error" hidden></div>
+            <div class="device-live-images"></div>
             <div class="device-live-telemetry"></div>
             <div class="device-live-io"></div>
         </div>`;
@@ -1784,6 +1785,8 @@ function renderDeviceLive(deviceId, live) {
     errorEl.hidden = !live.error;
     errorEl.textContent = live.error || '';
 
+    renderDeviceLiveImages(card, deviceId, Array.isArray(live.images) ? live.images : []);
+
     const telemetry = live.telemetry || {};
     const rows = Object.keys(telemetry).map((key) =>
         `<tr><td>${escapeHtml(key.replace(/_/g, ' '))}</td><td>${escapeHtml(formatLiveValue(telemetry[key]))}</td></tr>`);
@@ -1823,6 +1826,44 @@ function renderDeviceLive(deviceId, live) {
         if (!el) return;
         el.classList.toggle('on', !!point.value);
         if (point.writable) el.disabled = writeLocked;
+    });
+}
+
+// Thumbnails are built once per image list; each poll reloads an image only
+// once the previous one has arrived, so a slow link never piles requests up.
+function renderDeviceLiveImages(card, deviceId, images) {
+    const imagesEl = card.querySelector('.device-live-images');
+    const signature = images.map((image) => image.url).join('|');
+    if (imagesEl.dataset.signature !== signature) {
+        imagesEl.dataset.signature = signature;
+        imagesEl.innerHTML = '';
+        images.forEach((image) => {
+            const figure = document.createElement('figure');
+            figure.className = 'device-live-image empty';
+            const frame = document.createElement('div');
+            frame.className = 'device-live-frame';
+            const img = document.createElement('img');
+            img.alt = `${deviceId} ${image.name}`;
+            img.dataset.url = image.url;
+            frame.appendChild(img);
+            const caption = document.createElement('figcaption');
+            caption.textContent = image.name.replace(/_/g, ' ');
+            img.addEventListener('load', () => {
+                delete img.dataset.loading;
+                figure.classList.remove('empty');
+            });
+            img.addEventListener('error', () => {
+                delete img.dataset.loading;
+                figure.classList.add('empty');
+            });
+            figure.append(frame, caption);
+            imagesEl.appendChild(figure);
+        });
+    }
+    imagesEl.querySelectorAll('img').forEach((img) => {
+        if (img.dataset.loading) return;
+        img.dataset.loading = '1';
+        img.src = `${img.dataset.url}?w=480&t=${Date.now()}`;
     });
 }
 

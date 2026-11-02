@@ -1,0 +1,45 @@
+# Example workspace: computer-vision analysis on a GigE camera.
+#
+#   python app.py --workspace examples/gige_cv_analysis
+#
+# The `vision` device reads frames from `camera`, runs blob_analysis.analyze()
+# on each one and keeps the last raw image, processed image and result.
+# Press INITIALIZE, then:
+# * Settings > Devices, `vision`, "Show live data": raw and processed
+#   thumbnails, the measurements, and the analysis_running switch that starts
+#   and stops it;
+# * Custom view: both feeds side by side with the latest result;
+# * Manual tab, "Inspect once"; START PROD logs one inspection per cycle.
+
+title: "GigE camera CV analysis"
+
+devices:
+  # camera:
+  #   type: "gige_camera"
+  #   cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  #   camera_index: 0              # first camera the GenTL producer finds
+  #   autostart_stream: true
+
+  # No camera at hand? Replace the entry above with this one: a moving test
+  # pattern whose green ball blob_analysis finds with the params below.
+  camera:
+    type: "simulated_camera"
+    fps: 15
+
+  vision:
+    type: "cv_process"
+    camera: "camera"                     # the device above: brought up first, down last
+    analysis: "blob_analysis:analyze"    # module:function, importable from this folder
+    analysis_params:                     # handed to analyze() as `params`
+      threshold: 175                     # 0-255, or "auto" (Otsu)
+      min_area: 500                      # pixels
+    autostart: true                      # false: start it from Settings > Devices or from code
+    rate_hz: 5                           # analysis rate ceiling
+    fault_on_error: false                # true: an exception in analyze() faults the cell
+
+manual_actions:
+  - key: "inspect_once"
+    label: "Inspect once"
+    description: "Analyse one fresh frame and log the result."
+    confirm_title: "Inspect once"
+    confirm_message: "Grab and analyse one frame now?"

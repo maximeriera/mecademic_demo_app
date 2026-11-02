@@ -41,6 +41,7 @@ from core.ControllerState import ControllerState
 from core.ContextStore import ContextError
 from core.BackupRestoreService import BackupRestoreService
 from core.LogSetup import describe_logging, get_app_logger, request_id_var
+from core.VideoStream import encode_jpeg
 from core.Workspaces import (config_dir_of, default_root, discover as discover_workspaces,
                              purge_modules as purge_workspace_modules, resolve as resolve_workspace)
 
@@ -605,6 +606,26 @@ def write_device_io(device_id):
         return jsonify(result), 404
     status = 400 if result.pop('bad_request', False) else 409
     return jsonify(result), status
+
+
+@app.route('/api/devices/<device_id>/image/<name>.jpg', methods=['GET'])
+def device_image(device_id, name):
+    """Latest image of a device as a JPEG (Live panel thumbnails); ``?w=`` caps the width (default 480)."""
+    getter = getattr(APPLICATION, 'get_device_image', None)
+    if getter is None:
+        return jsonify({'message': 'Controller failed to start; see app.log.'}), 409
+    try:
+        frame = getter(device_id, name)
+    except KeyError as e:
+        return jsonify({'message': e.args[0] if e.args else str(e)}), 404
+    if frame is None:
+        return jsonify({'message': f"No '{name}' image from {device_id} yet."}), 503
+    width = max(64, min(request.args.get('w', 480, type=int), 1920))
+    jpeg, _, _ = encode_jpeg(frame, quality=75, max_width=width)
+    return Response(jpeg, mimetype='image/jpeg', headers={
+        'Cache-Control': 'no-cache, no-store',
+        'Content-Disposition': f'inline; filename="{secure_filename(f"{device_id}_{name}")}.jpg"',
+    })
 
 
 @app.route('/api/system', methods=['GET'])

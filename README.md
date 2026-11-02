@@ -35,6 +35,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
   - [Releasing a device](#releasing-a-device)
   - [Workspaces](#workspaces)
   - [Camera feed in a custom view](#camera-feed-in-a-custom-view)
+  - [Computer-vision processing](#computer-vision-processing)
   - [State Machine](#state-machine)
   - [Stop vs. Abort](#stop-vs-abort)
   - [Build your own application logic](#build-your-own-application-logic)
@@ -154,6 +155,8 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 | `smaract_mcs2` | `SmarActMCS2` | SmarAct MCS2 positioner controller and its linear stages (Ethernet ASCII) |
 | `brainboxes_ed_digital` | `BrainboxesEDDigital` | Brainboxes ED digital I/O module |
 | `gige_camera` | `GigEVisionDevice` | GigE Vision camera (harvesters / GenTL) |
+| `simulated_camera` | `SimulatedCamera` | Hardware-free camera serving a moving test pattern |
+| `cv_process` | `CVProcessDevice` | Computer-vision analysis on the frames of a camera device (see [Computer-vision processing](#computer-vision-processing)) |
 | `zaber` | `ZaberAxis` | Zaber linear axis (legacy driver) |
 | `simulated` | `SimulatedDevice` | Hardware-free stand-in for any of the above |
 | `custom` | your class | A workspace driver: `driver: "module:ClassName"`, every other key goes to its constructor |
@@ -340,7 +343,7 @@ How the feed works:
 
 - **Compressed once, on the server.** One thread grabs each frame and shrinks it by an integer factor to at most `max_width` pixels. It then compresses it to JPEG at `quality` (1–95) and sends the same bytes to every viewer as an MJPEG stream. For example, a 5 MP mono frame is ~5 MB raw and ~150 kB as a 1280-px JPEG at quality 75. Lower `quality` or `max_width` on a slow network; the manifest shows the size of each frame.
 - **Only while someone watches.** The camera is read only while a page shows the feed (pass `always_on=True` to keep it running). The feed pauses while its `device` is released.
-- **One reader.** That thread is the camera's only reader, so task code must not fetch frames from the same camera concurrently.
+- **Shared camera.** `GigEVisionDevice` serialises its captures, so the feed and another reader take turns and each gets every other frame. To show what a `cv_process` device sees, stream its cache instead (`vision.video_source("raw")`): the camera keeps one reader.
 - **8-bit, colour-correct frames.** `GigEVisionDevice.capture_frame_8bit()` scales 10–16-bit pixels by their pixel format. It turns Bayer mosaics into half-resolution RGB and BGR into RGB, and restarts the stream if an abort stopped it.
 - **Reconnecting.** `/api/data` lists each video's size, measured fps, kB per frame and `stream_id`. The stream ends at INITIALIZE, so a page reopens it when the `stream_id` changes.
 - **Snapshot.** `/api/data/video/<name>.jpg` returns one frame.
@@ -351,7 +354,96 @@ A complete example is in [`examples/gige_live_view`](examples/gige_live_view): o
 python app.py --workspace examples/gige_live_view
 ```
 
-Then press INITIALIZE and open **Custom view**. Switch the device to `type: "simulated"` to see a moving test pattern without a camera.
+Then press INITIALIZE and open **Custom view**. Switch the device to `type: "simulated_camera"` to see a moving test pattern without a camera.
+
+---
+
+## Computer-vision processing
+
+A `cv_process` device runs your own analysis on the frames of a camera device. It keeps the last raw image, the last processed image and the last result for task code, the custom view and Settings > Devices.
+
+```yaml
+devices:
+  camera:
+    type: "gige_camera"
+    cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  vision:
+    type: "cv_process"
+    camera: "camera"                     # another device: initialized before, shut down after
+    analysis: "blob_analysis:analyze"    # "module:function", importable from the workspace
+    analysis_params: {threshold: 175}    # passed to the function as `params`
+    autostart: true                      # default false: start and stop it yourself
+    rate_hz: 5                           # analysis rate ceiling (default 5)
+    capture_timeout_s: 2.0               # seconds to wait for each frame (default 2)
+    fault_on_error: false                # true: an exception in the analysis faults the cell
+```
+
+`camera` accepts any device with `capture_frame_8bit()`: today `gige_camera` and `simulated_camera`.
+
+### The analysis function
+
+```python
+from devices.CVProcessDevice import AnalysisResult
+
+def analyze(frame, params):
+    ...
+    return AnalysisResult(image=overlay, data={"x_px": 512.0, "y_px": 384.0}, ok=True)
+```
+
+- `frame` is 8-bit, mono `H×W` or RGB `H×W×3`, from the camera's `capture_frame_8bit()`. It is read-only, so copy it before drawing on it.
+- `params` is `analysis_params`. A function that takes only `frame` is called without it.
+- The return value is an `AnalysisResult`:
+  - `image` is shown as the processed image (`None` shows the raw frame);
+  - `data` holds JSON-serialisable measurements;
+  - `ok` is an optional pass/fail verdict.
+
+  A bare image, a bare dict, `(image, data)` or `None` work too.
+- It runs on the device's own thread, at most `rate_hz` times per second.
+- A wrong `analysis` path is a config error at startup. **Reload code** picks up your edits.
+
+[`examples/gige_cv_analysis/blob_analysis.py`](examples/gige_cv_analysis/blob_analysis.py) is a prototype to copy. It finds the largest bright blob and returns its centre, area, bounding box and orientation, with an overlay. It uses only NumPy, Pillow and SciPy. OpenCV is not installed with the app; add `opencv-python-headless` to `requirements.txt` to use it.
+
+### Starting and stopping
+
+- `autostart: true` starts the analysis at every INITIALIZE.
+- Otherwise, start and stop it with the `analysis_running` switch in the device's Live panel (Settings > Devices), or from code with `vision.start()` and `vision.stop()`. Like any I/O write, the switch is refused while a task runs.
+
+### Using the results
+
+| Method | Returns |
+|---|---|
+| `last_raw_image()` | The last frame acquired (a read-only NumPy array), or `None` |
+| `last_processed_image()` | The image of the last successful analysis (read-only), or `None` |
+| `last_result()` | `{seq, time, ok, data, analysis_ms}` of the last successful analysis, or `None` |
+| `wait_for_result(after_seq=None, timeout=5.0)` | The next result newer than `after_seq` (default: newer than the current one). Raises `TimeoutError`, or `RuntimeError` on ABORT |
+| `analyze_once(timeout=5.0)` | One fresh result: the next one while the analysis runs, otherwise one frame grabbed and analysed in the calling thread |
+| `video_source(kind)` | A `grab` for `hub.add_video()`, `"raw"` or `"processed"`, read from the cache rather than the camera |
+| `start()`, `stop()`, `running` | Control the continuous analysis |
+
+In a task, `devices["vision"].analyze_once()["data"]` gives fresh measurements. In a custom view:
+
+```python
+def setup(hub, devices):
+    vision = devices["vision"]
+    hub.add_video("processed", vision.video_source("processed"), fps=10, device="vision")
+```
+
+The Live panel shows the raw and processed images as thumbnails, with the state, rate, timing, errors and the one-line `data` values. Its `last_ok` point lights when the last verdict was OK.
+
+### Errors, faults and abort
+
+- **An exception in the analysis** is counted and shown in the Live panel (`errors`, `last_error`). The raw image keeps updating, and the processed image and result keep their last good values. With `fault_on_error: true` the device also faults, which faults the cell until **Clear faults**.
+- **A capture error** faults the camera device, as for any reader of the camera. The analysis waits until the camera is healthy again.
+- **ABORT** wakes task code blocked in `wait_for_result()` or `analyze_once()`. The analysis itself keeps running.
+- **INITIALIZE** stops the analysis before the camera reconnects, then starts it again if `autostart` is set.
+
+A complete example is in [`examples/gige_cv_analysis`](examples/gige_cv_analysis): the device above, a custom view with the raw and processed feeds side by side, an **Inspect once** manual action and a PROD cycle that locates the part. Run it with:
+
+```bash
+python app.py --workspace examples/gige_cv_analysis
+```
+
+Without a camera, switch `camera` to `type: "simulated_camera"`: the prototype then tracks the ball of its test pattern.
 
 ---
 
@@ -597,6 +689,8 @@ def prod_cycle(devices: Dict[str, Device], context=None):
 
 A driver only needed by one workspace can stay in that workspace and use `type: "custom"` with `driver: "module:ClassName"` instead of steps 2–3.
 
+**Linking to another device.** A key of type `"device"` (for example `"camera": _p("device")`) takes the name of another device in the config. Validation rejects a missing, disabled or invalid device and a dependency cycle. The constructor receives the device object itself, and the controller initializes the other device first and shuts it down last. It also stops the linked device before it re-initializes the other one at INITIALIZE. `cv_process` is the example.
+
 **Optional members** (not abstract, so existing drivers keep working):
 
 | Member | Purpose |
@@ -605,6 +699,7 @@ A driver only needed by one workspace can stay in that workspace and use `type: 
 | `supports_monitoring = True`, `disconnect(keep_monitoring)`, `link` | Keep a read-only link while released (see `MecaRobot`) |
 | `telemetry()` → `dict` | Values for the Live panel. It is polled from a web thread, so use cached values or the driver's own lock. |
 | `io_points()` → `[{name, kind, value, writable}]`, `write_io(name, value)` | I/O points for the Live panel. `kind` is `di`, `do`, `ai` or `ao`. |
+| `images()` → `[name, ...]`, `get_image(name)` → NumPy array or `None` | Thumbnails for the Live panel, served at `/api/devices/<id>/image/<name>.jpg`. Return a cached frame; never grab one from the hardware here. |
 
 ---
 
@@ -703,6 +798,9 @@ devices/
     Device.py                 # Abstract base class — contract for all devices
     registry.py               # Device types, their config keys, and config validation
     SimulatedDevice.py        # Hardware-free stand-in
+    SimulatedCamera.py        # Hardware-free camera (moving test pattern)
+    GigEVisionDevice.py       # GigE Vision camera (harvesters / GenTL)
+    CVProcessDevice.py        # Computer-vision analysis on a camera's frames
     MecaRobot.py              # Mecademic robot (mecademicpy)
     Asyril.py                 # Asyril Eye+ intelligent feeder
     PlanarMotor.py            # Planar motor system
@@ -728,6 +826,7 @@ static/js/app.js              # UI logic (fallback polling when the stream is do
 
 tests/                        # pytest suite (simulated devices, no hardware)
 examples/gige_live_view/      # Example workspace: a GigE camera's live feed in the custom view
+examples/gige_cv_analysis/    # Example workspace: CV analysis (cv_process) with a prototype blob finder
 
 logs/
     app/                      # Rotating logs for Flask + ApplicationController
@@ -759,7 +858,8 @@ logs/
 | `POST` | `/api/devices/<id>/disconnect` | Release one device (a robot keeps a monitoring link). 409 while a task runs |
 | `POST` | `/api/devices/<id>/connect` | Connect one device again |
 | `POST` | `/api/devices/<id>/clear_fault` | Clear one device's fault |
-| `GET` | `/api/devices/<id>/live` | Telemetry and I/O points |
+| `GET` | `/api/devices/<id>/live` | Telemetry, I/O points and the images the device serves |
+| `GET` | `/api/devices/<id>/image/<name>.jpg` | Latest image of a device (a `cv_process`'s `raw` or `processed`) as a JPEG; `?w=` caps the width (default 480, max 1920). 503 until the first frame |
 | `POST` | `/api/devices/<id>/io` | Set a writable point: `{"name": "do3", "value": true}`. 409 while a task runs or the device is released |
 
 `/api/info` entries also carry `link` (`control` / `monitoring` / `disconnected`), `detached`, `in_transition`, `supports_reconnect`, `supports_monitoring` and `has_live_data`.

@@ -2136,6 +2136,45 @@ button:active { transform: scale(0.98); }
     color: #ff9ba5;
     margin-bottom: 8px;
 }
+.device-live-images {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr));
+    gap: 8px;
+}
+.device-live-images:not(:empty) {
+    margin-bottom: 8px;
+}
+.device-live-image {
+    margin: 0;
+    min-width: 0;
+}
+.device-live-frame {
+    aspect-ratio: 4 / 3;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    background: rgba(0,0,0,0.25);
+    overflow: hidden;
+}
+.device-live-frame img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.device-live-image.empty img {
+    /* No frame yet (503): keep the box, hide the broken-image icon. */
+    visibility: hidden;
+}
+.device-live-image figcaption {
+    margin-top: 4px;
+    color: var(--color-muted);
+    font-size: 0.85em;
+    text-transform: capitalize;
+}
+.device-live-image.empty figcaption::after {
+    content: " · no image yet";
+    text-transform: none;
+}
 .device-live-io {
     display: flex;
     flex-wrap: wrap;

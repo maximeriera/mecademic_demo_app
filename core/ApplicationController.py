@@ -31,7 +31,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 from devices import Device
-from devices.registry import create_device, validate_devices_config
+from devices.registry import create_device, dependency_order, validate_devices_config
 
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
@@ -104,6 +104,8 @@ class ApplicationController:
         self.logger.info(f"Loading controller config from: {config_path}")
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
+        #: device_id -> the devices it links to (``device`` keys in config.yaml).
+        self._device_deps: Dict[str, tuple] = {}
         self.config_issues: list[Dict[str, str]] = []
         self._manual_actions = self._load_manual_actions_config()
         
@@ -321,21 +323,41 @@ class ApplicationController:
         starting: they are collected in :attr:`config_issues` (shown by the UI),
         and an entry with an error is not created. :meth:`initialize` refuses
         to run while any error remains.
+
+        Linked devices are created after the devices they name, but
+        :attr:`devices` keeps the config order, which is what the UI lists.
         """
         entries, issues = validate_devices_config(self.config.get('devices'))
-        for entry in entries:
+        by_name = {entry.name: entry for entry in entries}
+        self._device_deps = {entry.name: entry.depends_on for entry in entries if entry.depends_on}
+        created: Dict[str, Device] = {}
+        order, _ = dependency_order(by_name, self._device_deps)   # validation rejected cycles
+        for name in order:
+            entry = by_name[name]
             try:
                 self.logger.info(f"Creating {entry.type} device: {entry.name}")
-                self.devices[entry.name] = create_device(entry)
+                created[name] = create_device(entry, created)
             except Exception as e:
                 # Typically a driver SDK that is not installed (pyvisa, harvesters...).
                 self.logger.error(f"Could not create device '{entry.name}': {e}", exc_info=True)
                 issues.append({"device": entry.name, "level": "error",
                                "message": f"could not be created: {type(e).__name__}: {e}"})
+        for entry in entries:
+            if entry.name in created:
+                self.devices[entry.name] = created[entry.name]
         for item in issues:
             log = self.logger.error if item["level"] == "error" else self.logger.warning
             log(f"config.yaml devices.{item['device']}: {item['message']}")
         self.config_issues = issues
+
+    def _ordered_devices(self, dependents_first: bool = False) -> list[Device]:
+        """Devices in the order to bring them up, or down with ``dependents_first``.
+
+        Config order, except that a linked device (a CV process) comes after
+        the device it reads (its camera), or before it with ``dependents_first``.
+        """
+        order, _ = dependency_order(self.devices, self._device_deps, dependents_first)
+        return [self.devices[name] for name in order]
 
     def initialize(self):
         """Connect and initialise every device, then transition to ``READY``.
@@ -343,7 +365,8 @@ class ApplicationController:
         Steps
         -----
         1. Set state to ``INITIALIZING``.
-        2. Call :meth:`~devices.Device.initialize` on each device in order.
+        2. Call :meth:`~devices.Device.initialize` on each device in config
+           order, a linked device after the device it reads (stopping it first).
         3. Restart the monitor thread if it is not alive.
         4. Set state to ``READY``.
 
@@ -368,7 +391,15 @@ class ApplicationController:
             self.set_state(ControllerState.INITIALIZING)
         # No sampler may read a device while it (re)connects.
         self.context.data.clear()
-        for _, device in self.devices.items():
+        # Nor may a device that reads another one (a CV process its camera):
+        # it stops first, and comes back up after what it depends on.
+        for device in self._ordered_devices(dependents_first=True):
+            if device.device_id in self._device_deps and device.device_id not in self._detached:
+                try:
+                    device.shutdown()
+                except Exception as e:
+                    self.logger.warning(f"Error stopping device {device.device_id} before initialization: {e}")
+        for device in self._ordered_devices():
             if device.device_id in self._detached:
                 # Never grab a device someone else is driving: it is reconnected
                 # from its card once it is free.
@@ -818,16 +849,37 @@ class ApplicationController:
         device = self.devices.get(device_id)
         if device is None:
             return None
-        result: Dict[str, Any] = {"telemetry": {}, "io": [], "error": None}
+        result: Dict[str, Any] = {"telemetry": {}, "io": [], "images": [], "error": None}
         if device_id in self._in_transition:
             result["error"] = "Connecting or disconnecting..."
             return result
         try:
             result["telemetry"] = device.telemetry() or {}
             result["io"] = device.io_points() or []
+            result["images"] = [{"name": name, "url": f"/api/devices/{device_id}/image/{name}.jpg"}
+                                for name in device.images() or []]
         except Exception as e:
             result["error"] = f"{type(e).__name__}: {e}"
         return result
+
+    def get_device_image(self, device_id: str, name: str):
+        """Latest image *name* of one device (a NumPy array), or None if it has none yet.
+
+        Raises KeyError for an unknown device or image. None as well while the
+        device connects, disconnects or is detached; read errors are logged.
+        """
+        device = self.devices.get(device_id)
+        if device is None:
+            raise KeyError(f"Unknown device '{device_id}'.")
+        if name not in (device.images() or []):
+            raise KeyError(f"{device_id} has no image '{name}'.")
+        if device_id in self._in_transition or device_id in self._detached:
+            return None
+        try:
+            return device.get_image(name)
+        except Exception as e:
+            self.logger.warning(f"Image {device_id}.{name} unavailable: {e}")
+            return None
 
     def write_device_io(self, device_id: str, name: str, value: Any) -> Dict[str, Any]:
         """Set one writable I/O point from the UI. Refused while a task runs or the device is detached."""
@@ -1074,7 +1126,8 @@ class ApplicationController:
         # Devices are shut down even when the monitor is stuck: raising first
         # used to leave every robot connected (and its control port taken).
         # Detached devices too, which also closes a robot's monitoring link.
-        for _, device in self.devices.items():
+        # Linked devices go first: a CV process stops before its camera closes.
+        for device in self._ordered_devices(dependents_first=True):
             try:
                 device.shutdown()
             except Exception as e:

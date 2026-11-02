@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vision | Custom View</title>
+    <!-- Brand font, colour tokens and background from the standard app. -->
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body {
+            justify-content: flex-start;
+            padding: 0 16px 16px;
+        }
+        /* One browser window: the feeds take whatever height the rest leaves. */
+        .screen {
+            width: min(100%, 1800px);
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 10px 0 12px;
+        }
+        .screen .view-topbar {
+            width: 100%;
+            margin-bottom: 0;
+            padding-bottom: 10px;
+        }
+        .view-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px 14px;
+        }
+        .view-header h1 {
+            margin: 0;
+            font-size: 1.15em;
+            color: var(--color-accent);
+        }
+        .view-sub {
+            color: var(--color-muted);
+            font-size: 0.8em;
+            font-variant-numeric: tabular-nums;
+        }
+        .view-header button {
+            margin-left: auto;
+            padding: 8px 14px;
+        }
+        .view-header button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        .banner {
+            padding: 8px 14px;
+            border: 1px solid var(--color-red);
+            border-radius: var(--radius-control);
+            color: var(--color-red);
+            background: rgba(255, 90, 107, 0.08);
+            font-size: 0.9em;
+        }
+        .layout {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 300px);
+            gap: 10px;
+        }
+        .panel {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .panel h2 {
+            margin: 0;
+            color: var(--color-muted);
+            font-size: 0.75em;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .panel h2 a {
+            float: right;
+            color: var(--color-accent-soft);
+            text-decoration: none;
+        }
+        .feed {
+            flex: 1;
+            min-height: 240px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .feed img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .feed .placeholder {
+            color: var(--color-muted);
+            font-size: 0.9em;
+            padding: 0 16px;
+            text-align: center;
+        }
+        .result {
+            padding: 12px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            background: var(--color-panel);
+            font-size: 0.85em;
+        }
+        .result .badge {
+            margin: 0 0 10px;
+            font-size: 0.9em;
+        }
+        .result table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .result td {
+            padding: 3px 0;
+            font-variant-numeric: tabular-nums;
+            overflow-wrap: anywhere;
+        }
+        .result td:first-child {
+            color: var(--color-muted);
+            width: 45%;
+        }
+        @media (max-width: 1100px) {
+            .layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+            .layout .panel:last-child { grid-column: 1 / -1; }
+        }
+        @media (max-width: 700px) {
+            .layout { grid-template-columns: minmax(0, 1fr); }
+        }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="screen">
+        <!-- Default top bar (logo, system status, current step), from view-header.js. -->
+        <div id="view-topbar"></div>
+
+        <header class="view-header">
+            <h1>Vision</h1>
+            <div class="view-sub" id="stats">Connecting…</div>
+            <button type="button" class="btn-start" id="toggle" disabled>Start analysis</button>
+        </header>
+
+        <div class="banner" id="error" hidden></div>
+
+        <div class="layout">
+            <section class="panel">
+                <h2>Raw <a href="/api/devices/vision/image/raw.jpg?w=1920" target="_blank" rel="noopener">Snapshot &#8599;</a></h2>
+                <div class="feed">
+                    <img data-video="raw" alt="Raw camera frame" hidden>
+                    <div class="placeholder">Press INITIALIZE in the controller to start the camera.</div>
+                </div>
+            </section>
+            <section class="panel">
+                <h2>Processed <a href="/api/devices/vision/image/processed.jpg?w=1920" target="_blank" rel="noopener">Snapshot &#8599;</a></h2>
+                <div class="feed">
+                    <img data-video="processed" alt="Processed frame" hidden>
+                    <div class="placeholder">Waiting for the first analysis.</div>
+                </div>
+            </section>
+            <section class="panel">
+                <h2>Latest result</h2>
+                <div class="result">
+                    <span class="badge badge-off" id="verdict">No result yet</span>
+                    <table id="data"></table>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script src="/static/js/view-header.js"></script>
+    <script src="/static/js/datahub.js"></script>
+    <script>
+        // Feeds: MJPEG streams the hub serves from the vision device's cache;
+        // each <img> reopens its stream when the manifest's stream_id changes
+        // (after every INITIALIZE). The result comes from the hub's `result`
+        // channel, the running state from the device's Live data.
+        const DEVICE = 'vision';
+        const stats = document.getElementById('stats');
+        const error = document.getElementById('error');
+        const toggle = document.getElementById('toggle');
+        const verdict = document.getElementById('verdict');
+        const dataTable = document.getElementById('data');
+        const streams = {};
+        let running = null;
+        let liveError = '';
+        let setupError = '';
+
+        function showError() {
+            const text = setupError || liveError;
+            error.hidden = !text;
+            error.textContent = text;
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function format(value) {
+            if (value === null || value === undefined) return '—';
+            if (typeof value === 'boolean') return value ? 'yes' : 'no';
+            if (typeof value === 'number') return Number.isInteger(value) ? String(value) : String(+value.toFixed(2));
+            if (Array.isArray(value)) return value.map(format).join(', ');
+            if (typeof value === 'object') return JSON.stringify(value);
+            return String(value);
+        }
+
+        function refreshFeeds() {
+            fetch('/api/data')
+                .then(r => r.json())
+                .then((manifest) => {
+                    setupError = manifest.setup_error ? `Custom view setup failed: ${manifest.setup_error}` : '';
+                    showError();
+                    document.querySelectorAll('img[data-video]').forEach((img) => {
+                        const name = img.dataset.video;
+                        const video = manifest.active ? (manifest.videos || {})[name] : null;
+                        const placeholder = img.nextElementSibling;
+                        if (!video) {
+                            if (streams[name] !== undefined) img.removeAttribute('src');
+                            delete streams[name];
+                            img.hidden = true;
+                            placeholder.hidden = false;
+                            return;
+                        }
+                        if (video.stream_id !== streams[name]) {
+                            streams[name] = video.stream_id;
+                            img.src = `${video.url}?s=${video.stream_id}`;
+                        }
+                        img.hidden = false;
+                        placeholder.hidden = true;
+                    });
+                })
+                .catch(() => { setupError = 'Controller unreachable.'; showError(); })
+                .finally(() => setTimeout(refreshFeeds, 1000));
+        }
+
+        function refreshState() {
+            fetch(`/api/devices/${DEVICE}/live`)
+                .then(r => r.json())
+                .then((live) => {
+                    const t = live.telemetry || {};
+                    const point = (live.io || []).find(p => p.name === 'analysis_running');
+                    running = point ? !!point.value : null;
+                    toggle.disabled = running === null || t.state === 'not initialized';
+                    toggle.textContent = running ? 'Stop analysis' : 'Start analysis';
+                    toggle.className = running ? 'btn-stop' : 'btn-start';
+                    const parts = [t.state || '—'];
+                    if (t.analysis_fps) parts.push(`${t.analysis_fps} analyses/s`);
+                    if (t.analysis_ms !== null && t.analysis_ms !== undefined) parts.push(`${t.analysis_ms} ms each`);
+                    parts.push(`${t.frames || 0} frames`);
+                    if (t.errors) parts.push(`${t.errors} error(s)`);
+                    stats.textContent = parts.join(' · ');
+                    liveError = live.error || (t.errors || t.capture_errors ? (t.last_error ? `Last error: ${t.last_error}` : '') : '');
+                    showError();
+                })
+                .catch(() => { stats.textContent = 'Controller unreachable.'; })
+                .finally(() => setTimeout(refreshState, 1000));
+        }
+
+        function renderResult(result) {
+            if (!result) return;
+            verdict.className = 'badge ' + (result.ok === true ? 'badge-ok' : result.ok === false ? 'badge-error' : 'badge-off');
+            verdict.textContent = result.ok === true ? 'OK' : result.ok === false ? 'Not found' : 'No verdict';
+            const rows = Object.entries(result.data || {}).map(([key, value]) =>
+                `<tr><td>${escapeHtml(key.replace(/_/g, ' '))}</td><td>${escapeHtml(format(value))}</td></tr>`);
+            rows.push(`<tr><td>analysis</td><td>${escapeHtml(format(result.analysis_ms))} ms (#${result.seq})</td></tr>`);
+            dataTable.innerHTML = rows.join('');
+        }
+
+        toggle.addEventListener('click', () => {
+            toggle.disabled = true;
+            fetch(`/api/devices/${DEVICE}/io`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'analysis_running', value: !running }),
+            })
+                .then(r => r.json().then(body => ({ ok: r.ok, body })))
+                .then(({ ok, body }) => { liveError = ok ? '' : (body.message || 'Request refused.'); showError(); })
+                .catch(() => { liveError = 'Controller unreachable.'; showError(); });
+        });
+
+        DataHubClient.poll({
+            channels: ['result'],
+            intervalMs: 300,
+            historyS: 30,
+            onData(state) { renderResult(state.latest('result')); },
+        });
+        refreshFeeds();
+        refreshState();
+    </script>
+</body>
+</html>

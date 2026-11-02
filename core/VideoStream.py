@@ -10,8 +10,9 @@ a plain ``<img>``. Compressing on the server is what keeps the feed fluid: a
 5 MP mono frame is 5 MB raw and ~150 kB as a JPEG at 1280 px, quality 75.
 
 The thread only reads the camera while at least one page is watching (unless
-``always_on``), so an idle cell never streams. It is the only reader of the
-camera: task code must not fetch frames from the same device concurrently.
+``always_on``), so an idle cell never streams. ``GigEVisionDevice`` serialises
+its captures, so another reader only shares the frames; to show what a
+``cv_process`` device sees, stream its cache (``vision.video_source("raw")``).
 
 Registered from a custom view's ``setup(hub, devices)``::
 

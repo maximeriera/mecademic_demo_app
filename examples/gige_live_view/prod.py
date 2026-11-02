@@ -1,8 +1,7 @@
 """PROD task: a placeholder cycle, so START PROD works in this camera-only example.
 
-The custom view's stream thread is the only reader of the camera. Task code
-that needs an image would use the camera's own API only while nobody watches
-the view, or add the frames it needs to the hub; see custom_view/__init__.py.
+Task code that needs images and measurements would declare a cv_process device
+on this camera and read its results; see examples/gige_cv_analysis.
 """
 
 import time

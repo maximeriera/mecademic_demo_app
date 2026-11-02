@@ -67,6 +67,27 @@
 #   camera_index: 0              # optional, default: 0
 #   autostart_stream: false      # optional, default: false
 #
+# --- Simulated camera (SimulatedCamera) — no hardware required ---
+#   A moving test pattern behind the same capture_frame_8bit() as gige_camera.
+#   type: "simulated_camera"     # alias: "test_pattern_camera"
+#   width: 1600                  # optional, pixels
+#   height: 1200                 # optional, pixels
+#   fps: 15                      # optional, frame rate ceiling
+#   fail_to_connect: false       # optional — raise on initialize(), to test FAULTED path
+#
+# --- Computer-vision processing (CVProcessDevice) ---
+#   Runs a workspace function on each frame of a camera device and keeps the
+#   last raw image, processed image and result (see examples/gige_cv_analysis).
+#   type: "cv_process"           # aliases: "vision", "cv"
+#   camera: "camera"             # name of a gige_camera / simulated_camera device above
+#   analysis: "blob_analysis:analyze"   # "module:function", importable from the workspace
+#   analysis_params:             # optional — passed to the function as `params`
+#     threshold: 175
+#   autostart: false             # optional — true: start analysing at every INITIALIZE
+#   rate_hz: 5.0                 # optional — analysis rate ceiling
+#   capture_timeout_s: 2.0       # optional — seconds to wait for each frame
+#   fault_on_error: false        # optional — true: an exception in the analysis faults the cell
+#
 # --- Thorlabs PM-series Power Meter (ThorlabsPowerMeter) ---
 #   PM100A/D/USB, PM101-103, PM16x, PM400, PM5020, ... over USB (or TCPIP).
 #   type: "thorlabs_pm"          # alias: "thorlabs_power_meter"

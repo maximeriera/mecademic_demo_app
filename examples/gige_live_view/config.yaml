@@ -18,6 +18,5 @@ devices:
   # No camera at hand? Replace the entry above with this one: the custom view
   # then shows a synthetic test pattern through the same JPEG pipeline.
   # camera:
-  #   type: "simulated"
-  #   info:
-  #     model: "Test pattern"
+  #   type: "simulated_camera"
+  #   fps: 15

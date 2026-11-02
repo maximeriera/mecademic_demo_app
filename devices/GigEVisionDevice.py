@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 
 import numpy as np
 
@@ -52,6 +53,10 @@ class GigEVisionDevice(Device):
         self._connected = False
         self._streaming = False
         self._faulted = False
+        # Serialises captures, so two readers (a CV process and a live view)
+        # take turns on the acquirer instead of racing on fetch(). abort()
+        # stays outside it: it must be able to interrupt a fetch in progress.
+        self._capture_lock = threading.RLock()
 
     @property
     def info(self) -> dict:
@@ -170,11 +175,12 @@ class GigEVisionDevice(Device):
     def capture_frame(self, timeout_sec: float = 2.0):
         if not self._api:
             raise RuntimeError("Cannot capture frame. Camera API is not initialized.")
-        try:
-            return self._api.capture_frame(timeout_sec=timeout_sec)
-        except Exception:
-            self._faulted = True
-            raise
+        with self._capture_lock:
+            try:
+                return self._api.capture_frame(timeout_sec=timeout_sec)
+            except Exception:
+                self._faulted = True
+                raise
 
     def capture_frame_8bit(self, timeout_sec: float = 2.0) -> np.ndarray:
         """One frame ready to display: 8-bit mono ``H×W``, or RGB ``H×W×3``.
@@ -182,12 +188,13 @@ class GigEVisionDevice(Device):
         Samples deeper than 8 bits are scaled by the pixel format's bit depth
         (not by the image content, so brightness does not pump), and Bayer
         mosaics become half-resolution RGB. Starts the stream if needed, e.g.
-        after an abort stopped it.
+        after an abort stopped it. Safe to call from several threads.
         """
-        if not self._streaming:
-            self.start_stream()
-        frame = self.capture_frame(timeout_sec=timeout_sec)
-        pixel_format = self._api.last_pixel_format or ""
+        with self._capture_lock:
+            if not self._streaming:
+                self.start_stream()
+            frame = self.capture_frame(timeout_sec=timeout_sec)
+            pixel_format = self._api.last_pixel_format or ""
         bits = _bit_depth(pixel_format) or 8
         if pixel_format.startswith("Bayer") and frame.ndim == 2:
             frame = _debayer_half(frame, pixel_format[5:7])
