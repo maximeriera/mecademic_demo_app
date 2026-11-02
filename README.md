@@ -399,6 +399,7 @@ def analyze(frame, params):
 
   A bare image, a bare dict, `(image, data)` or `None` work too.
 - It runs on the device's own thread, at most `rate_hz` times per second.
+- The module is looked up as written, then in the workspace's `app_logic` package, as task modules are. So `"blob_analysis:analyze"` also finds `app_logic/blob_analysis.py`, which is where it lives in the Docker image (`--workspace /webapp`, with `./app_logic` mounted).
 - A wrong `analysis` path is a config error at startup. **Reload code** picks up your edits.
 
 [`examples/gige_cv_analysis/blob_analysis.py`](examples/gige_cv_analysis/blob_analysis.py) is a prototype to copy. It finds the largest bright blob and returns its centre, area, bounding box and orientation, with an overlay. It uses only NumPy, Pillow and SciPy. OpenCV is not installed with the app; add `opencv-python-headless` to `requirements.txt` to use it.

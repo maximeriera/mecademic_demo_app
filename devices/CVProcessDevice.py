@@ -54,6 +54,10 @@ from .Device import Device
 #: Images :meth:`CVProcessDevice.get_image` serves (Devices tab thumbnails).
 IMAGE_NAMES = ("raw", "processed")
 
+#: Package a workspace may keep its code in (the Docker image's layout), tried
+#: after the plain module name, as for task modules and the custom view.
+WORKSPACE_PACKAGE = "app_logic"
+
 _ERROR_LOG_INTERVAL_S = 10.0
 
 
@@ -66,11 +70,31 @@ class AnalysisResult:
 
 
 def load_analysis(target: str) -> Callable:
-    """The callable that ``"module:function"`` names (``"module:obj.method"`` works too)."""
+    """The callable that ``"module:function"`` names (``"module:obj.method"`` works too).
+
+    ``module`` is looked up as given, then inside the workspace's ``app_logic``
+    package, so ``"blob_analysis:analyze"`` finds ``app_logic/blob_analysis.py``
+    in a workspace laid out like the Docker image (``--workspace /webapp``).
+    """
     module_name, sep, attr_path = str(target).partition(":")
     if not (module_name and sep and attr_path):
         raise ValueError(f'analysis must be "module:function", got {target!r}')
-    obj: Any = import_module(module_name)
+    candidates = [module_name]
+    if module_name != WORKSPACE_PACKAGE and not module_name.startswith(WORKSPACE_PACKAGE + "."):
+        candidates.append(f"{WORKSPACE_PACKAGE}.{module_name}")
+    obj: Any = None
+    for name in candidates:
+        try:
+            obj = import_module(name)
+            break
+        except ModuleNotFoundError as e:
+            # Only "this candidate does not exist" means try the next one; a
+            # missing import *inside* the module (scipy, cv2...) is the error.
+            if not (e.name and (name == e.name or name.startswith(e.name + "."))):
+                raise
+    if obj is None:
+        tried = " or ".join(f"'{name}'" for name in candidates)
+        raise ModuleNotFoundError(f"No module named {tried} in the workspace", name=module_name)
     for attr in attr_path.split("."):
         obj = getattr(obj, attr)
     if not callable(obj):

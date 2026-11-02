@@ -24,7 +24,7 @@ devices:
   # pattern whose green ball blob_analysis finds with the params below.
   camera:
     type: "simulated_camera"
-    fps: 15
+    fps: 60
 
   vision:
     type: "cv_process"
@@ -34,7 +34,7 @@ devices:
       threshold: 175                     # 0-255, or "auto" (Otsu)
       min_area: 500                      # pixels
     autostart: true                      # false: start it from Settings > Devices or from code
-    rate_hz: 5                           # analysis rate ceiling
+    rate_hz: 30                           # analysis rate ceiling
     fault_on_error: false                # true: an exception in analyze() faults the cell
 
 manual_actions:

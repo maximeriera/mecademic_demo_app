@@ -233,6 +233,29 @@ def test_camera_must_capture_frames(analysis):
         CVProcessDevice(camera=cam, analysis=f"{analysis.__name__}:missing")
 
 
+def test_analysis_is_also_found_in_the_workspace_package(tmp_path, monkeypatch):
+    """The Docker image's layout: --workspace /webapp, the analysis in app_logic/."""
+    import devices.CVProcessDevice as cv_module
+
+    package = f"ws_pkg_{uuid.uuid4().hex[:8]}"   # stands in for app_logic, already imported here
+    (tmp_path / package).mkdir()
+    (tmp_path / package / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / package / "blob_like.py").write_text(ANALYSIS_MODULE, encoding="utf-8")
+    (tmp_path / package / "needs_sdk.py").write_text("import not_installed_sdk_xyz\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(cv_module, "WORKSPACE_PACKAGE", package)
+    try:
+        assert cv_module.load_analysis("blob_like:analyze").__module__ == f"{package}.blob_like"
+        # A missing import inside the module is reported as itself, not as "no module".
+        with pytest.raises(ModuleNotFoundError, match="not_installed_sdk_xyz"):
+            cv_module.load_analysis("needs_sdk:analyze")
+        with pytest.raises(ModuleNotFoundError, match=f"'nowhere' or '{package}.nowhere'"):
+            cv_module.load_analysis("nowhere:analyze")
+    finally:
+        for name in [m for m in sys.modules if m == package or m.startswith(package + ".")]:
+            sys.modules.pop(name, None)
+
+
 def test_continuous_analysis_publishes_raw_processed_and_result(make_vision):
     vision = make_vision(analysis_params={"scale": 2})
     with pytest.raises(RuntimeError, match="not initialized"):

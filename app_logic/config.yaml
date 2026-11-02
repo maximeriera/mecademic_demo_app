@@ -80,7 +80,8 @@
 #   last raw image, processed image and result (see examples/gige_cv_analysis).
 #   type: "cv_process"           # aliases: "vision", "cv"
 #   camera: "camera"             # name of a gige_camera / simulated_camera device above
-#   analysis: "blob_analysis:analyze"   # "module:function", importable from the workspace
+#   analysis: "blob_analysis:analyze"   # "module:function": blob_analysis.py in the workspace
+#                                #   folder or in app_logic/ (the Docker image's layout)
 #   analysis_params:             # optional — passed to the function as `params`
 #     threshold: 175
 #   autostart: false             # optional — true: start analysing at every INITIALIZE

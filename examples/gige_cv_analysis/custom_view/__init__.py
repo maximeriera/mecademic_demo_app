@@ -9,7 +9,7 @@ running state from the device's Live data (``/api/devices/vision/live``).
 
 #: Device id of the CV process in config.yaml.
 VISION = "vision"
-FPS = 10                   # a ceiling: the feeds change at the analysis rate_hz
+FPS = 30                   # a ceiling: the feeds change at the analysis rate_hz
 JPEG_QUALITY = 75
 MAX_WIDTH = 960            # two feeds side by side
 
