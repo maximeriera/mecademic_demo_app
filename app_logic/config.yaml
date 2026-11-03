@@ -64,6 +64,7 @@
 # --- GigE Vision Camera (GigEVisionDevice) ---
 #   type: "gige_camera"
 #   cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+#   # In the Docker image: "/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti"
 #   camera_index: 0              # optional, default: 0
 #   autostart_stream: false      # optional, default: false
 #   features:                    # optional — GenICam features written at every INITIALIZE,

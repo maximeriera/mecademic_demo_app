@@ -357,6 +357,8 @@ python app.py --workspace examples/gige_live_view
 
 Then press INITIALIZE and open **Custom view**. Switch the device to `type: "simulated_camera"` to see a moving test pattern without a camera.
 
+The `cti_path` in these examples is the Windows install of the Spinnaker SDK. The Docker image installs the Linux producer from `ressources/spinnaker-*-amd64-pkg.tar.gz`, so in a container use `cti_path: "/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti"`. GigE cameras also need `network_mode: host` for discovery (see `docker-compose.yml`).
+
 ---
 
 ## Camera features
