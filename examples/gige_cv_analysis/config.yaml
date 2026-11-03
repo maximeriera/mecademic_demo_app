@@ -19,12 +19,18 @@ devices:
   #   cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
   #   camera_index: 0              # first camera the GenTL producer finds
   #   autostart_stream: true
+  #   features:                    # GenICam names of your camera, written in this order
+  #     ExposureAuto: "Off"        # before ExposureTime: an auto mode overrides it
+  #     ExposureTime: 20000.0      # µs
+  #     Gain: 0.0                  # dB
 
   # No camera at hand? Replace the entry above with this one: a moving test
   # pattern whose green ball blob_analysis finds with the params below.
   camera:
     type: "simulated_camera"
     fps: 60
+    # features:
+    #   ExposureTime: 4000         # µs (default 10000): too dark for threshold 175
 
   vision:
     type: "cv_process"

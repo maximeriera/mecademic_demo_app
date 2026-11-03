@@ -479,6 +479,7 @@ register_device(DeviceSpec(
         "cti_path": _p("str", doc="path to the GenTL producer (.cti)"),
         "camera_index": _p("int", 0),
         "autostart_stream": _p("bool", False),
+        "features": _p("dict", None, "GenICam features set at every INITIALIZE, in order"),
     },
     doc="GigE Vision camera (harvesters).",
 ))
@@ -489,6 +490,7 @@ register_device(DeviceSpec(
         "height": _p("int", 1200, "pixels"),
         "fps": _p("float", 15.0, "frame rate ceiling"),
         "fail_to_connect": _p("bool", False),
+        "features": _p("dict", None, "ExposureTime, Gain, PixelFormat, set at every INITIALIZE"),
     },
     aliases=("test_pattern_camera",),
     doc="Hardware-free camera serving a moving test pattern.",

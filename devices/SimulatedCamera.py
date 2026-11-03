@@ -9,6 +9,10 @@ live view or a ``cv_process`` device runs on any machine::
       camera:
         type: "simulated_camera"
         fps: 15
+        features:              # same contract as a gige_camera's
+          ExposureTime: 10000  # µs: brightness scales with it
+          Gain: 0              # dB
+          PixelFormat: "RGB8"  # or "Mono8"; locked while streaming, like a real camera
 """
 
 from __future__ import annotations
@@ -20,6 +24,16 @@ import time
 import numpy as np
 
 from .Device import Device
+
+#: The simulated GenICam features: same names, types and errors as on a GigE camera.
+FEATURES = {
+    "ExposureTime": {"type": "IFloat", "default": 10000.0, "min": 100.0, "max": 1_000_000.0, "unit": "us"},
+    "Gain": {"type": "IFloat", "default": 0.0, "min": 0.0, "max": 24.0, "unit": "dB"},
+    "PixelFormat": {"type": "IEnumeration", "default": "RGB8", "choices": ("RGB8", "Mono8"),
+                    "locked_while_streaming": True},
+}
+_REFERENCE_EXPOSURE_US = 10000.0   # the exposure at which the pattern has its nominal brightness
+_LUMA = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 
 class TestPattern:
@@ -64,7 +78,7 @@ class SimulatedCamera(Device):
     """Hardware-free camera serving :class:`TestPattern` frames at ``fps``."""
 
     def __init__(self, width: int = 1600, height: int = 1200, fps: float = 15.0,
-                 fail_to_connect: bool = False, name: str | None = None):
+                 fail_to_connect: bool = False, features: dict | None = None, name: str | None = None):
         super().__init__(device_id=name or "simulated_camera")
         if width < 2 * TestPattern.RADIUS or height < 2 * TestPattern.RADIUS:
             raise ValueError(f"width and height must be at least {2 * TestPattern.RADIUS} pixels")
@@ -72,11 +86,15 @@ class SimulatedCamera(Device):
             raise ValueError("fps must be > 0")
         self._width, self._height, self._fps = int(width), int(height), float(fps)
         self._fail_to_connect = fail_to_connect
+        self._features = dict(features or {})   # written at every INITIALIZE, in order
+        self._values = {name: spec["default"] for name, spec in FEATURES.items()}
+        self._lut: np.ndarray | None = None     # brightness lookup table, None at nominal brightness
         self._pattern = TestPattern(self._width, self._height)
         self._lock = threading.Lock()
         self._next_frame = 0.0
         self._connected = False
         self._streaming = False
+        self._stream_starts = 0
         self._faulted = False
 
     @property
@@ -87,6 +105,7 @@ class SimulatedCamera(Device):
             "height": self._height,
             "fps": self._fps,
             "streaming": self._streaming,
+            "features": ", ".join(f"{k}={v}" for k, v in self._features.items()) or None,
         }
 
     @property
@@ -116,6 +135,12 @@ class SimulatedCamera(Device):
         self._connected = True
         self._faulted = False
         self._streaming = False
+        for feature_name, value in self._features.items():
+            try:
+                self.set_feature(feature_name, value)
+            except Exception as e:
+                self._connected = False
+                raise RuntimeError(f"feature {feature_name}={value!r}: {e}") from e
         self.logger.info(f"[{self.device_id}] Simulated camera ready ({self._width}×{self._height}, {self._fps:g} fps).")
 
     def shutdown(self) -> None:
@@ -132,12 +157,13 @@ class SimulatedCamera(Device):
         if not self._connected:
             raise RuntimeError("Cannot start stream. Camera is not connected.")
         self._streaming = True
+        self._stream_starts += 1
 
     def stop_stream(self) -> None:
         self._streaming = False
 
     def capture_frame_8bit(self, timeout_sec: float = 2.0) -> np.ndarray:
-        """One RGB ``H×W×3`` frame, paced to ``fps`` like a real sensor. Thread-safe."""
+        """One frame, RGB ``H×W×3`` (``Mono8``: ``H×W``), paced to ``fps`` like a real sensor. Thread-safe."""
         with self._lock:
             if not self._connected:
                 raise RuntimeError("Cannot capture frame. Camera is not connected.")
@@ -147,6 +173,69 @@ class SimulatedCamera(Device):
             if self._next_frame > now:
                 time.sleep(self._next_frame - now)
             self._next_frame = max(now, self._next_frame) + 1.0 / self._fps
-            return self._pattern.frame()
+            frame = self._pattern.frame()
+            mono, lut = self._values["PixelFormat"] == "Mono8", self._lut
+        if mono:
+            frame = (frame @ _LUMA).astype(np.uint8)
+        return frame if lut is None else lut[frame]
 
     capture_frame = capture_frame_8bit
+
+    # --- Features (same contract as GigEVisionDevice) -------------------------
+
+    def _feature_spec(self, feature_name: str) -> dict:
+        spec = FEATURES.get(feature_name)
+        if spec is None:
+            raise KeyError(f"camera has no feature '{feature_name}'")
+        if not self._connected:
+            raise RuntimeError("Cannot access features. Camera is not connected.")
+        return spec
+
+    def set_feature(self, feature_name: str, value) -> None:
+        """Write a feature now. A locked one (PixelFormat) gets the stream stopped and restarted.
+
+        KeyError for an unknown feature, ValueError for a refused value; never
+        a fault. Lasts until the next INITIALIZE writes ``features`` again.
+        """
+        spec = self._feature_spec(feature_name)
+        if spec["type"] == "IFloat":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(f"feature '{feature_name}' (IFloat) cannot take {value!r}")
+            value = float(value)
+            if not spec["min"] <= value <= spec["max"]:
+                raise ValueError(f"feature '{feature_name}' refused {value!r}: "
+                                 f"outside {spec['min']:.10g}-{spec['max']:.10g} {spec['unit']}")
+        elif value not in spec["choices"]:
+            raise ValueError(f"feature '{feature_name}' refused {value!r}: one of {', '.join(spec['choices'])}")
+        with self._lock:
+            restart = bool(spec.get("locked_while_streaming")) and self._streaming
+            if restart:
+                self.stop_stream()
+            old = self._values[feature_name]
+            self._values[feature_name] = value
+            scale = (self._values["ExposureTime"] / _REFERENCE_EXPOSURE_US) * 10 ** (self._values["Gain"] / 20)
+            self._lut = None if scale == 1.0 else np.minimum(np.arange(256) * scale, 255).astype(np.uint8)
+            if restart:
+                self.start_stream()
+        self.logger.info(f"[{self.device_id}] Feature {feature_name}: {old} -> {value}"
+                         + (" (stream restarted)" if restart else ""))
+
+    def get_feature(self, feature_name: str):
+        """Current value of a feature. KeyError if the camera has none."""
+        self._feature_spec(feature_name)
+        return self._values[feature_name]
+
+    def describe_feature(self, feature_name: str) -> dict:
+        """``{name, value, type, writable, min, max, inc, unit, choices}`` of a feature."""
+        spec = self._feature_spec(feature_name)
+        return {
+            "name": feature_name,
+            "value": self._values[feature_name],
+            "type": spec["type"],
+            "writable": not (spec.get("locked_while_streaming") and self._streaming),
+            "min": spec.get("min"),
+            "max": spec.get("max"),
+            "inc": None,
+            "unit": spec.get("unit"),
+            "choices": list(spec["choices"]) if "choices" in spec else None,
+        }

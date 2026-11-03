@@ -39,6 +39,7 @@ class GigEVisionDevice(Device):
         cti_path: str,
         camera_index: int = 0,
         autostart_stream: bool = False,
+        features: dict | None = None,
         name: str | None = None,
     ):
         if name is None:
@@ -48,6 +49,8 @@ class GigEVisionDevice(Device):
         self._cti_path = cti_path
         self._camera_index = camera_index
         self._autostart_stream = autostart_stream
+        #: GenICam features written at every INITIALIZE, in this order.
+        self._features = dict(features or {})
 
         self._api: GigECamera | None = None
         self._connected = False
@@ -78,6 +81,7 @@ class GigEVisionDevice(Device):
             "faulted": self._faulted,
             "model": model,
             "serial_number": serial,
+            "features": ", ".join(f"{k}={v}" for k, v in self._features.items()) or None,
         }
 
     @property
@@ -108,6 +112,7 @@ class GigEVisionDevice(Device):
         self._ensure_api()
         try:
             self._api.connect()
+            self._apply_config_features()
             self._connected = True
             self._faulted = False
             self._streaming = False
@@ -119,6 +124,20 @@ class GigEVisionDevice(Device):
             self._streaming = False
             self._faulted = True
             raise
+
+    def _apply_config_features(self):
+        """Write ``features`` in config order, before the stream starts (so locked ones work too)."""
+        for feature_name, value in self._features.items():
+            try:
+                self._api.set_feature(feature_name, value)
+            except Exception as e:
+                try:
+                    self._api.disconnect()
+                except Exception:
+                    pass
+                raise RuntimeError(f"feature {feature_name}={value!r}: {e}") from e
+        if self._features:
+            self.logger.info(f"[{self.device_id}] Features set: {', '.join(self._features)}.")
 
     def shutdown(self):
         if not self._api:
@@ -205,10 +224,46 @@ class GigEVisionDevice(Device):
         return frame
 
     def set_feature(self, feature_name: str, value):
-        if not self._api:
-            raise RuntimeError("Cannot set feature. Camera API is not initialized.")
-        try:
-            self._api.set_feature(feature_name=feature_name, value=value)
-        except Exception:
-            self._faulted = True
-            raise
+        """Write a GenICam feature now, e.g. ``camera.set_feature("ExposureTime", 20000.0)``.
+
+        Waits for the frame being fetched. A feature the camera locks while
+        streaming (PixelFormat, Width...) is written with the stream stopped,
+        then the stream restarts. Errors go to the caller and never fault the
+        cell: KeyError for an unknown feature, ValueError for a refused value
+        or a read-only feature. The change lasts until the next INITIALIZE,
+        which writes ``features`` from config.yaml again.
+        """
+        if not self._api or not self._connected:
+            raise RuntimeError("Cannot set feature. Camera is not connected.")
+        with self._capture_lock:
+            restart = False
+            if not self._api.is_writable(feature_name):
+                if not self._streaming:
+                    raise ValueError(f"feature '{feature_name}' is read-only.")
+                restart = True
+                self.stop_stream()
+            try:
+                if restart and not self._api.is_writable(feature_name):
+                    raise ValueError(f"feature '{feature_name}' is read-only, even with the stream stopped.")
+                try:
+                    old = self._api.get_feature(feature_name)
+                except Exception:
+                    old = "?"
+                self._api.set_feature(feature_name, value)
+            finally:
+                if restart:
+                    self.start_stream()
+        self.logger.info(f"[{self.device_id}] Feature {feature_name}: {old} -> {value}"
+                         + (" (stream restarted)" if restart else ""))
+
+    def get_feature(self, feature_name: str):
+        """Current value of a GenICam feature. KeyError if the camera has none."""
+        if not self._api or not self._connected:
+            raise RuntimeError("Cannot read feature. Camera is not connected.")
+        return self._api.get_feature(feature_name)
+
+    def describe_feature(self, feature_name: str) -> dict:
+        """``{name, value, type, writable, min, max, inc, unit, choices}`` of a feature."""
+        if not self._api or not self._connected:
+            raise RuntimeError("Cannot read feature. Camera is not connected.")
+        return self._api.describe_feature(feature_name)

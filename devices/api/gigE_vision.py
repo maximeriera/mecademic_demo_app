@@ -4,6 +4,7 @@ import argparse
 import time
 import signal
 import numpy as np
+from genicam import genapi
 from harvesters.core import Harvester
 
 from core.LogSetup import get_module_logger
@@ -22,6 +23,46 @@ logger = get_module_logger("device.gige.transport")
 
 class CameraConnectionError(RuntimeError):
     """Raised when a camera connection attempt fails."""
+
+
+#: GenICam node interfaces, in the order a node is matched against them.
+_NODE_TYPES = ("IBoolean", "IInteger", "IFloat", "IEnumeration", "IString", "ICommand")
+
+
+def _node_type(node) -> str:
+    """``"IFloat"``, ``"IEnumeration"``... for a GenICam node."""
+    for name in _NODE_TYPES:
+        cls = getattr(genapi, name, None)
+        if cls is not None and isinstance(node, cls):
+            return name
+    return type(node).__name__
+
+
+def _access(node, *modes: str) -> bool:
+    """True if the node's access mode is one of *modes* ("RW", "RO", "WO")."""
+    try:
+        mode = node.get_access_mode()
+    except Exception:
+        return True  # no access information: let the write itself decide
+    return any(mode == getattr(genapi.EAccessMode, m) for m in modes)
+
+
+def _coerce(feature_name: str, node, value):
+    """*value* converted to what the node takes; ValueError if it cannot be."""
+    kind = _node_type(node)
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "IBoolean" and isinstance(value, bool):
+        return value
+    if kind == "IInteger" and is_number and float(value).is_integer():
+        return int(value)
+    if kind == "IFloat" and is_number:
+        return float(value)
+    if kind in ("IEnumeration", "IString") and isinstance(value, str):
+        return value
+    if kind not in _NODE_TYPES[:5]:
+        return value  # an interface we do not know: hand the value over as is
+    raise ValueError(f"feature '{feature_name}' ({kind}) cannot take {value!r}")
+
 
 class GigECamera:
     def __init__(self, cti_path: str, camera_index: int = 0):
@@ -134,21 +175,70 @@ class GigECamera:
             self.disconnect()
             raise CameraConnectionError(f"Failed to connect to GigE camera: {exc}") from exc
 
+    def _node(self, feature_name: str):
+        """The GenICam node of *feature_name*. KeyError if the camera has none."""
+        if not self._is_connected:
+            raise RuntimeError("Cannot access features. Camera is not connected.")
+        try:
+            # remote_device.node_map exposes the GenICam XML tree on the camera
+            node = getattr(self.ia.remote_device.node_map, feature_name)
+        except Exception:
+            node = None
+        if node is None:
+            raise KeyError(f"camera has no feature '{feature_name}'")
+        return node
+
     def set_feature(self, feature_name: str, value):
         """
         Directly adjusts GenICam nodes/features on the camera hardware.
         Example: camera.set_feature('ExposureTime', 20000.0)
+
+        The value is converted to the node's type (a whole float for an
+        integer node, any number for a float node). KeyError for an unknown
+        feature, ValueError for a value the node refuses.
         """
-        if not self._is_connected:
-            raise RuntimeError("Cannot set features. Camera is not connected.")
+        node = self._node(feature_name)
+        value = _coerce(feature_name, node, value)
         try:
-            # remote_device.node_map exposes the GenICam XML tree on the camera
-            node = getattr(self.ia.remote_device.node_map, feature_name)
             node.value = value
-            logger.info(f"Set GenICam node '{feature_name}' to {value}")
-        except AttributeError:
-            logger.error(f"GenICam node '{feature_name}' does not exist on this camera.")
-            raise
+        except Exception as e:
+            raise ValueError(f"feature '{feature_name}' refused {value!r}: {e}") from e
+        logger.info(f"Set GenICam node '{feature_name}' to {value}")
+
+    def get_feature(self, feature_name: str):
+        """Current value of a GenICam feature. KeyError if the camera has none."""
+        return self._node(feature_name).value
+
+    def is_writable(self, feature_name: str) -> bool:
+        """True if the feature can be written now (many are locked while streaming)."""
+        return _access(self._node(feature_name), "RW", "WO")
+
+    def describe_feature(self, feature_name: str) -> dict:
+        """``{name, value, type, writable, min, max, inc, unit, choices}`` of a feature.
+
+        Entries the node does not have are None; ``choices`` lists an
+        enumeration's values.
+        """
+        node = self._node(feature_name)
+        info = {"name": feature_name, "value": None, "type": _node_type(node),
+                "writable": _access(node, "RW", "WO"),
+                "min": None, "max": None, "inc": None, "unit": None, "choices": None}
+        if _access(node, "RW", "RO"):
+            try:
+                info["value"] = node.value
+            except Exception:
+                pass
+        for key in ("min", "max", "inc", "unit"):
+            try:
+                info[key] = getattr(node, key)
+            except Exception:
+                pass
+        if info["type"] == "IEnumeration":
+            try:
+                info["choices"] = list(node.symbolics)
+            except Exception:
+                pass
+        return info
 
     def start_stream(self):
         """Allocates host buffers and tells the camera to begin transmitting data."""

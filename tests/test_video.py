@@ -2,6 +2,7 @@
 
 import io
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -149,3 +150,176 @@ def test_gige_bayer_becomes_half_resolution_rgb(monkeypatch):
 def test_gige_bgr_is_swapped_to_rgb(monkeypatch):
     device = _gige(np.array([[[1, 2, 3]]], np.uint8), "BGR8", monkeypatch)
     assert device.capture_frame_8bit()[0, 0].tolist() == [3, 2, 1]
+
+
+# --- GigE features ------------------------------------------------------------
+
+class _FakeNode:
+    """A GenICam node: typed, with an access mode, a range or choices."""
+
+    def __init__(self, name, kind, value, log, mode="RW", lo=None, hi=None, choices=None,
+                 locked_while_streaming=False):
+        self.name, self.kind, self._value, self.log, self.mode = name, kind, value, log, mode
+        self.min, self.max = lo, hi
+        if choices:
+            self.symbolics = list(choices)
+        self.locked_while_streaming = locked_while_streaming
+        self.writes = []
+
+    def get_access_mode(self):
+        from genicam import genapi
+        return getattr(genapi.EAccessMode, self.mode)
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        if self.mode not in ("RW", "WO"):
+            raise RuntimeError("AccessException: node is not writable")
+        if self.min is not None and not self.min <= value <= self.max:
+            raise RuntimeError("OutOfRangeException")
+        if hasattr(self, "symbolics") and value not in self.symbolics:
+            raise RuntimeError("InvalidArgumentException")
+        self.writes.append(value)
+        self.log.append(self.name)
+        self._value = value
+
+
+class _FakeAcquirer:
+    """ImageAcquirer stand-in: start/stop lock some nodes, like TLParamsLocked does."""
+
+    def __init__(self, nodes, log):
+        from types import SimpleNamespace
+        self.nodes, self.log = nodes, log
+        self.remote_device = SimpleNamespace(node_map=SimpleNamespace(**nodes))
+
+    def _lock(self, mode):
+        for node in self.nodes.values():
+            if node.locked_while_streaming:
+                node.mode = mode
+
+    def start(self):
+        self.log.append("start")
+        self._lock("RO")
+
+    def stop(self):
+        self.log.append("stop")
+        self._lock("RW")
+
+
+@pytest.fixture
+def gige_features(tmp_path, monkeypatch):
+    """A GigEVisionDevice over a real GigECamera whose acquirer and node map are fakes."""
+    pytest.importorskip("harvesters")
+    from devices.GigEVisionDevice import GigEVisionDevice
+    from devices.api import gigE_vision
+
+    # Node classes are pybind types the fakes cannot be: read the kind from the fake.
+    monkeypatch.setattr(gigE_vision, "_node_type", lambda node: node.kind)
+    log = []   # node writes, stream starts/stops and disconnects, in order
+    nodes = {node.name: node for node in (
+        _FakeNode("ExposureAuto", "IEnumeration", "Continuous", log, choices=("Off", "Continuous")),
+        _FakeNode("ExposureTime", "IFloat", 10000.0, log, lo=10.0, hi=1e6),
+        _FakeNode("Width", "IInteger", 1600, log, lo=16, hi=1600),
+        _FakeNode("PixelFormat", "IEnumeration", "BayerRG8", log, choices=("BayerRG8", "Mono8"),
+                  locked_while_streaming=True),
+        _FakeNode("DeviceTemperature", "IFloat", 41.5, log, mode="RO"),
+    )}
+
+    cti = tmp_path / "fake.cti"
+    cti.write_bytes(b"")
+    api = gigE_vision.GigECamera(cti_path=str(cti))
+    api.ia = _FakeAcquirer(nodes, log)
+
+    def connect():
+        api._is_connected = True
+
+    def disconnect():
+        api._is_connected = False
+        log.append("disconnect")
+
+    monkeypatch.setattr(api, "connect", connect)
+    monkeypatch.setattr(api, "disconnect", disconnect)
+
+    def make(**kwargs):
+        device = GigEVisionDevice(cti_path=str(cti), name="cam_features", **kwargs)
+        device._api = api
+        return device
+
+    make.nodes, make.log = nodes, log
+    return make
+
+
+def test_gige_feature_values_are_converted_and_errors_never_fault(gige_features):
+    camera = gige_features()
+    camera.initialize()
+    camera.set_feature("Width", 640.0)                    # a whole float, for an integer node
+    camera.set_feature("ExposureTime", 5000)              # an int, for a float node
+    assert gige_features.nodes["Width"].writes == [640] and isinstance(camera.get_feature("Width"), int)
+    assert camera.get_feature("ExposureTime") == 5000.0
+
+    with pytest.raises(KeyError, match="no feature 'ExposureTme'"):
+        camera.set_feature("ExposureTme", 1.0)
+    with pytest.raises(ValueError, match="cannot take 'fast'"):
+        camera.set_feature("ExposureTime", "fast")
+    with pytest.raises(ValueError, match="refused 1.0"):
+        camera.set_feature("ExposureTime", 1.0)              # below the node's minimum
+    with pytest.raises(ValueError, match="Width.*cannot take 12.5"):
+        camera.set_feature("Width", 12.5)
+    assert not camera.faulted and camera.ready
+
+    described = camera.describe_feature("PixelFormat")
+    assert described["type"] == "IEnumeration" and described["choices"] == ["BayerRG8", "Mono8"]
+    assert camera.describe_feature("ExposureTime")["min"] == 10.0
+
+
+def test_gige_locked_feature_is_written_with_the_stream_stopped(gige_features):
+    camera = gige_features()
+    camera.initialize()
+    camera.start_stream()
+    gige_features.log.clear()
+
+    camera.set_feature("PixelFormat", "Mono8")
+    assert gige_features.log == ["stop", "PixelFormat", "start"]
+    assert camera.streaming and camera.get_feature("PixelFormat") == "Mono8"
+
+    camera.set_feature("ExposureTime", 3000.0)            # writable while streaming: no restart
+    assert gige_features.log[-1] == "ExposureTime" and gige_features.log.count("stop") == 1
+
+    with pytest.raises(ValueError, match="read-only"):
+        camera.set_feature("DeviceTemperature", 20.0)
+    assert camera.streaming and not camera.faulted          # the stream came back anyway
+
+
+def test_gige_config_features_apply_in_order_at_initialize(gige_features):
+    camera = gige_features(features={"ExposureAuto": "Off", "ExposureTime": 20000, "PixelFormat": "Mono8"},
+                           autostart_stream=True)
+    camera.initialize()
+    assert gige_features.log == ["ExposureAuto", "ExposureTime", "PixelFormat", "start"]
+    assert camera.info["features"] == "ExposureAuto=Off, ExposureTime=20000, PixelFormat=Mono8"
+
+    broken = gige_features(features={"ExposureTime": 20000, "Gian": 3})
+    with pytest.raises(RuntimeError, match="feature Gian=3: .*no feature 'Gian'"):
+        broken.initialize()
+    assert gige_features.log[-1] == "disconnect" and not broken.connected
+
+
+def test_gige_set_feature_waits_for_the_frame_being_fetched(gige_features):
+    camera = gige_features()
+    camera.initialize()
+    fetching = threading.Event()
+
+    def fetch():
+        with camera._capture_lock:
+            fetching.set()
+            time.sleep(0.2)
+
+    thread = threading.Thread(target=fetch)
+    thread.start()
+    fetching.wait(1)
+    started = time.monotonic()
+    camera.set_feature("ExposureTime", 4000.0)
+    assert time.monotonic() - started >= 0.15
+    thread.join(1)

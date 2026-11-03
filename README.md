@@ -35,6 +35,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
   - [Releasing a device](#releasing-a-device)
   - [Workspaces](#workspaces)
   - [Camera feed in a custom view](#camera-feed-in-a-custom-view)
+  - [Camera features](#camera-features)
   - [Computer-vision processing](#computer-vision-processing)
   - [State Machine](#state-machine)
   - [Stop vs. Abort](#stop-vs-abort)
@@ -358,6 +359,47 @@ Then press INITIALIZE and open **Custom view**. Switch the device to `type: "sim
 
 ---
 
+## Camera features
+
+A `gige_camera` can set GenICam features from `config.yaml`. They are written at every INITIALIZE, in the order listed, after the camera connects and before its stream starts. That way, features the camera locks while streaming can be set too:
+
+```yaml
+camera:
+  type: "gige_camera"
+  cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  features:
+    PixelFormat: "BayerRG8"
+    ExposureAuto: "Off"        # before ExposureTime: an auto mode overrides manual values
+    ExposureTime: 20000.0      # µs
+    Gain: 3.0                  # dB
+```
+
+Names are the camera's own GenICam names. They are case-sensitive and vary by vendor, and the vendor's viewer (SpinView, for example) lists them. A feature the camera doesn't have, or a value it refuses, fails INITIALIZE with a message that names the feature.
+
+To change them at runtime, call these from task code, a manual action or a custom view:
+
+```python
+camera = devices["camera"]
+camera.set_feature("ExposureTime", 5000.0)
+camera.get_feature("ExposureTime")       # 5000.0
+camera.describe_feature("ExposureTime")  # {value, type, writable, min, max, inc, unit, choices}
+```
+
+- **Values are converted** to the feature's type: a whole number for an integer feature, any number for a float feature, a string for an enumeration.
+- **Features locked while streaming** (PixelFormat, Width, Height, OffsetX/Y and Binning on most cameras): `set_feature()` stops the stream, writes the value and restarts the stream. It first waits for the frame being fetched, so a `cv_process` reading the camera only skips a beat.
+- **Errors go to the caller.** You get `KeyError` for an unknown feature, and `ValueError` for a refused value or a read-only feature. They never fault the camera or the cell.
+- **A runtime change lasts until the next INITIALIZE**, which writes `features` from `config.yaml` again. Features not listed there keep whatever value the camera has.
+
+`simulated_camera` accepts the same `features:` key and methods, with three features:
+
+| Feature | Values | Effect |
+|---|---|---|
+| `ExposureTime` | µs, 100–1,000,000 (default 10000) | Scales the image brightness |
+| `Gain` | dB, 0–24 (default 0) | Scales the image brightness |
+| `PixelFormat` | `RGB8` (default) or `Mono8` | Colour or mono frames. Locked while streaming, like on a real camera |
+
+---
+
 ## Computer-vision processing
 
 A `cv_process` device runs your own analysis on the frames of a camera device. It keeps the last raw image, the last processed image and the last result for task code, the custom view and Settings > Devices.
@@ -421,7 +463,7 @@ def analyze(frame, params):
 | `video_source(kind)` | A `grab` for `hub.add_video()`, `"raw"` or `"processed"`, read from the cache rather than the camera |
 | `start()`, `stop()`, `running` | Control the continuous analysis |
 
-In a task, `devices["vision"].analyze_once()["data"]` gives fresh measurements. In a custom view:
+In a task, `devices["vision"].analyze_once()["data"]` gives fresh measurements. To tune the camera between inspections, call `devices["camera"].set_feature("ExposureTime", ...)` (see [Camera features](#camera-features)). In a custom view:
 
 ```python
 def setup(hub, devices):

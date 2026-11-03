@@ -507,3 +507,80 @@ def test_image_route_serves_a_devices_cached_images(flask_app, make_vision):
         assert client.get("/api/devices/nope/image/raw.jpg").status_code == 404
     finally:
         controller.devices.pop("vision_test", None)
+
+
+# --- Camera features (simulated camera) ---------------------------------------------------
+
+def _mean(cam):
+    return float(cam.capture_frame_8bit().mean())
+
+
+def test_simulated_exposure_and_gain_scale_the_brightness():
+    cam = SimulatedCamera(width=320, height=240, fps=1000, name="cam")
+    cam.initialize()
+    nominal = _mean(cam)
+    cam.set_feature("ExposureTime", 5000)
+    assert cam.get_feature("ExposureTime") == 5000.0
+    assert _mean(cam) == pytest.approx(nominal / 2, rel=0.1)
+    cam.set_feature("Gain", 6.0206)                        # ×2: back to nominal
+    assert _mean(cam) == pytest.approx(nominal, rel=0.1)
+
+    described = cam.describe_feature("ExposureTime")
+    assert (described["type"], described["min"], described["max"], described["unit"]) == ("IFloat", 100.0, 1e6, "us")
+    with pytest.raises(KeyError, match="no feature 'Exposure'"):
+        cam.set_feature("Exposure", 1000)
+    with pytest.raises(ValueError, match="outside 100-1000000 us"):
+        cam.set_feature("ExposureTime", 5)
+    with pytest.raises(ValueError, match="cannot take 'long'"):
+        cam.set_feature("ExposureTime", "long")
+    with pytest.raises(ValueError, match="one of RGB8, Mono8"):
+        cam.set_feature("PixelFormat", "BayerRG8")
+    assert not cam.faulted and cam.ready
+
+
+def test_simulated_pixel_format_is_locked_while_streaming():
+    cam = SimulatedCamera(width=320, height=240, fps=1000, name="cam")
+    cam.initialize()
+    assert cam.capture_frame_8bit().shape == (240, 320, 3) and cam._stream_starts == 1
+    assert cam.describe_feature("PixelFormat")["writable"] is False
+    cam.set_feature("PixelFormat", "Mono8")
+    assert cam._stream_starts == 2 and cam.streaming      # stopped, written, restarted
+    assert cam.capture_frame_8bit().shape == (240, 320)
+    cam.set_feature("Gain", 3.0)                           # not locked: no restart
+    assert cam._stream_starts == 2
+
+
+def test_simulated_config_features_apply_at_initialize():
+    cam = SimulatedCamera(width=320, height=240, name="cam",
+                          features={"PixelFormat": "Mono8", "ExposureTime": 5000})
+    cam.initialize()
+    assert cam.get_feature("PixelFormat") == "Mono8" and cam.get_feature("ExposureTime") == 5000.0
+    assert cam.info["features"] == "PixelFormat=Mono8, ExposureTime=5000"
+
+    broken = SimulatedCamera(name="broken", features={"Gain": 99})
+    with pytest.raises(RuntimeError, match="feature Gain=99: .*outside 0-24 dB"):
+        broken.initialize()
+    assert not broken.connected
+
+
+def test_features_must_be_a_mapping():
+    _, issues = validate_devices_config({
+        "sim": {"type": "simulated_camera", "features": ["ExposureTime"]},
+        "gige": {"type": "gige_camera", "cti_path": "x.cti", "features": "ExposureTime=1"},
+    })
+    errors = _errors(issues)
+    assert "'features': expected dict" in errors["sim"] and "'features': expected dict" in errors["gige"]
+
+
+def test_exposure_change_reaches_the_analysis(camera, blob_analysis):
+    vision = CVProcessDevice(camera=camera, analysis="blob_analysis:analyze",
+                             analysis_params={"threshold": 175, "min_area": 500}, name="vision")
+    try:
+        vision.initialize()
+        assert vision.analyze_once()["data"]["found"] is True
+        camera.set_feature("ExposureTime", 4000)           # the ball drops to ~75, under 175
+        assert vision.analyze_once()["data"]["found"] is False
+        camera.set_feature("ExposureTime", 10000)
+        assert vision.analyze_once()["data"]["found"] is True
+    finally:
+        vision.shutdown()
