@@ -9,10 +9,13 @@ live view or a ``cv_process`` device runs on any machine::
       camera:
         type: "simulated_camera"
         fps: 15
-        features:              # same contract as a gige_camera's
+        features:              # same contract as a gige_camera's (or features_file:)
           ExposureTime: 10000  # µs: brightness scales with it
           Gain: 0              # dB
           PixelFormat: "RGB8"  # or "Mono8"; locked while streaming, like a real camera
+
+It also has read-only Width, Height, DeviceModelName and DeviceTemperature,
+so the Features dialog shows categories, read-only rows and visibility levels.
 """
 
 from __future__ import annotations
@@ -23,14 +26,32 @@ import time
 
 import numpy as np
 
+from .CameraFeatures import VISIBILITIES, FeatureSettingsMixin
 from .Device import Device
 
-#: The simulated GenICam features: same names, types and errors as on a GigE camera.
+#: The simulated GenICam features: same names, types, categories and errors as
+#: on a GigE camera. ``default`` None means the camera fills it in (its size).
 FEATURES = {
-    "ExposureTime": {"type": "IFloat", "default": 10000.0, "min": 100.0, "max": 1_000_000.0, "unit": "us"},
-    "Gain": {"type": "IFloat", "default": 0.0, "min": 0.0, "max": 24.0, "unit": "dB"},
+    "ExposureTime": {"type": "IFloat", "default": 10000.0, "min": 100.0, "max": 1_000_000.0, "unit": "us",
+                     "category": "Acquisition Control", "display_name": "Exposure Time",
+                     "tooltip": "Exposure time in microseconds. The image brightness scales with it."},
+    "Gain": {"type": "IFloat", "default": 0.0, "min": 0.0, "max": 24.0, "unit": "dB",
+             "category": "Analog Control", "display_name": "Gain",
+             "tooltip": "Amplification of the signal, in dB: +6 dB doubles the brightness."},
     "PixelFormat": {"type": "IEnumeration", "default": "RGB8", "choices": ("RGB8", "Mono8"),
-                    "locked_while_streaming": True},
+                    "locked_while_streaming": True, "category": "Image Format Control",
+                    "display_name": "Pixel Format",
+                    "tooltip": "Format of the pixels sent. Locked while the camera streams."},
+    "Width": {"type": "IInteger", "default": None, "writable": False, "unit": "px",
+              "category": "Image Format Control", "display_name": "Width", "tooltip": "Width of the image."},
+    "Height": {"type": "IInteger", "default": None, "writable": False, "unit": "px",
+               "category": "Image Format Control", "display_name": "Height", "tooltip": "Height of the image."},
+    "DeviceModelName": {"type": "IString", "default": "Test pattern", "writable": False,
+                        "category": "Device Control", "display_name": "Device Model Name",
+                        "tooltip": "Model of the camera."},
+    "DeviceTemperature": {"type": "IFloat", "default": 38.5, "writable": False, "unit": "C",
+                          "category": "Device Control", "display_name": "Device Temperature",
+                          "tooltip": "Temperature of the sensor board.", "visibility": "Expert"},
 }
 _REFERENCE_EXPOSURE_US = 10000.0   # the exposure at which the pattern has its nominal brightness
 _LUMA = np.array([0.299, 0.587, 0.114], dtype=np.float32)
@@ -74,11 +95,12 @@ class TestPattern:
         return rgb
 
 
-class SimulatedCamera(Device):
+class SimulatedCamera(FeatureSettingsMixin, Device):
     """Hardware-free camera serving :class:`TestPattern` frames at ``fps``."""
 
     def __init__(self, width: int = 1600, height: int = 1200, fps: float = 15.0,
-                 fail_to_connect: bool = False, features: dict | None = None, name: str | None = None):
+                 fail_to_connect: bool = False, features: dict | None = None,
+                 features_file: str | None = None, name: str | None = None):
         super().__init__(device_id=name or "simulated_camera")
         if width < 2 * TestPattern.RADIUS or height < 2 * TestPattern.RADIUS:
             raise ValueError(f"width and height must be at least {2 * TestPattern.RADIUS} pixels")
@@ -86,8 +108,10 @@ class SimulatedCamera(Device):
             raise ValueError("fps must be > 0")
         self._width, self._height, self._fps = int(width), int(height), float(fps)
         self._fail_to_connect = fail_to_connect
-        self._features = dict(features or {})   # written at every INITIALIZE, in order
+        # Written at every INITIALIZE, in order (devices/CameraFeatures.py).
+        self._init_feature_settings(features, features_file)
         self._values = {name: spec["default"] for name, spec in FEATURES.items()}
+        self._values.update(Width=self._width, Height=self._height)
         self._lut: np.ndarray | None = None     # brightness lookup table, None at nominal brightness
         self._pattern = TestPattern(self._width, self._height)
         self._lock = threading.Lock()
@@ -105,7 +129,7 @@ class SimulatedCamera(Device):
             "height": self._height,
             "fps": self._fps,
             "streaming": self._streaming,
-            "features": ", ".join(f"{k}={v}" for k, v in self._features.items()) or None,
+            "features": self._features_summary(),
         }
 
     @property
@@ -135,12 +159,11 @@ class SimulatedCamera(Device):
         self._connected = True
         self._faulted = False
         self._streaming = False
-        for feature_name, value in self._features.items():
-            try:
-                self.set_feature(feature_name, value)
-            except Exception as e:
-                self._connected = False
-                raise RuntimeError(f"feature {feature_name}={value!r}: {e}") from e
+        try:
+            self._load_and_apply_features()
+        except Exception:
+            self._connected = False
+            raise
         self.logger.info(f"[{self.device_id}] Simulated camera ready ({self._width}×{self._height}, {self._fps:g} fps).")
 
     def shutdown(self) -> None:
@@ -198,6 +221,8 @@ class SimulatedCamera(Device):
         a fault. Lasts until the next INITIALIZE writes ``features`` again.
         """
         spec = self._feature_spec(feature_name)
+        if not spec.get("writable", True):
+            raise ValueError(f"feature '{feature_name}' is read-only.")
         if spec["type"] == "IFloat":
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise ValueError(f"feature '{feature_name}' (IFloat) cannot take {value!r}")
@@ -226,16 +251,31 @@ class SimulatedCamera(Device):
         return self._values[feature_name]
 
     def describe_feature(self, feature_name: str) -> dict:
-        """``{name, value, type, writable, min, max, inc, unit, choices}`` of a feature."""
+        """``{name, value, type, writable, min, max, inc, unit, choices, display_name, tooltip, visibility}``."""
         spec = self._feature_spec(feature_name)
         return {
             "name": feature_name,
             "value": self._values[feature_name],
             "type": spec["type"],
-            "writable": not (spec.get("locked_while_streaming") and self._streaming),
+            "writable": spec.get("writable", True) and not (spec.get("locked_while_streaming") and self._streaming),
+            "stream_locked": bool(spec.get("locked_while_streaming")),
             "min": spec.get("min"),
             "max": spec.get("max"),
             "inc": None,
             "unit": spec.get("unit"),
             "choices": list(spec["choices"]) if "choices" in spec else None,
+            "display_name": spec["display_name"],
+            "tooltip": spec["tooltip"],
+            "visibility": spec.get("visibility", "Beginner"),
         }
+
+    def feature_tree(self, visibility: str = "Beginner") -> list:
+        """The features up to *visibility*, by category, like ``GigECamera.feature_tree()``."""
+        limit = VISIBILITIES.index(visibility)   # ValueError for an unknown level
+        if not self._connected:
+            raise RuntimeError("Cannot read features. Camera is not connected.")
+        groups: dict = {}
+        for name, spec in FEATURES.items():
+            if VISIBILITIES.index(spec.get("visibility", "Beginner")) <= limit:
+                groups.setdefault(spec["category"], []).append(self.describe_feature(name))
+        return [{"name": category, "features": features} for category, features in groups.items()]

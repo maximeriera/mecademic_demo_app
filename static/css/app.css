@@ -1707,6 +1707,225 @@ button:active { transform: scale(0.98); }
     min-width: 100px;
 }
 
+/* --- Features dialog (Settings > Devices > Features...) --- */
+.modal-content.modal-wide {
+    width: min(96%, 1100px);
+    height: min(88vh, 900px);
+    display: flex;
+    flex-direction: column;
+}
+.features-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 16px;
+    padding: 16px 20px;
+}
+.features-heading {
+    flex: 1 1 320px;
+    min-width: 0;
+}
+.features-source {
+    margin-top: 4px;
+    color: var(--color-muted);
+    font-size: 0.8em;
+    overflow-wrap: anywhere;
+}
+.features-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+}
+.features-header-actions button:not(.link-btn) {
+    padding: 8px 14px;
+}
+.features-header-actions [hidden],
+.features-toolbar [hidden],
+.features-notice[hidden] {
+    display: none;
+}
+.features-header-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+.features-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+.features-toolbar input[type="search"],
+.features-toolbar select,
+.feature-value input[type="text"],
+.feature-value input[type="number"],
+.feature-value select {
+    padding: 7px 8px;
+    border-radius: var(--radius-control);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 0.9em;
+    box-sizing: border-box;
+}
+.features-toolbar input[type="search"] {
+    flex: 1 1 220px;
+    min-width: 0;
+}
+.features-toolbar button {
+    padding: 7px 12px;
+}
+.features-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-muted);
+    font-size: 0.85em;
+}
+.features-notice {
+    padding: 8px 20px;
+    font-size: 0.85em;
+    color: var(--color-accent-soft);
+    border-bottom: 1px solid var(--color-border);
+}
+.features-notice-error {
+    color: #ff9ba5;
+}
+.modal-body.features-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 20px 20px;
+}
+.features-group {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    margin-bottom: 8px;
+    background: rgba(255,255,255,0.02);
+}
+.features-group summary {
+    cursor: pointer;
+    padding: 9px 12px;
+    font-weight: 700;
+    font-size: 0.9em;
+}
+.features-count {
+    margin-left: 6px;
+    color: var(--color-muted);
+    font-weight: 400;
+}
+.features-rows {
+    border-top: 1px solid var(--color-border);
+}
+.feature-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 1.2fr) minmax(140px, 1fr) minmax(120px, 1fr) auto;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 8px 12px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+.feature-row:first-child {
+    border-top: none;
+}
+.feature-row.feature-pending {
+    background: rgba(255,212,71,0.05);
+}
+.feature-label {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.feature-display {
+    font-size: 0.9em;
+}
+.feature-name {
+    color: var(--color-muted);
+    font-size: 0.75em;
+    font-family: ui-monospace, Consolas, monospace;
+    overflow-wrap: anywhere;
+}
+.feature-value input[type="text"],
+.feature-value input[type="number"],
+.feature-value select {
+    width: 100%;
+}
+.feature-value input:disabled,
+.feature-value select:disabled {
+    color: var(--color-muted);
+    cursor: not-allowed;
+}
+.feature-readonly {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+.feature-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    color: var(--color-muted);
+    font-size: 0.78em;
+    font-variant-numeric: tabular-nums;
+}
+.feature-meta .badge {
+    margin-left: 0;
+}
+.feature-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+}
+.feature-actions button:not(.link-btn) {
+    padding: 6px 12px;
+    font-size: 0.78em;
+}
+.feature-actions .link-btn {
+    font-size: 0.72em;
+}
+.feature-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+.feature-error {
+    grid-column: 1 / -1;
+    color: #ff9ba5;
+    font-size: 0.8em;
+}
+@media (max-width: 700px) {
+    .modal-content.modal-wide {
+        width: 100%;
+        height: 100%;
+        height: 100dvh;
+        border-radius: 0;
+    }
+    .features-header,
+    .features-toolbar,
+    .modal-body.features-body {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+    .feature-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .feature-label,
+    .feature-meta {
+        grid-column: 1 / -1;
+    }
+    /* The input and its Apply side by side, the range and badges under them. */
+    .feature-meta {
+        order: 1;
+    }
+    .feature-error {
+        order: 2;
+    }
+}
+
 @keyframes fade-in {
     from { opacity: 0; }
     to { opacity: 1; }
@@ -2111,8 +2330,13 @@ button:active { transform: scale(0.98); }
 .device-live-error[hidden] {
     display: none;
 }
-.device-live-toggle {
+.device-live-toggle,
+.device-features-open {
     font-size: 0.75em;
+}
+.device-live-toggle-row {
+    display: flex;
+    gap: 18px;
 }
 .device-live {
     border-top: 1px solid var(--color-border);

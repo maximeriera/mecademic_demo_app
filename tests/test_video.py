@@ -154,17 +154,28 @@ def test_gige_bgr_is_swapped_to_rgb(monkeypatch):
 
 # --- GigE features ------------------------------------------------------------
 
+def _fake_inode(name, display_name, tooltip, visibility, locked):
+    """The ``node.node`` (INode) of a fake: name, display name, tooltip, visibility, pIsLocked."""
+    from types import SimpleNamespace
+    from genicam import genapi
+    properties = {"pIsLocked": ("TLParamsLocked", "")} if locked else {}
+    return SimpleNamespace(name=name, display_name=display_name or name, tooltip=tooltip,
+                           visibility=getattr(genapi.EVisibility, visibility),
+                           property_names=list(properties), get_property=lambda key: properties[key])
+
+
 class _FakeNode:
     """A GenICam node: typed, with an access mode, a range or choices."""
 
     def __init__(self, name, kind, value, log, mode="RW", lo=None, hi=None, choices=None,
-                 locked_while_streaming=False):
+                 locked_while_streaming=False, display_name=None, tooltip="", visibility="Beginner"):
         self.name, self.kind, self._value, self.log, self.mode = name, kind, value, log, mode
         self.min, self.max = lo, hi
         if choices:
             self.symbolics = list(choices)
         self.locked_while_streaming = locked_while_streaming
         self.writes = []
+        self.node = _fake_inode(name, display_name, tooltip, visibility, locked_while_streaming)
 
     def get_access_mode(self):
         from genicam import genapi
@@ -187,13 +198,34 @@ class _FakeNode:
         self._value = value
 
 
+class _FakeCategory:
+    """A GenICam category: its children are nodes or other categories."""
+
+    kind = "ICategory"
+    locked_while_streaming = False
+
+    def __init__(self, name, features, display_name=None, visibility="Beginner"):
+        self.name, self.features = name, list(features)
+        self.node = _fake_inode(name, display_name, "", visibility, False)
+
+
+class _FakeNodeMap:
+    """A node map: every node as an attribute, and get_node(name)."""
+
+    def __init__(self, nodes):
+        self.__dict__.update(nodes)
+
+    def get_node(self, name):
+        return self.__dict__.get(name)
+
+
 class _FakeAcquirer:
     """ImageAcquirer stand-in: start/stop lock some nodes, like TLParamsLocked does."""
 
     def __init__(self, nodes, log):
         from types import SimpleNamespace
         self.nodes, self.log = nodes, log
-        self.remote_device = SimpleNamespace(node_map=SimpleNamespace(**nodes))
+        self.remote_device = SimpleNamespace(node_map=_FakeNodeMap(nodes))
 
     def _lock(self, mode):
         for node in self.nodes.values():
@@ -220,13 +252,31 @@ def gige_features(tmp_path, monkeypatch):
     monkeypatch.setattr(gigE_vision, "_node_type", lambda node: node.kind)
     log = []   # node writes, stream starts/stops and disconnects, in order
     nodes = {node.name: node for node in (
-        _FakeNode("ExposureAuto", "IEnumeration", "Continuous", log, choices=("Off", "Continuous")),
-        _FakeNode("ExposureTime", "IFloat", 10000.0, log, lo=10.0, hi=1e6),
-        _FakeNode("Width", "IInteger", 1600, log, lo=16, hi=1600),
+        _FakeNode("ExposureAuto", "IEnumeration", "Continuous", log, choices=("Off", "Continuous"),
+                  display_name="Exposure Auto"),
+        _FakeNode("ExposureTime", "IFloat", 10000.0, log, lo=10.0, hi=1e6, display_name="Exposure Time",
+                  tooltip="Exposure time in microseconds."),
+        _FakeNode("Width", "IInteger", 1600, log, lo=16, hi=1600, locked_while_streaming=True),
         _FakeNode("PixelFormat", "IEnumeration", "BayerRG8", log, choices=("BayerRG8", "Mono8"),
                   locked_while_streaming=True),
-        _FakeNode("DeviceTemperature", "IFloat", 41.5, log, mode="RO"),
+        _FakeNode("OffsetX", "IInteger", 0, log, lo=0, hi=800, visibility="Expert"),
+        _FakeNode("DeviceTemperature", "IFloat", 41.5, log, mode="RO", visibility="Expert"),
+        _FakeNode("AcquisitionStart", "ICommand", None, log),
+        _FakeNode("BinningUnavailable", "IInteger", 1, log, mode="NA"),
+        _FakeNode("DeviceRegister", "IRegister", b"", log),
+        _FakeNode("Secret", "IInteger", 7, log),
     )}
+    nodes["Root"] = _FakeCategory("Root", [
+        _FakeCategory("AcquisitionControl", [nodes[n] for n in ("ExposureAuto", "ExposureTime", "AcquisitionStart",
+                                                                "BinningUnavailable")],
+                      display_name="Acquisition Control"),
+        _FakeCategory("ImageFormatControl", [nodes["Width"], nodes["PixelFormat"],
+                                             _FakeCategory("Region", [nodes["OffsetX"]])],
+                      display_name="Image Format Control"),
+        _FakeCategory("DeviceControl", [nodes["DeviceTemperature"], nodes["DeviceRegister"]],
+                      display_name="Device Control"),
+        _FakeCategory("Hidden", [nodes["Secret"]], visibility="Invisible"),
+    ])
 
     cti = tmp_path / "fake.cti"
     cti.write_bytes(b"")
@@ -323,3 +373,36 @@ def test_gige_set_feature_waits_for_the_frame_being_fetched(gige_features):
     camera.set_feature("ExposureTime", 4000.0)
     assert time.monotonic() - started >= 0.15
     thread.join(1)
+
+
+def test_gige_feature_tree_groups_filters_and_describes(gige_features):
+    camera = gige_features()
+    camera.initialize()
+
+    def names(tree):
+        return {group["name"]: [f["name"] for f in group["features"]] for group in tree}
+
+    # Commands, registers, unavailable and invisible nodes never show; Expert ones only from Expert.
+    assert names(camera.feature_tree("Beginner")) == {
+        "Acquisition Control": ["ExposureAuto", "ExposureTime"],
+        "Image Format Control": ["Width", "PixelFormat"],
+    }
+    assert names(camera.feature_tree("Expert")) == {
+        "Acquisition Control": ["ExposureAuto", "ExposureTime"],
+        "Image Format Control": ["Width", "PixelFormat"],
+        "Image Format Control / Region": ["OffsetX"],
+        "Device Control": ["DeviceTemperature"],
+    }
+    with pytest.raises(ValueError):
+        camera.feature_tree("Wizard")
+
+    features = {f["name"]: f for g in camera.feature_tree("Expert") for f in g["features"]}
+    exposure = features["ExposureTime"]
+    assert (exposure["display_name"], exposure["tooltip"], exposure["visibility"]) == \
+        ("Exposure Time", "Exposure time in microseconds.", "Beginner")
+    assert exposure["writable"] and not exposure["stream_locked"]
+    assert features["DeviceTemperature"]["writable"] is False and features["DeviceTemperature"]["visibility"] == "Expert"
+
+    camera.start_stream()
+    pixel_format = camera.describe_feature("PixelFormat")
+    assert pixel_format["writable"] is False and pixel_format["stream_locked"] is True   # Apply restarts the stream

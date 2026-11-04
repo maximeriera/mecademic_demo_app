@@ -500,6 +500,7 @@ def _device_info_list():
             entry['supports_reconnect'] = bool(getattr(dev, 'supports_reconnect', False))
             entry['supports_monitoring'] = bool(getattr(dev, 'supports_monitoring', False))
             entry['has_live_data'] = bool(getattr(dev, 'has_live_data', False))
+            entry['has_settings'] = bool(getattr(dev, 'has_settings', False))
         info_list.append(entry)
     # Produced at 1 Hz; log only when device health actually changes.
     _log_device_health_change(info_list)
@@ -626,6 +627,60 @@ def device_image(device_id, name):
         'Cache-Control': 'no-cache, no-store',
         'Content-Disposition': f'inline; filename="{secure_filename(f"{device_id}_{name}")}.jpg"',
     })
+
+
+def _settings_response(result):
+    """Map a controller settings result to an HTTP response: 404 unknown, 400 bad value, 409 refused."""
+    if result.get('success'):
+        return jsonify(_jsonable(result)), 200
+    if str(result.get('message', '')).startswith('Unknown device'):
+        return jsonify(result), 404
+    status = 400 if result.pop('bad_request', False) else 409
+    return jsonify(result), status
+
+
+def _settings_call(method, *args):
+    handler = getattr(APPLICATION, method, None)
+    if handler is None:
+        return jsonify({'message': 'Controller failed to start; see app.log.', 'success': False}), 409
+    return _settings_response(handler(*args))
+
+
+@app.route('/api/devices/<device_id>/settings', methods=['GET'])
+def get_device_settings(device_id):
+    """A device's settings by category (Features dialog): ``?visibility=Beginner|Expert|Guru``."""
+    return _settings_call('get_device_settings', device_id, request.args.get('visibility', 'Beginner'))
+
+
+@app.route('/api/devices/<device_id>/settings', methods=['POST'])
+def write_device_setting(device_id):
+    """Apply one setting now, unsaved: ``{"name": "ExposureTime", "value": 5000}``."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    if not name or 'value' not in payload:
+        return jsonify({'message': "Payload needs 'name' and 'value'.", 'success': False}), 400
+    return _settings_call('write_device_setting', device_id, name, payload['value'])
+
+
+@app.route('/api/devices/<device_id>/settings/forget', methods=['POST'])
+def forget_device_setting(device_id):
+    """Drop a saved setting on the next save: ``{"name": "Gain"}``."""
+    name = str((request.get_json(silent=True) or {}).get('name') or '').strip()
+    if not name:
+        return jsonify({'message': "Payload needs 'name'.", 'success': False}), 400
+    return _settings_call('forget_device_setting', device_id, name)
+
+
+@app.route('/api/devices/<device_id>/settings/save', methods=['POST'])
+def save_device_settings(device_id):
+    """Write the unsaved settings (a camera's features_file) for the next INITIALIZE."""
+    return _settings_call('save_device_settings', device_id)
+
+
+@app.route('/api/devices/<device_id>/settings/discard', methods=['POST'])
+def discard_device_settings(device_id):
+    """Put the unsaved settings back on the device."""
+    return _settings_call('discard_device_settings', device_id)
 
 
 @app.route('/api/system', methods=['GET'])

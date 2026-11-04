@@ -392,13 +392,52 @@ camera.describe_feature("ExposureTime")  # {value, type, writable, min, max, inc
 - **Errors go to the caller.** You get `KeyError` for an unknown feature, and `ValueError` for a refused value or a read-only feature. They never fault the camera or the cell.
 - **A runtime change lasts until the next INITIALIZE**, which writes `features` from `config.yaml` again. Features not listed there keep whatever value the camera has.
 
-`simulated_camera` accepts the same `features:` key and methods, with three features:
+### A features file the app writes
+
+To tune features from the UI and keep them, point the camera at a features file instead of listing `features:`:
+
+```yaml
+camera:
+  type: "gige_camera"
+  cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  features_file: "camera_features.yaml"   # next to config.yaml; created by the first Save
+```
+
+The file is a plain mapping of feature to value, applied in its order at every INITIALIZE, like `features:`. The app writes it with a generated header, so comments you add are not kept:
+
+```yaml
+# Features of `camera`, written by the app (Settings > Devices > camera > Features > Save).
+# Applied in this order at every INITIALIZE. Edit it by hand, then INITIALIZE to reload it.
+ExposureAuto: 'Off'
+ExposureTime: 20000.0
+```
+
+- **One source per camera.** Setting both `features` and `features_file` is a config error. With inline `features:`, the dialog can apply changes but not save them.
+- **The file is read at every INITIALIZE**, so a hand edit takes effect at the next INITIALIZE. A missing file means no features. Invalid YAML, or a feature the camera refuses, fails INITIALIZE with the file and feature named.
+- **Hand edits are never overwritten.** If the file changed on disk since INITIALIZE read it, Save is refused until you INITIALIZE or Discard.
+- **Docker:** keep the file inside `app_logic/`, the folder docker-compose mounts. A file elsewhere in the container is lost when the container is recreated.
+
+### The Features dialog
+
+Settings > Devices > *camera* > **Features…** lists every feature the camera exposes, grouped by its GenICam categories:
+
+- **Filter** with the search box (name or display name), the visibility level (Beginner, Expert, Guru; your choice is remembered in the browser), and **Writable only**. **Refresh** reads the camera again.
+- **Apply** writes the camera at once; the row is marked *unsaved*. Features the camera locks while streaming are tagged *stream restart*: Apply stops the stream, writes the value and restarts the stream.
+- **Save** writes every unsaved change to the features file. An updated feature keeps its place; a new one goes last, in the order you applied them, so applying `ExposureAuto: Off` before `ExposureTime` keeps that order in the file.
+- **Discard** puts the unsaved features back to their saved value, or to the value they had before. **Forget** removes a saved feature from the file on the next Save; the camera keeps its current value.
+- **Unsaved changes stay on the server**, so closing the dialog loses nothing. INITIALIZE drops them and re-applies the file.
+- **Locked while a task runs**, like the Variables tab and the I/O switches.
+
+The dialog reads the camera only when it opens, after each action and on Refresh: each feature is one read over the camera's control channel, so it is never polled. Commands (AcquisitionStart, UserSetSave…) are not listed, because running them from a browser can stop the acquisition or overwrite the camera's saved settings.
+
+`simulated_camera` accepts the same `features:` and `features_file:` keys and the same methods and dialog:
 
 | Feature | Values | Effect |
 |---|---|---|
 | `ExposureTime` | µs, 100–1,000,000 (default 10000) | Scales the image brightness |
 | `Gain` | dB, 0–24 (default 0) | Scales the image brightness |
 | `PixelFormat` | `RGB8` (default) or `Mono8` | Colour or mono frames. Locked while streaming, like on a real camera |
+| `Width`, `Height`, `DeviceModelName`, `DeviceTemperature` | read-only | Shown in the dialog (`DeviceTemperature` at Expert visibility) |
 
 ---
 
@@ -745,6 +784,7 @@ A driver only needed by one workspace can stay in that workspace and use `type: 
 | `telemetry()` → `dict` | Values for the Live panel. It is polled from a web thread, so use cached values or the driver's own lock. |
 | `io_points()` → `[{name, kind, value, writable}]`, `write_io(name, value)` | I/O points for the Live panel. `kind` is `di`, `do`, `ai` or `ao`. |
 | `images()` → `[name, ...]`, `get_image(name)` → NumPy array or `None` | Thumbnails for the Live panel, served at `/api/devices/<id>/image/<name>.jpg`. Return a cached frame; never grab one from the hardware here. |
+| `settings(visibility)`, `write_setting()`, `save_settings()`, `discard_settings()`, `forget_setting()` | The Features dialog. Cameras get them from `devices/CameraFeatures.py` (`FeatureSettingsMixin`), which only needs `set_feature`, `get_feature`, `describe_feature` and `feature_tree`. |
 
 ---
 
@@ -846,6 +886,7 @@ devices/
     SimulatedCamera.py        # Hardware-free camera (moving test pattern)
     GigEVisionDevice.py       # GigE Vision camera (harvesters / GenTL)
     CVProcessDevice.py        # Computer-vision analysis on a camera's frames
+    CameraFeatures.py         # Camera features: features_file, Apply / Save / Discard (Features dialog)
     MecaRobot.py              # Mecademic robot (mecademicpy)
     Asyril.py                 # Asyril Eye+ intelligent feeder
     PlanarMotor.py            # Planar motor system
@@ -905,9 +946,14 @@ logs/
 | `POST` | `/api/devices/<id>/clear_fault` | Clear one device's fault |
 | `GET` | `/api/devices/<id>/live` | Telemetry, I/O points and the images the device serves |
 | `GET` | `/api/devices/<id>/image/<name>.jpg` | Latest image of a device (a `cv_process`'s `raw` or `processed`) as a JPEG; `?w=` caps the width (default 480, max 1920). 503 until the first frame |
+| `GET` | `/api/devices/<id>/settings?visibility=Beginner` | A camera's features by category, each with its saved and unsaved state (the Features dialog). `visibility`: `Beginner`, `Expert` or `Guru` |
+| `POST` | `/api/devices/<id>/settings` | Apply one feature now, unsaved: `{"name": "ExposureTime", "value": 5000}`. 400 for a refused value, 409 while a task runs |
+| `POST` | `/api/devices/<id>/settings/save` | Write the unsaved features to the camera's `features_file` |
+| `POST` | `/api/devices/<id>/settings/discard` | Put the unsaved features back on the camera |
+| `POST` | `/api/devices/<id>/settings/forget` | Remove a saved feature from the file on the next save: `{"name": "Gain"}` |
 | `POST` | `/api/devices/<id>/io` | Set a writable point: `{"name": "do3", "value": true}`. 409 while a task runs or the device is released |
 
-`/api/info` entries also carry `link` (`control` / `monitoring` / `disconnected`), `detached`, `in_transition`, `supports_reconnect`, `supports_monitoring` and `has_live_data`.
+`/api/info` entries also carry `link` (`control` / `monitoring` / `disconnected`), `detached`, `in_transition`, `supports_reconnect`, `supports_monitoring`, `has_live_data` and `has_settings`.
 
 ### Tasks
 

@@ -25,8 +25,12 @@ class CameraConnectionError(RuntimeError):
     """Raised when a camera connection attempt fails."""
 
 
-#: GenICam node interfaces, in the order a node is matched against them.
-_NODE_TYPES = ("IBoolean", "IInteger", "IFloat", "IEnumeration", "IString", "ICommand")
+#: GenICam node interfaces, in the order a node is matched against them. The
+#: first five are the value features the app reads and writes.
+_NODE_TYPES = ("IBoolean", "IInteger", "IFloat", "IEnumeration", "IString", "ICommand", "ICategory")
+_VALUE_TYPES = _NODE_TYPES[:5]
+#: GenICam visibility levels, from fewest features to most ("Invisible" is never shown).
+_VISIBILITIES = ("Beginner", "Expert", "Guru", "Invisible")
 
 
 def _node_type(node) -> str:
@@ -35,7 +39,36 @@ def _node_type(node) -> str:
         cls = getattr(genapi, name, None)
         if cls is not None and isinstance(node, cls):
             return name
+    try:   # an untyped node: its principal interface says what it is
+        interface = node.node.principal_interface_type
+    except Exception:
+        return type(node).__name__
+    for name in _NODE_TYPES:
+        if interface == getattr(genapi.EInterfaceType, f"intf{name}", None):
+            return name
     return type(node).__name__
+
+
+def _node_info(node, feature_name: str) -> dict:
+    """``{display_name, tooltip, visibility}`` of a node, with fallbacks for nodes without them."""
+    info = {"display_name": feature_name, "tooltip": "", "visibility": "Beginner"}
+    inode = getattr(node, "node", None)
+    if inode is None:
+        return info
+    try:
+        info["display_name"] = inode.display_name or feature_name
+    except Exception:
+        pass
+    try:
+        info["tooltip"] = inode.tooltip or ""
+    except Exception:
+        pass
+    try:
+        visibility = inode.visibility
+        info["visibility"] = next(v for v in _VISIBILITIES if visibility == getattr(genapi.EVisibility, v))
+    except Exception:
+        pass
+    return info
 
 
 def _access(node, *modes: str) -> bool:
@@ -45,6 +78,23 @@ def _access(node, *modes: str) -> bool:
     except Exception:
         return True  # no access information: let the write itself decide
     return any(mode == getattr(genapi.EAccessMode, m) for m in modes)
+
+
+def _stream_locked(node) -> bool:
+    """True if the camera can lock this feature (``pIsLocked``, usually TLParamsLocked while streaming).
+
+    That is what tells a feature locked by the stream, which ``set_feature``
+    writes with the stream stopped, from one that is read-only for good.
+    """
+    try:
+        inode = node.node
+        if "pIsLocked" not in list(inode.property_names):
+            return False
+        prop = inode.get_property("pIsLocked")
+    except Exception:
+        return False
+    value = prop[0] if isinstance(prop, (tuple, list)) and prop else prop
+    return bool(str(value or "").strip())
 
 
 def _coerce(feature_name: str, node, value):
@@ -59,7 +109,7 @@ def _coerce(feature_name: str, node, value):
         return float(value)
     if kind in ("IEnumeration", "IString") and isinstance(value, str):
         return value
-    if kind not in _NODE_TYPES[:5]:
+    if kind not in _VALUE_TYPES:
         return value  # an interface we do not know: hand the value over as is
     raise ValueError(f"feature '{feature_name}' ({kind}) cannot take {value!r}")
 
@@ -214,15 +264,17 @@ class GigECamera:
         return _access(self._node(feature_name), "RW", "WO")
 
     def describe_feature(self, feature_name: str) -> dict:
-        """``{name, value, type, writable, min, max, inc, unit, choices}`` of a feature.
+        """``{name, value, type, writable, stream_locked, min, max, inc, unit, choices, display_name, tooltip, visibility}``.
 
         Entries the node does not have are None; ``choices`` lists an
-        enumeration's values.
+        enumeration's values. ``stream_locked``: the camera may lock it while
+        streaming, so ``writable`` False does not mean read-only for good.
         """
         node = self._node(feature_name)
         info = {"name": feature_name, "value": None, "type": _node_type(node),
-                "writable": _access(node, "RW", "WO"),
-                "min": None, "max": None, "inc": None, "unit": None, "choices": None}
+                "writable": _access(node, "RW", "WO"), "stream_locked": _stream_locked(node),
+                "min": None, "max": None, "inc": None, "unit": None, "choices": None,
+                **_node_info(node, feature_name)}
         if _access(node, "RW", "RO"):
             try:
                 info["value"] = node.value
@@ -239,6 +291,50 @@ class GigECamera:
             except Exception:
                 pass
         return info
+
+    def feature_tree(self, visibility: str = "Beginner") -> list:
+        """Every value feature up to *visibility*, by category: ``[{name, features: [describe...]}]``.
+
+        Walks the camera's GenICam ``Root`` category. Nested categories become
+        "Parent / Child" groups. Commands, registers, ports and features the
+        camera does not implement or offer right now are left out. Reading
+        every feature is one control-channel read each: fetch it on demand,
+        never on a timer.
+        """
+        if not self._is_connected:
+            raise RuntimeError("Cannot read features. Camera is not connected.")
+        limit = _VISIBILITIES.index(visibility)   # ValueError for an unknown level
+        groups: list = []
+
+        def shown(child, name) -> bool:
+            level = _node_info(child, name)["visibility"]
+            return level != "Invisible" and _VISIBILITIES.index(level) <= limit
+
+        def walk(category, path):
+            features, subcategories = [], []
+            for child in category.features:
+                try:
+                    name = child.node.name
+                except Exception:
+                    continue
+                if not shown(child, name):
+                    continue
+                kind = _node_type(child)
+                if kind == "ICategory":
+                    subcategories.append((child, name))
+                elif kind in _VALUE_TYPES and _access(child, "RW", "RO", "WO"):
+                    try:
+                        features.append(self.describe_feature(name))
+                    except Exception as e:   # one odd node must not hide the others
+                        logger.debug(f"Feature '{name}' left out of the tree: {e}")
+            if features:
+                groups.append({"name": " / ".join(path) or "Root", "features": features})
+            for child, name in subcategories:
+                walk(child if hasattr(child, "features") else self._node(name),
+                     path + [_node_info(child, name)["display_name"]])
+
+        walk(self.ia.remote_device.node_map.get_node("Root"), [])
+        return groups
 
     def start_stream(self):
         """Allocates host buffers and tells the camera to begin transmitting data."""

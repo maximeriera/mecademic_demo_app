@@ -23,6 +23,8 @@ devices:
   #     ExposureAuto: "Off"        # before ExposureTime: an auto mode overrides it
   #     ExposureTime: 20000.0      # µs
   #     Gain: 0.0                  # dB
+  #   # Or, to tune them from Settings > Devices > camera > Features... and Save:
+  #   features_file: "camera_features.yaml"
 
   # No camera at hand? Replace the entry above with this one: a moving test
   # pattern whose green ball blob_analysis finds with the params below.
@@ -31,6 +33,7 @@ devices:
     fps: 60
     # features:
     #   ExposureTime: 4000         # µs (default 10000): too dark for threshold 175
+    # features_file: "camera_features.yaml"   # instead of features:, to Save from the UI
 
   vision:
     type: "cv_process"

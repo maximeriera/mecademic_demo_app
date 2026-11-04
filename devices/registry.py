@@ -31,6 +31,7 @@ object, and the controller brings the other device up first and down last.
 from __future__ import annotations
 
 import difflib
+import os
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Dict, List, Tuple
@@ -54,8 +55,9 @@ class Param:
 
     ``type`` is one of ``str``, ``int``, ``float``, ``bool``, ``list``,
     ``dict``, ``int_list`` (an int or a list of ints), ``device`` (the name
-    of another device in the config) or ``any``. A ``None`` default makes
-    the key optional and nullable.
+    of another device in the config), ``path`` (a file path, relative ones
+    resolved against the config.yaml folder) or ``any``. A ``None`` default
+    makes the key optional and nullable.
     """
     type: str
     default: Any = REQUIRED
@@ -75,6 +77,8 @@ class DeviceSpec:
     params: Dict[str, Param] = field(default_factory=dict)
     aliases: Tuple[str, ...] = ()
     doc: str = ""
+    #: Groups of keys an entry may set only one of, e.g. ``(("features", "features_file"),)``.
+    exclusive: Tuple[Tuple[str, ...], ...] = ()
 
     def load(self):
         module_name, _, class_name = self.target.partition(":")
@@ -150,6 +154,10 @@ def _coerce(param: Param, value: Any) -> Any:
     if kind == "str":
         if isinstance(value, (str, int, float)) and not isinstance(value, bool):
             return str(value)
+    elif kind == "path":
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        raise ValueError(f"expected a file path, got {value!r}")
     elif kind == "device":
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -212,7 +220,7 @@ def _suggest(word: str, candidates) -> str:
     return f" (did you mean '{match[0]}'?)" if match else ""
 
 
-def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str, str]]]:
+def validate_devices_config(raw: Any, base_dir: str | None = None) -> Tuple[List[DeviceEntry], List[Dict[str, str]]]:
     """Validate a ``devices:`` block.
 
     Returns ``(entries, issues)``. Entries with an error are left out; an
@@ -220,7 +228,8 @@ def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str,
     ``{"device", "level": "error" | "warning", "message"}``. An entry whose
     ``device`` key names a missing, disabled or invalid device is an error
     too, and so is a dependency cycle: the entries returned can always be
-    created in :func:`dependency_order`.
+    created in :func:`dependency_order`. Relative ``path`` values are
+    resolved against *base_dir* (the config.yaml folder).
     """
     entries: List[DeviceEntry] = []
     issues: List[Dict[str, str]] = []
@@ -289,7 +298,15 @@ def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str,
                 issue(name, "error", f"'{key}' must be one of {choices}, got {coerced!r}.")
                 failed = True
                 continue
+            if param.type == "path" and coerced is not None and base_dir and not os.path.isabs(coerced):
+                coerced = os.path.normpath(os.path.join(base_dir, coerced))
             kwargs[key] = coerced
+
+        for group in spec.exclusive:
+            given = [key for key in group if settings.get(key) is not None]
+            if len(given) > 1:
+                issue(name, "error", "use either " + " or ".join(f"'{key}'" for key in given) + ", not both.")
+                failed = True
 
         for key, param in spec.params.items():
             if key in kwargs or key in settings:
@@ -480,8 +497,10 @@ register_device(DeviceSpec(
         "camera_index": _p("int", 0),
         "autostart_stream": _p("bool", False),
         "features": _p("dict", None, "GenICam features set at every INITIALIZE, in order"),
+        "features_file": _p("path", None, "YAML of features the app reads at INITIALIZE and writes on Save"),
     },
     doc="GigE Vision camera (harvesters).",
+    exclusive=(("features", "features_file"),),
 ))
 register_device(DeviceSpec(
     "simulated_camera", "devices.SimulatedCamera:SimulatedCamera",
@@ -491,9 +510,11 @@ register_device(DeviceSpec(
         "fps": _p("float", 15.0, "frame rate ceiling"),
         "fail_to_connect": _p("bool", False),
         "features": _p("dict", None, "ExposureTime, Gain, PixelFormat, set at every INITIALIZE"),
+        "features_file": _p("path", None, "YAML of features the app reads at INITIALIZE and writes on Save"),
     },
     aliases=("test_pattern_camera",),
     doc="Hardware-free camera serving a moving test pattern.",
+    exclusive=(("features", "features_file"),),
 ))
 register_device(DeviceSpec(
     "cv_process", "devices.CVProcessDevice:CVProcessDevice",

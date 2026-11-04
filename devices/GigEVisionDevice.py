@@ -5,6 +5,7 @@ import threading
 
 import numpy as np
 
+from .CameraFeatures import FeatureSettingsMixin
 from .Device import Device
 from .api.gigE_vision import GigECamera
 
@@ -31,7 +32,7 @@ def _debayer_half(raw: np.ndarray, pattern: str) -> np.ndarray:
     return np.dstack((red, green, blue))
 
 
-class GigEVisionDevice(Device):
+class GigEVisionDevice(FeatureSettingsMixin, Device):
     """Device wrapper around the low-level GigECamera transport class."""
 
     def __init__(
@@ -40,6 +41,7 @@ class GigEVisionDevice(Device):
         camera_index: int = 0,
         autostart_stream: bool = False,
         features: dict | None = None,
+        features_file: str | None = None,
         name: str | None = None,
     ):
         if name is None:
@@ -49,8 +51,8 @@ class GigEVisionDevice(Device):
         self._cti_path = cti_path
         self._camera_index = camera_index
         self._autostart_stream = autostart_stream
-        #: GenICam features written at every INITIALIZE, in this order.
-        self._features = dict(features or {})
+        # GenICam features written at every INITIALIZE, in order (devices/CameraFeatures.py).
+        self._init_feature_settings(features, features_file)
 
         self._api: GigECamera | None = None
         self._connected = False
@@ -81,7 +83,7 @@ class GigEVisionDevice(Device):
             "faulted": self._faulted,
             "model": model,
             "serial_number": serial,
-            "features": ", ".join(f"{k}={v}" for k, v in self._features.items()) or None,
+            "features": self._features_summary(),
         }
 
     @property
@@ -112,10 +114,19 @@ class GigEVisionDevice(Device):
         self._ensure_api()
         try:
             self._api.connect()
-            self._apply_config_features()
-            self._connected = True
-            self._faulted = False
+            # A re-INITIALIZE finds the stream running: features go in with it stopped.
+            self._api.stop_stream()
             self._streaming = False
+            self._connected = True   # set_feature() needs it; undone below on failure
+            try:
+                self._load_and_apply_features()
+            except Exception:
+                try:
+                    self._api.disconnect()
+                except Exception:
+                    pass
+                raise
+            self._faulted = False
             if self._autostart_stream:
                 self.start_stream()
             self.logger.info(f"[{self.device_id}] GigE camera initialized.")
@@ -124,20 +135,6 @@ class GigEVisionDevice(Device):
             self._streaming = False
             self._faulted = True
             raise
-
-    def _apply_config_features(self):
-        """Write ``features`` in config order, before the stream starts (so locked ones work too)."""
-        for feature_name, value in self._features.items():
-            try:
-                self._api.set_feature(feature_name, value)
-            except Exception as e:
-                try:
-                    self._api.disconnect()
-                except Exception:
-                    pass
-                raise RuntimeError(f"feature {feature_name}={value!r}: {e}") from e
-        if self._features:
-            self.logger.info(f"[{self.device_id}] Features set: {', '.join(self._features)}.")
 
     def shutdown(self):
         if not self._api:
@@ -263,7 +260,13 @@ class GigEVisionDevice(Device):
         return self._api.get_feature(feature_name)
 
     def describe_feature(self, feature_name: str) -> dict:
-        """``{name, value, type, writable, min, max, inc, unit, choices}`` of a feature."""
+        """``{name, value, type, writable, min, max, inc, unit, choices, display_name, tooltip, visibility}``."""
         if not self._api or not self._connected:
             raise RuntimeError("Cannot read feature. Camera is not connected.")
         return self._api.describe_feature(feature_name)
+
+    def feature_tree(self, visibility: str = "Beginner") -> list:
+        """Every value feature up to *visibility*, by GenICam category (commands are left out)."""
+        if not self._api or not self._connected:
+            raise RuntimeError("Cannot read features. Camera is not connected.")
+        return self._api.feature_tree(visibility)

@@ -102,7 +102,9 @@ class ApplicationController:
         self._last_not_ready_device_id: str | None = None
         
         self.logger.info(f"Loading controller config from: {config_path}")
-        self.config: Dict = ApplicationController.get_devices_config(config_path) 
+        self.config: Dict = ApplicationController.get_devices_config(config_path)
+        #: Folder of config.yaml: relative device paths (features_file...) resolve against it.
+        self._config_dir = os.path.dirname(os.path.abspath(config_path))
         self.devices: Dict[str, Device] = {}
         #: device_id -> the devices it links to (``device`` keys in config.yaml).
         self._device_deps: Dict[str, tuple] = {}
@@ -327,7 +329,7 @@ class ApplicationController:
         Linked devices are created after the devices they name, but
         :attr:`devices` keeps the config order, which is what the UI lists.
         """
-        entries, issues = validate_devices_config(self.config.get('devices'))
+        entries, issues = validate_devices_config(self.config.get('devices'), base_dir=self._config_dir)
         by_name = {entry.name: entry for entry in entries}
         self._device_deps = {entry.name: entry.depends_on for entry in entries if entry.depends_on}
         created: Dict[str, Device] = {}
@@ -900,6 +902,95 @@ class ApplicationController:
         self.logger.info(f"I/O write from UI: {device_id}.{name} = {value!r}")
         shown = ("ON" if value else "OFF") if isinstance(value, bool) else value
         return {"success": True, "message": f"{device_id}.{name} set to {shown}."}
+
+    # --- Device settings (the Features dialog) ---
+
+    def _settings_refusal_locked(self, device_id: str, writing: bool) -> str | None:
+        """Why a settings read or write on *device_id* may not run now, or None. Caller holds _command_lock."""
+        device = self.devices.get(device_id)
+        if device is None:
+            return f"Unknown device '{device_id}'."
+        if not device.has_settings:
+            return f"{device_id} has no settings."
+        if device_id in self._in_transition:
+            return f"{device_id} is connecting or disconnecting."
+        if writing:
+            reason = self._link_refusal_locked(device_id)
+            if reason:
+                return reason
+            if device_id in self._detached:
+                return f"{device_id} is released. Connect it first."
+        if not device.connected:
+            return f"{device_id} is not connected. Press INITIALIZE first."
+        return None
+
+    @staticmethod
+    def _error_text(error: Exception) -> str:
+        # str(KeyError("x")) is "'x'": show the message itself.
+        return str(error.args[0]) if isinstance(error, KeyError) and error.args else str(error)
+
+    def get_device_settings(self, device_id: str, visibility: str = "Beginner") -> Dict[str, Any]:
+        """The device's settings tree for the Features dialog, with why writes are locked (or None)."""
+        with self._command_lock:
+            reason = self._settings_refusal_locked(device_id, writing=False)
+            locked = None if reason else self._settings_refusal_locked(device_id, writing=True)
+        if reason:
+            return {"success": False, "message": reason}
+        try:
+            data = self.devices[device_id].settings(visibility)
+        except ValueError as e:
+            return {"success": False, "message": self._error_text(e), "bad_request": True}
+        except Exception as e:
+            self.logger.warning(f"Reading the settings of {device_id} failed: {e}", exc_info=True)
+            return {"success": False, "message": f"Could not read the settings: {e}"}
+        return {"success": True, "locked": locked, **data}
+
+    def _device_settings_action(self, device_id: str, label: str, action) -> Dict[str, Any]:
+        """Run *action(device)* under the write refusal rules; errors are reported, never raised."""
+        with self._command_lock:
+            reason = self._settings_refusal_locked(device_id, writing=True)
+        if reason:
+            return {"success": False, "message": reason}
+        try:
+            result = action(self.devices[device_id]) or {}
+        except (ValueError, KeyError, NotImplementedError) as e:
+            return {"success": False, "message": self._error_text(e), "bad_request": True}
+        except Exception as e:
+            self.logger.warning(f"{label} on {device_id} failed: {e}", exc_info=True)
+            return {"success": False, "message": f"{label} failed: {e}"}
+        return {"success": True, **result}
+
+    def write_device_setting(self, device_id: str, name: str, value: Any) -> Dict[str, Any]:
+        """Apply one setting now (it stays unsaved). Refused while a task runs."""
+        result = self._device_settings_action(device_id, "Apply", lambda d: d.write_setting(name, value))
+        if result["success"]:
+            self.logger.info(f"Setting from UI: {device_id}.{name} = {result.get('value', value)!r}")
+            result["message"] = f"{name} set to {result.get('value', value)}."
+        return result
+
+    def forget_device_setting(self, device_id: str, name: str) -> Dict[str, Any]:
+        """Mark a saved setting for removal on the next save."""
+        result = self._device_settings_action(device_id, "Forget", lambda d: d.forget_setting(name))
+        if result["success"]:
+            result["message"] = f"{name} leaves the file on the next Save."
+        return result
+
+    def save_device_settings(self, device_id: str) -> Dict[str, Any]:
+        """Write the unsaved settings for the next INITIALIZE."""
+        result = self._device_settings_action(device_id, "Save", lambda d: d.save_settings())
+        if result["success"]:
+            result["message"] = (f"{result['saved']} change(s) saved to {os.path.basename(result['file'])}."
+                                 if result.get("saved") else "Nothing to save.")
+        return result
+
+    def discard_device_settings(self, device_id: str) -> Dict[str, Any]:
+        """Undo the unsaved settings on the device."""
+        result = self._device_settings_action(device_id, "Discard", lambda d: d.discard_settings())
+        if result["success"]:
+            failed = result.get("failed") or []
+            result["message"] = (f"{result.get('discarded', 0)} change(s) discarded."
+                                 + (f" Could not restore: {'; '.join(failed)}" if failed else ""))
+        return result
 
     def _attached_devices(self) -> list[Device]:
         """Devices the cell currently owns: every device that is not detached."""

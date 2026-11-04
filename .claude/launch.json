@@ -20,6 +20,13 @@
       "runtimeArgs": ["app.py", "--host", "127.0.0.1", "--port", "5057",
                       "--workspace", "C:/Users/mriera/AppData/Local/Temp/claude/C--Users-mriera-dev-ws-mecademic-demo-mecademic-demo-app/c3db0a9b-5c4b-4d2c-8e30-6d974d78ac35/scratchpad/cv_sim"],
       "port": 5057
+    },
+    {
+      "name": "cv-features",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["app.py", "--host", "127.0.0.1", "--port", "5058",
+                      "--workspace", "C:/Users/mriera/AppData/Local/Temp/claude/d0cbd1539ef6b214/c3db0a9b-5c4b-4d2c-8e30-6d974d78ac35/scratchpad/cv_features"],
+      "port": 5058
     }
   ]
 }
