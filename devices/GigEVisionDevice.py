@@ -5,6 +5,7 @@ import threading
 
 import numpy as np
 
+from .CameraDiagnostics import FrameDiagnostics
 from .CameraFeatures import FeatureSettingsMixin
 from .Device import Device
 from .api.gigE_vision import GigECamera
@@ -62,6 +63,8 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         # take turns on the acquirer instead of racing on fetch(). abort()
         # stays outside it: it must be able to interrupt a fetch in progress.
         self._capture_lock = threading.RLock()
+        # Brightness and near-black frames, for the Live panel (devices/CameraDiagnostics.py).
+        self._diagnostics = FrameDiagnostics(self.logger, self.device_id)
 
     @property
     def info(self) -> dict:
@@ -218,7 +221,18 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
             frame = (frame >> max(0, bits - 8)).astype(np.uint8)
         if pixel_format.startswith("BGR") and frame.ndim == 3:
             frame = frame[:, :, 2::-1]
+        self._diagnostics.observe(frame)
         return frame
+
+    def telemetry(self) -> dict:
+        """Stream health for the Live panel: cached values only, nothing is read from the camera."""
+        api = self._api
+        return {
+            "streaming": self._streaming,
+            "pixel_format": api.last_pixel_format if api else None,
+            "incomplete_frames": getattr(api, "incomplete_frames", 0),
+            **self._diagnostics.telemetry(),
+        }
 
     def set_feature(self, feature_name: str, value):
         """Write a GenICam feature now, e.g. ``camera.set_feature("ExposureTime", 20000.0)``.

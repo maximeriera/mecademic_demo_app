@@ -26,6 +26,7 @@ import time
 
 import numpy as np
 
+from .CameraDiagnostics import FrameDiagnostics
 from .CameraFeatures import VISIBILITIES, FeatureSettingsMixin
 from .Device import Device
 
@@ -120,6 +121,7 @@ class SimulatedCamera(FeatureSettingsMixin, Device):
         self._streaming = False
         self._stream_starts = 0
         self._faulted = False
+        self._diagnostics = FrameDiagnostics(self.logger, self.device_id)
 
     @property
     def info(self) -> dict:
@@ -200,9 +202,17 @@ class SimulatedCamera(FeatureSettingsMixin, Device):
             mono, lut = self._values["PixelFormat"] == "Mono8", self._lut
         if mono:
             frame = (frame @ _LUMA).astype(np.uint8)
-        return frame if lut is None else lut[frame]
+        if lut is not None:
+            frame = lut[frame]
+        self._diagnostics.observe(frame)
+        return frame
 
     capture_frame = capture_frame_8bit
+
+    def telemetry(self) -> dict:
+        """Same Live panel values as a gige_camera (no packets to lose here)."""
+        return {"streaming": self._streaming, "pixel_format": self._values["PixelFormat"],
+                "incomplete_frames": 0, **self._diagnostics.telemetry()}
 
     # --- Features (same contract as GigEVisionDevice) -------------------------
 

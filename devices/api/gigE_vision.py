@@ -5,7 +5,7 @@ import time
 import signal
 import numpy as np
 from genicam import genapi
-from harvesters.core import Harvester
+from harvesters.core import Callback, Harvester
 
 from core.LogSetup import get_module_logger
 
@@ -23,6 +23,16 @@ logger = get_module_logger("device.gige.transport")
 
 class CameraConnectionError(RuntimeError):
     """Raised when a camera connection attempt fails."""
+
+
+class _IncompleteFrameCounter(Callback):
+    """Counts the frames harvesters discards because packets went missing on the way."""
+
+    def __init__(self, camera: "GigECamera"):
+        self.camera = camera
+
+    def emit(self, context=None) -> None:
+        self.camera.incomplete_frames += 1
 
 
 #: GenICam node interfaces, in the order a node is matched against them. The
@@ -134,6 +144,8 @@ class GigECamera:
         self._is_streaming = False
         #: GenICam PixelFormat of the last captured frame (e.g. "Mono12", "BayerRG8").
         self.last_pixel_format: str | None = None
+        #: Frames discarded since connect() because packets were lost (UDP on GigE).
+        self.incomplete_frames = 0
 
     @staticmethod
     def _safe_attr(obj, name: str, default="N/A"):
@@ -212,6 +224,12 @@ class GigECamera:
                     self.ia = self.harvester.create_image_acquirer(self.camera_index)
             else:
                 self.ia = self.harvester.create_image_acquirer(self.camera_index)
+
+            self.incomplete_frames = 0
+            try:
+                self.ia.add_callback(self.ia.Events.INCOMPLETE_BUFFER, _IncompleteFrameCounter(self))
+            except Exception as exc:   # an older harvesters: the count just stays at 0
+                logger.debug(f"Incomplete-frame counter unavailable: {exc}")
 
             selected_device = self.harvester.device_info_list[self.camera_index]
             connected_model = self._safe_attr(selected_device, 'model')

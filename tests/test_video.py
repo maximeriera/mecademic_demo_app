@@ -406,3 +406,27 @@ def test_gige_feature_tree_groups_filters_and_describes(gige_features):
     camera.start_stream()
     pixel_format = camera.describe_feature("PixelFormat")
     assert pixel_format["writable"] is False and pixel_format["stream_locked"] is True   # Apply restarts the stream
+
+
+# --- GigE stream diagnostics ------------------------------------------------------
+
+def test_gige_counts_near_black_frames(monkeypatch):
+    device = _gige(np.zeros((32, 32), np.uint8), "Mono8", monkeypatch)
+    device.capture_frame_8bit()
+    assert device.telemetry()["dark_frames"] == 1 and device.telemetry()["frame_brightness"] == 0.0
+    device._api.frame = np.full((32, 32), 120, np.uint8)
+    device.capture_frame_8bit()
+    telemetry = device.telemetry()
+    assert telemetry["dark_frames"] == 1 and telemetry["frame_brightness"] == 120.0
+    assert telemetry["pixel_format"] == "Mono8" and device.has_live_data
+
+
+def test_gige_counts_the_incomplete_frames_harvesters_discards(gige_features):
+    from devices.api.gigE_vision import _IncompleteFrameCounter
+
+    camera = gige_features()
+    camera.initialize()
+    counter = _IncompleteFrameCounter(camera.api)
+    counter.emit(context=None)
+    counter.emit(context=None)
+    assert camera.telemetry()["incomplete_frames"] == 2

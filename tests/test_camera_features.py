@@ -249,3 +249,18 @@ def test_settings_writes_are_refused_while_a_task_runs(feature_routes, flask_app
     assert refused.status_code == 409 and "task is running" in refused.get_json()["message"]
     assert client.post("/api/devices/feat_cam/settings/save").status_code == 409
     assert camera.get_feature("Gain") == 0.0
+
+
+# --- Stream diagnostics ----------------------------------------------------------------------
+
+def test_a_too_short_exposure_shows_as_near_black_frames(make_camera):
+    camera = make_camera()
+    camera.initialize()
+    camera.capture_frame_8bit()
+    nominal = camera.telemetry()
+    assert nominal["dark_frames"] == 0 and nominal["frame_brightness"] > 40
+    camera.write_setting("ExposureTime", 100)             # 1/100 of the nominal exposure
+    camera.capture_frame_8bit()
+    dark = camera.telemetry()
+    assert dark["dark_frames"] == 1 and dark["frame_brightness"] < 10
+    assert dark["incomplete_frames"] == 0 and dark["streaming"]

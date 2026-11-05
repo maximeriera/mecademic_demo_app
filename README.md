@@ -430,6 +430,20 @@ Settings > Devices > *camera* > **Features…** lists every feature the camera e
 
 The dialog reads the camera only when it opens, after each action and on Refresh: each feature is one read over the camera's control channel, so it is never polled. Commands (AcquisitionStart, UserSetSave…) are not listed, because running them from a browser can stop the acquisition or overwrite the camera's saved settings.
 
+### Black or flashing frames
+
+A camera's Live panel (Settings > Devices > camera > Show live data) shows the stream's health, without reading anything extra from the camera:
+
+| Value | Meaning |
+|---|---|
+| `frame_brightness` | Mean level of the last frame, 0–255 |
+| `dark_frames` | Frames with a mean under 10 since the app started. Each one is also logged, at most every 10 s |
+| `incomplete_frames` | Frames harvesters discarded because GigE packets went missing (since INITIALIZE) |
+
+- **`dark_frames` climbs while the feed flashes black:** the camera itself delivered black frames. The usual cause is the lighting. PWM-dimmed LEDs, and lamps on the mains (flickering at 100 or 120 Hz), can be off for a whole exposure when `ExposureTime` is shorter than their period. Use an exposure of at least one period (10 ms at 50 Hz, 8.33 ms at 60 Hz) or a multiple of it, DC or strobed lighting, and `ExposureAuto` / `GainAuto` set to `Off`.
+- **`incomplete_frames` climbs:** packets are lost on the way. The feed drops frames rather than showing black ones. Give the GigE NIC its own network, enable jumbo frames (`GevSCPSPacketSize`), add an inter-packet delay (`GevSCPD`), or raise the host's UDP receive buffers (`net.core.rmem_max`). In Docker, use `network_mode: host`.
+- **Neither counter moves:** the camera's frames are fine and the problem is further on, in the encoding, the network to the browser or the browser itself.
+
 `simulated_camera` accepts the same `features:` and `features_file:` keys and the same methods and dialog:
 
 | Feature | Values | Effect |
@@ -887,6 +901,7 @@ devices/
     GigEVisionDevice.py       # GigE Vision camera (harvesters / GenTL)
     CVProcessDevice.py        # Computer-vision analysis on a camera's frames
     CameraFeatures.py         # Camera features: features_file, Apply / Save / Discard (Features dialog)
+    CameraDiagnostics.py      # Frame brightness and near-black frames, for a camera's Live panel
     MecaRobot.py              # Mecademic robot (mecademicpy)
     Asyril.py                 # Asyril Eye+ intelligent feeder
     PlanarMotor.py            # Planar motor system
