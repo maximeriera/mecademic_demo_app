@@ -468,8 +468,49 @@ def test_prototype_finds_the_test_pattern_ball(blob_analysis):
 
 def test_prototype_reports_nothing_on_a_blank_frame(blob_analysis):
     result = blob_analysis.analyze(_read_only(np.zeros((120, 160), np.uint8)), {})
-    assert result.ok is False and result.data == {"found": False, "threshold": 175, "blobs": 0}
+    assert result.ok is False
+    assert result.data == {"found": False, "threshold": 175, "blobs": 0, "background": 0, "peak": 0}
     assert result.image.shape == (120, 160, 3)
+
+
+def _laser_spot(center=(352.0, 228.0), radius=110.0):
+    """A dim red disc (peak ~45 of 255) with diffraction rings, a dimmer top and a dust speck."""
+    height, width = 480, 640
+    y, x = np.mgrid[0:height, 0:width].astype(np.float32)
+    r = np.hypot(x - center[0], y - center[1])
+    level = 0.6 + 0.4 * (y - (center[1] - radius)) / (2 * radius)   # the top is dimmer
+    level *= 0.75 + 0.25 * np.cos(r / 4.0)                            # rings
+    disc = np.clip((radius - r) / 3.0 + 0.5, 0.0, 1.0)                # soft edge, half at `radius`
+    frame = np.full((height, width, 3), 7.0, np.float32)
+    frame[..., 0] += 38.0 * level * disc
+    frame[(x - center[0] - 80) ** 2 + (y - center[1]) ** 2 < 16] = 7.0   # dust on the disc
+    frame += np.random.default_rng(0).normal(0.0, 1.5, frame.shape)
+    return np.clip(frame, 0, 255).astype(np.uint8)
+
+
+LASER_PARAMS = {"channel": "red", "blur_px": 4, "threshold": "20%", "fill_holes": True,
+                "min_area": 2000, "stretch": True}
+
+
+def test_prototype_finds_a_dim_ringed_laser_spot(blob_analysis):
+    frame = _read_only(_laser_spot())
+    assert blob_analysis.analyze(frame, {"threshold": 175}).ok is False   # far too dim for the default
+    result = blob_analysis.analyze(frame, LASER_PARAMS)
+    assert result.ok is True and result.data["blobs"] == 1
+    assert result.data["background"] == 7 and 30 < result.data["peak"] < 50
+    assert result.data["x_px"] == pytest.approx(352.0, abs=1.5)
+    assert result.data["y_px"] == pytest.approx(228.0, abs=1.5)
+    assert result.data["diameter_px"] == pytest.approx(220.0, rel=0.03)
+    assert result.data["elongation"] == pytest.approx(1.0, abs=0.05)
+    assert result.image.shape == frame.shape and result.image.max() == 255   # stretched for display
+
+
+def test_prototype_adaptive_threshold_needs_contrast(blob_analysis):
+    noise = np.random.default_rng(1).normal(7.0, 1.5, (240, 320, 3))
+    result = blob_analysis.analyze(_read_only(np.clip(noise, 0, 255).astype(np.uint8)), LASER_PARAMS)
+    assert result.ok is False and result.data["blobs"] == 0
+    with pytest.raises(ValueError, match="channel"):
+        blob_analysis.analyze(_read_only(_laser_spot()), {"channel": "infrared"})
 
 
 def test_prototype_measures_orientation_and_auto_threshold(blob_analysis):
@@ -482,6 +523,8 @@ def test_prototype_measures_orientation_and_auto_threshold(blob_analysis):
     assert result.data["bbox_px"] == [50, 90, 249, 109]
     dark = blob_analysis.analyze(_read_only(255 - frame), {"threshold": 100, "invert": True, "min_area": 100})
     assert dark.data["x_px"] == pytest.approx(149.5)
+    halfway = blob_analysis.analyze(_read_only(255 - frame), {"threshold": "50%", "invert": True, "min_area": 100})
+    assert halfway.data["threshold"] == pytest.approx(125.0) and halfway.data["bbox_px"] == [50, 90, 249, 109]
 
 
 # --- Image route ------------------------------------------------------------------------
