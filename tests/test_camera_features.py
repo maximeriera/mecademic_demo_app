@@ -1,7 +1,9 @@
 """Camera features: features_file, Apply / Save / Discard / Forget, the settings tree and its routes."""
 
+import logging
 import os
 
+import numpy as np
 import pytest
 import yaml
 
@@ -253,14 +255,51 @@ def test_settings_writes_are_refused_while_a_task_runs(feature_routes, flask_app
 
 # --- Stream diagnostics ----------------------------------------------------------------------
 
-def test_a_too_short_exposure_shows_as_near_black_frames(make_camera):
+def test_a_too_short_exposure_shows_as_dark_frames(make_camera):
     camera = make_camera()
     camera.initialize()
-    camera.capture_frame_8bit()
+    for _ in range(6):
+        camera.capture_frame_8bit()
     nominal = camera.telemetry()
-    assert nominal["dark_frames"] == 0 and nominal["frame_brightness"] > 40
+    assert nominal["dark_frames"] == 0 and nominal["frame_peak"] > 150
     camera.write_setting("ExposureTime", 100)             # 1/100 of the nominal exposure
     camera.capture_frame_8bit()
     dark = camera.telemetry()
-    assert dark["dark_frames"] == 1 and dark["frame_brightness"] < 10
+    assert dark["dark_frames"] == 1 and dark["frame_peak"] < 10
     assert dark["incomplete_frames"] == 0 and dark["streaming"]
+
+
+def _spot_frame(lit=True, background=3):
+    """A dim laser-like spot on a dark background: the frame's mean stays under 10 either way."""
+    frame = np.full((480, 640), background, np.uint8)
+    if lit:
+        frame[200:260, 300:360] = 200
+    return frame
+
+
+def test_dark_frames_follow_the_spot_not_the_mean():
+    from devices.CameraDiagnostics import FrameDiagnostics
+
+    diagnostics = FrameDiagnostics(logging.getLogger("test"), "cam")
+    for _ in range(10):
+        diagnostics.observe(_spot_frame())
+    lit = diagnostics.telemetry()
+    assert lit["frame_brightness"] < 10 and lit["dark_frames"] == 0   # a dark scene is not a dark frame
+    diagnostics.observe(_spot_frame(lit=False))                       # the spot is gone for one frame
+    assert diagnostics.telemetry()["dark_frames"] == 1
+    diagnostics.observe(_spot_frame())
+    assert diagnostics.telemetry()["dark_frames"] == 1
+
+    # The light stays off: once that is most of the recent frames, it is the new normal.
+    for _ in range(30):
+        diagnostics.observe(_spot_frame(lit=False))
+    count = diagnostics.telemetry()["dark_frames"]
+    assert 10 <= count <= 20
+    diagnostics.observe(_spot_frame(lit=False))
+    assert diagnostics.telemetry()["dark_frames"] == count
+
+    # A scene with no light at all never counts.
+    unlit = FrameDiagnostics(logging.getLogger("test"), "cam")
+    for _ in range(20):
+        unlit.observe(_spot_frame(lit=False))
+    assert unlit.telemetry()["dark_frames"] == 0

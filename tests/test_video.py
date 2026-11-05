@@ -410,14 +410,16 @@ def test_gige_feature_tree_groups_filters_and_describes(gige_features):
 
 # --- GigE stream diagnostics ------------------------------------------------------
 
-def test_gige_counts_near_black_frames(monkeypatch):
-    device = _gige(np.zeros((32, 32), np.uint8), "Mono8", monkeypatch)
-    device.capture_frame_8bit()
-    assert device.telemetry()["dark_frames"] == 1 and device.telemetry()["frame_brightness"] == 0.0
-    device._api.frame = np.full((32, 32), 120, np.uint8)
+def test_gige_counts_frames_darker_than_the_ones_before(monkeypatch):
+    device = _gige(np.full((32, 32), 120, np.uint8), "Mono8", monkeypatch)
+    for _ in range(6):
+        device.capture_frame_8bit()
+    lit = device.telemetry()
+    assert lit["dark_frames"] == 0 and (lit["frame_brightness"], lit["frame_peak"]) == (120.0, 120.0)
+    device._api.frame = np.zeros((32, 32), np.uint8)       # the light went out for this exposure
     device.capture_frame_8bit()
     telemetry = device.telemetry()
-    assert telemetry["dark_frames"] == 1 and telemetry["frame_brightness"] == 120.0
+    assert telemetry["dark_frames"] == 1 and telemetry["frame_peak"] == 0.0
     assert telemetry["pixel_format"] == "Mono8" and device.has_live_data
 
 

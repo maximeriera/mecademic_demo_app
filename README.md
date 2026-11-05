@@ -437,10 +437,14 @@ A camera's Live panel (Settings > Devices > camera > Show live data) shows the s
 | Value | Meaning |
 |---|---|
 | `frame_brightness` | Mean level of the last frame, 0–255 |
-| `dark_frames` | Frames with a mean under 10 since the app started. Each one is also logged, at most every 10 s |
+| `frame_peak` | Level of the last frame's brightest pixels (its top 0.05%): a laser spot, a lamp, a lit part |
+| `dark_frames` | Frames whose peak fell under half of the recent frames' peak, since the app started. Each one is also logged, at most every 10 s. Judging by the peak, not the mean, keeps this right on a dark scene with a small spot. A scene with no light (peak under 20) never counts, and once the light stays off for most of the last 30 frames, that becomes the new normal |
 | `incomplete_frames` | Frames harvesters discarded because GigE packets went missing (since INITIALIZE) |
 
-- **`dark_frames` climbs while the feed flashes black:** the camera itself delivered black frames. The usual cause is the lighting. PWM-dimmed LEDs, and lamps on the mains (flickering at 100 or 120 Hz), can be off for a whole exposure when `ExposureTime` is shorter than their period. Use an exposure of at least one period (10 ms at 50 Hz, 8.33 ms at 60 Hz) or a multiple of it, DC or strobed lighting, and `ExposureAuto` / `GainAuto` set to `Off`.
+- **`dark_frames` climbs while the feed flashes black:** the camera itself delivered frames with the light off. The light flickers faster than the eye sees, and some exposures fall entirely in an off phase:
+  - **A laser or LED driven by PWM or modulation:** run it in continuous (CW) mode, or use an `ExposureTime` of several modulation periods. If it pulses on purpose, trigger the camera from its driver (`TriggerMode: On`, `TriggerSource: Line0`).
+  - **Lamps on the mains** flicker at 100 or 120 Hz. Use an exposure of at least one period (10 ms at 50 Hz, 8.33 ms at 60 Hz), or a multiple of it.
+  - **Auto modes:** set `ExposureAuto` and `GainAuto` to `Off` (FLIR cameras default to `Continuous`). On a dark scene with a bright spot they hunt.
 - **`incomplete_frames` climbs:** packets are lost on the way. The feed drops frames rather than showing black ones. Give the GigE NIC its own network, enable jumbo frames (`GevSCPSPacketSize`), add an inter-packet delay (`GevSCPD`), or raise the host's UDP receive buffers (`net.core.rmem_max`). In Docker, use `network_mode: host`.
 - **Neither counter moves:** the camera's frames are fine and the problem is further on, in the encoding, the network to the browser or the browser itself.
 
