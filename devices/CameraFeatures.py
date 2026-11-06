@@ -47,7 +47,9 @@ def trigger_features(trigger: str, source: str = "Line0", activation: str = "Ris
     """``(feature, value, optional)`` to write, in order, for a trigger mode (GenICam SFNC names).
 
     Frames start on the trigger (TriggerSelector FrameStart). TriggerMode goes
-    Off first: many cameras only change the source with the trigger off. An
+    Off first: most cameras only change the source with the trigger off (a
+    GigE camera that locks it until the trigger is on gets TriggerMode On
+    first instead, see ``GigEVisionDevice._set_trigger_setting``). An
     optional feature the camera lacks is skipped.
     """
     if trigger == "off":

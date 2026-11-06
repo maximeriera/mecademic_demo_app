@@ -183,6 +183,8 @@ class _FakeNode:
 
     @property
     def value(self):
+        if self.mode in ("NA", "NI"):
+            raise RuntimeError("AccessException: node is not available")
         return self._value
 
     @value.setter
@@ -582,6 +584,47 @@ def test_gige_trigger_switches_off_every_trigger_first(gige_features):
     assert nodes["TriggerSelector"].value == "FrameStart" and nodes["TriggerSource"].value == "Software"
 
 
+class _LocksWhileOff(_FakeNode):
+    """TriggerMode of a camera whose trigger source and edge exist only with it on.
+
+    As a FLIR camera reported it: ``TriggerSource: access NA, pIsAvailable TriggerMode=Off``.
+    """
+
+    def __init__(self, base, locked):
+        super().__init__(base.name, base.kind, base._value, base.log, choices=base.symbolics)
+        self.locked = locked
+        self._lock()
+
+    def _lock(self):
+        for node in self.locked:
+            node.mode = "NA" if self._value == "Off" else "RW"
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        _FakeNode.value.fset(self, value)
+        self._lock()
+
+
+def test_gige_trigger_source_is_set_with_the_trigger_on_where_the_camera_wants_it(gige_features):
+    nodes, log = gige_features.nodes, gige_features.log
+    camera = gige_features(trigger="hardware", trigger_source="Line1", trigger_activation="FallingEdge")
+    node_map = camera.api.ia.remote_device.node_map
+    node_map.TriggerMode = _LocksWhileOff(nodes["TriggerMode"], [nodes["TriggerSource"], nodes["TriggerActivation"]])
+    camera.initialize()                                   # "TriggerSource is read-only" before
+    assert (nodes["TriggerSource"].value, nodes["TriggerActivation"].value) == ("Line1", "FallingEdge")
+    assert node_map.TriggerMode.value == "On" and camera.connected
+    assert log.index("TriggerMode") < log.index("TriggerSource")   # On, then the source
+
+    log.clear()
+    software = gige_features(trigger="software")
+    software.initialize()                                 # off, back on for the source, and Software
+    assert nodes["TriggerSource"].value == "Software" and node_map.TriggerMode.value == "On"
+
+
 def test_gige_trigger_source_already_set_is_not_written(gige_features):
     # Locked, but already what the trigger wants: nothing to write, nothing to fail.
     nodes = gige_features.nodes
@@ -612,8 +655,8 @@ def test_gige_trigger_error_shows_what_locks_the_feature(gige_features):
     with pytest.raises(RuntimeError) as failed:
         camera.initialize()
     message = str(failed.value)
-    assert "TriggerSource='Software': feature 'TriggerSource' is read-only." in message
-    assert "TriggerMode=Off, TLParamsLocked=0" in message
+    assert "TriggerSource='Software': feature 'TriggerSource' is read-only, with TriggerMode Off and On." in message
+    assert "TriggerMode=On, TLParamsLocked=0" in message
     assert "TriggerSource: access RO, pIsLocked TriggerSourceLock=1 (= E = 1; E=ExposureMode=1)" in message
 
 

@@ -169,9 +169,10 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         for feature_name, value, optional in trigger_features(self._trigger, self._trigger_source,
                                                               self._trigger_activation):
             try:
-                if feature_name == "TriggerSource" and self._current(feature_name) == value:
-                    continue   # already set: nothing to write, even where the camera locks it
-                self.set_feature(feature_name, value)
+                if feature_name in ("TriggerSource", "TriggerActivation"):
+                    self._set_trigger_setting(feature_name, value)
+                else:
+                    self.set_feature(feature_name, value)
             except KeyError:
                 if not optional:
                     raise RuntimeError(f"trigger {self._trigger}: the camera has no {feature_name}") from None
@@ -180,6 +181,23 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
                                    f"({self._lock_state(feature_name)})") from e
         if self._trigger != "off":
             self.logger.info(f"[{self.device_id}] Trigger: {self._trigger_summary()}.")
+
+    def _set_trigger_setting(self, feature_name: str, value) -> None:
+        """TriggerSource or TriggerActivation: with the trigger off, else with it on.
+
+        Newer FLIR models only take them with TriggerMode Off; older FLIR /
+        Point Grey ones lock them until TriggerMode is On. KeyError if the
+        camera has no such feature.
+        """
+        if self._current(feature_name) == value:
+            return   # already set: nothing to write, even where the camera locks it
+        if not self._api.is_writable(feature_name) and self._current("TriggerMode") == "Off":
+            self.set_feature("TriggerMode", "On")
+            if not self._api.is_writable(feature_name):
+                raise ValueError(f"feature '{feature_name}' is read-only, with TriggerMode Off and On.")
+            self.logger.info(f"[{self.device_id}] {feature_name} only takes a value with the trigger on: "
+                             "set it after TriggerMode On.")
+        self.set_feature(feature_name, value)
 
     def _all_triggers_off(self):
         """TriggerMode Off for every trigger the camera has: FrameStart, AcquisitionStart...
