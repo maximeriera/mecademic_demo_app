@@ -510,6 +510,55 @@ def test_gige_no_pulse_is_not_a_fault_with_a_hardware_trigger(gige_features, mon
     assert free.faulted                             # a free-running camera should have answered
 
 
+class _ParamsLock(_FakeNode):
+    """TLParamsLocked: while 1, the camera locks *locked* (as a FLIR does TriggerSource)."""
+
+    def __init__(self, log, locked, value=1):
+        super().__init__("TLParamsLocked", "IInteger", value, log, lo=0, hi=1)
+        self.locked = locked
+        for node in locked:
+            node.mode = "RO" if value else "RW"
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        _FakeNode.value.fset(self, value)
+        for node in self.locked:
+            node.mode = "RO" if value else "RW"
+
+
+def test_gige_initialize_stops_an_acquisition_an_earlier_session_left_running(gige_features):
+    # A process killed while streaming: the camera still acquires, TriggerSource is locked,
+    # and TriggerMode is not (a FLIR camera's "TriggerSource is read-only" at INITIALIZE).
+    nodes, log = gige_features.nodes, gige_features.log
+    camera = gige_features(trigger="software")
+    node_map = camera.api.ia.remote_device.node_map
+    node_map.TLParamsLocked = _ParamsLock(log, [nodes["TriggerSource"]])
+    node_map.AcquisitionStop = _FakeNode("AcquisitionStop", "ICommand", None, log)
+    camera.initialize()
+    assert log.index("AcquisitionStop()") < log.index("TLParamsLocked") < log.index("TriggerSource")
+    assert node_map.TLParamsLocked.value == 0 and nodes["TriggerSource"].value == "Software"
+    assert camera.connected and not camera.faulted
+
+    log.clear()
+    camera.initialize()                                   # nothing left running now: nothing to stop
+    assert "AcquisitionStop()" not in log and "TLParamsLocked" not in log
+
+
+def test_gige_trigger_error_shows_the_lock_state(gige_features):
+    nodes, log = gige_features.nodes, gige_features.log
+    camera = gige_features(trigger="software")
+    node_map = camera.api.ia.remote_device.node_map
+    nodes["TriggerSource"].mode = "RO"                    # locked by something this cannot release
+    node_map.TLParamsLocked = _ParamsLock(log, [], value=0)
+    with pytest.raises(RuntimeError, match=r"TriggerSource='Software': .*read-only.*"
+                                           r"\(TriggerMode=Off, TLParamsLocked=0\)"):
+        camera.initialize()
+
+
 def test_gige_discard_queued_drops_the_buffered_frames(gige_features, monkeypatch):
     from types import SimpleNamespace
 

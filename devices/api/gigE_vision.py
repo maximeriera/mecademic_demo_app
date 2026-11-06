@@ -289,6 +289,32 @@ class GigECamera:
             dropped += 1
         return dropped
 
+    def release_stale_acquisition(self) -> bool:
+        """Stop an acquisition an earlier session left running; True if there was one.
+
+        harvesters sets TLParamsLocked to 1 when it starts a stream and back
+        to 0 when it stops it. A process killed or crashed while streaming
+        never stops it, so the camera keeps acquiring and keeps locking what
+        it locks while streaming (TriggerSource, PixelFormat, Width...),
+        although this session streams nothing. This does what
+        ``ImageAcquirer.stop()`` would have: AcquisitionStop, then
+        TLParamsLocked 0.
+        """
+        if self._is_streaming:
+            return False
+        try:
+            locked = self._node("TLParamsLocked")
+            if not int(locked.value):
+                return False
+        except Exception:
+            return False   # no such node, or unreadable: nothing to release
+        try:
+            self._node("AcquisitionStop").execute()
+        except Exception as e:
+            logger.debug(f"AcquisitionStop on a stale acquisition: {e}")
+        locked.value = 0
+        return True
+
     def execute(self, command_name: str) -> None:
         """Run a GenICam command node, e.g. ``camera.execute("TriggerSoftware")``."""
         node = self._node(command_name)

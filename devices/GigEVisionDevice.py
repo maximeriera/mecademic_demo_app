@@ -139,6 +139,10 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
             # A re-INITIALIZE finds the stream running: features go in with it stopped.
             self._api.stop_stream()
             self._streaming = False
+            # A session that died streaming left the camera acquiring, features locked.
+            if self._api.release_stale_acquisition():
+                self.logger.warning(f"[{self.device_id}] The camera was still acquiring for an earlier "
+                                    "session (TLParamsLocked=1): stopped it.")
             self._connected = True   # set_feature() needs it; undone below on failure
             try:
                 self._apply_trigger()
@@ -169,9 +173,20 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
                 if not optional:
                     raise RuntimeError(f"trigger {self._trigger}: the camera has no {feature_name}") from None
             except Exception as e:
-                raise RuntimeError(f"trigger {self._trigger}: {feature_name}={value!r}: {e}") from e
+                raise RuntimeError(f"trigger {self._trigger}: {feature_name}={value!r}: {e} "
+                                   f"({self._lock_state()})") from e
         if self._trigger != "off":
             self.logger.info(f"[{self.device_id}] Trigger: {self._trigger_summary()}.")
+
+    def _lock_state(self) -> str:
+        """``TriggerMode=..., TLParamsLocked=...`` as the camera reads them now, for an error message."""
+        values = []
+        for name in ("TriggerMode", "TLParamsLocked"):
+            try:
+                values.append(f"{name}={self._api.get_feature(name)}")
+            except Exception:
+                values.append(f"{name} unreadable")
+        return ", ".join(values)
 
     def shutdown(self):
         if not self._api:
