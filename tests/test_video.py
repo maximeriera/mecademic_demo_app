@@ -510,6 +510,20 @@ def test_gige_no_pulse_is_not_a_fault_with_a_hardware_trigger(gige_features, mon
     assert free.faulted                             # a free-running camera should have answered
 
 
+def test_gige_discard_queued_drops_the_buffered_frames(gige_features, monkeypatch):
+    from types import SimpleNamespace
+
+    camera = gige_features(trigger="hardware")
+    camera.initialize()
+    requeued = []
+    waiting = [SimpleNamespace(queue=lambda i=i: requeued.append(i)) for i in range(3)]   # 3 old pulses
+    monkeypatch.setattr(camera.api.ia, "try_fetch", lambda timeout: waiting.pop(0) if waiting else None)
+    assert camera.discard_queued() == 0 and len(waiting) == 3     # stream stopped: nothing buffered
+    camera.start_stream()
+    assert camera.discard_queued() == 3 and requeued == [0, 1, 2]   # each buffer goes back to the stream
+    assert camera.discard_queued() == 0 and not camera.faulted
+
+
 def test_gige_fetch_timeout_becomes_a_timeout_error(gige_features, monkeypatch):
     from genicam.gentl import TimeoutException
 

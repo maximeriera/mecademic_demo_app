@@ -444,7 +444,7 @@ camera:
 ```
 
 - **`software`:** each capture fires `TriggerSoftware` and waits for that frame. Frames left over from an earlier trigger are dropped first, so the frame is always the one just requested. A `cv_process` triggers at its `rate_hz` while it runs, and `analyze_once()` or **Inspect once** takes one picture when it is stopped. The timing is deterministic, but software triggers don't line up with a pulsed light source.
-- **`hardware`:** each frame starts on a pulse on the input line, for example a laser or LED driver's sync output, or a PLC or robot output. Synced to a pulsed light, every exposure lands while the light is on, which ends the black frames of [Black or flashing frames](#black-or-flashing-frames). A `cv_process` analyses every pulse as it comes, so `rate_hz` doesn't apply. Between pulses it shows *waiting for trigger*, and no pulse is never an error. Stopped, `analyze_once(timeout)` waits up to `timeout` for the next pulse, raising `TimeoutError` if none comes. Keep the pulse rate within what the analysis keeps up with: frames the analysis doesn't take queue up in the camera's buffers.
+- **`hardware`:** each frame starts on a pulse on the input line, for example a laser or LED driver's sync output, or a PLC or robot output. Synced to a pulsed light, every exposure lands while the light is on, which ends the black frames of [Black or flashing frames](#black-or-flashing-frames). A `cv_process` analyses every pulse as it comes, so `rate_hz` doesn't apply. Between pulses it shows *waiting for trigger*, and no pulse is never an error. Stopped, `analyze_once(timeout)` drops the frames of the pulses that came meanwhile (the camera buffers them, oldest first) and waits up to `timeout` for the next pulse, raising `TimeoutError` if none comes. Task code reading a `gige_camera` directly can do the same with `camera.discard_queued()` before `capture_frame_8bit()`. Keep the pulse rate within what the analysis keeps up with: frames the analysis doesn't take queue up in the camera's buffers.
 - **At INITIALIZE**, before the features, the camera gets `TriggerSelector: FrameStart`, then `TriggerMode: Off`, `TriggerSource`, `TriggerActivation` and `TriggerMode: On`. These are the standard GenICam names. `trigger: off` writes `TriggerMode: Off`, so a camera left in trigger mode by another program free-runs again. A feature you list afterwards (`TriggerDelay`, `LineDebouncerTime`…) tunes the trigger further.
 - **`simulated_camera`** accepts the same keys. With `trigger: hardware`, a simulated line pulses at its `fps`.
 
@@ -536,7 +536,7 @@ def analyze(frame, params):
 | `last_processed_image()` | The image of the last successful analysis (read-only), or `None` |
 | `last_result()` | `{seq, time, ok, data, analysis_ms}` of the last successful analysis, or `None` |
 | `wait_for_result(after_seq=None, timeout=5.0)` | The next result newer than `after_seq` (default: newer than the current one). Raises `TimeoutError`, or `RuntimeError` on ABORT |
-| `analyze_once(timeout=5.0)` | One fresh result: the next one while the analysis runs, otherwise one frame grabbed and analysed in the calling thread |
+| `analyze_once(timeout=5.0)` | One fresh result: the next one while the analysis runs, otherwise one frame grabbed and analysed in the calling thread. Frames the camera buffered while nobody read are dropped first, so that frame is exposed after the call |
 | `video_source(kind)` | A `grab` for `hub.add_video()`, `"raw"` or `"processed"`, read from the cache rather than the camera |
 | `start()`, `stop()`, `running` | Control the continuous analysis |
 
@@ -557,13 +557,13 @@ The Live panel shows the raw and processed images as thumbnails, with the state,
 - **ABORT** wakes task code blocked in `wait_for_result()` or `analyze_once()`. The analysis itself keeps running.
 - **INITIALIZE** stops the analysis before the camera reconnects, then starts it again if `autostart` is set.
 
-A complete example is in [`examples/gige_cv_analysis`](examples/gige_cv_analysis): the device above, a custom view with the raw and processed feeds side by side, an **Inspect once** manual action and a PROD cycle that locates the part. Run it with:
+A complete example is in [`examples/gige_cv_analysis`](examples/gige_cv_analysis): a hardware-triggered camera (see [Trigger acquisition](#trigger-acquisition)) and the device above analysing the frame of each pulse, a custom view with the raw and processed feeds side by side, an **Inspect once** manual action and a PROD cycle that locates the part. Run it with:
 
 ```bash
 python app.py --workspace examples/gige_cv_analysis
 ```
 
-Without a camera, switch `camera` to `type: "simulated_camera"`: the prototype then tracks the ball of its test pattern.
+Its `analysis_params` are set for a dim laser spot. Without a camera, the example uses a `simulated_camera` whose line pulses at its `fps`; switch to the test-pattern params noted in its `config.yaml` to track the pattern's ball.
 
 ---
 

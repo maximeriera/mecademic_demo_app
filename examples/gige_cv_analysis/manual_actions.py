@@ -4,10 +4,11 @@ from __future__ import annotations
 
 
 def inspect_once(devices, context=None):
-    """Analyse one fresh frame and log what blob_analysis found.
+    """Analyse the frame of the next trigger pulse and log what blob_analysis found.
 
-    ``analyze_once()`` waits for the next result while the analysis runs
-    continuously, and grabs and analyses one frame itself when it is stopped.
+    The analysis runs on every pulse, so ``analyze_once()`` waits for the next
+    result. It raises TimeoutError if no pulse comes within the timeout: check
+    the laser driver's sync output and the camera's trigger line.
     """
     vision = devices["vision"]
     if context is None:

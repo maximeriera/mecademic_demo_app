@@ -669,6 +669,33 @@ def test_vision_analyses_each_hardware_pulse_without_errors(analysis):
         camera.shutdown()
 
 
+class _BufferingCamera:
+    """A hardware-triggered camera whose pulses' frames wait in its buffers until read, like a GigE one."""
+
+    device_id, connected, faulted, trigger = "cam", True, False, "hardware"
+
+    def __init__(self):
+        self.queued = [np.full((4, 4), level, np.uint8) for level in (10, 20, 30)]   # pulses long gone
+
+    def discard_queued(self):
+        dropped, self.queued = len(self.queued), []
+        return dropped
+
+    def capture_frame_8bit(self, timeout_sec=2.0):
+        return self.queued.pop(0) if self.queued else np.full((4, 4), 200, np.uint8)   # the next pulse
+
+
+def test_analyze_once_skips_frames_buffered_while_stopped(analysis):
+    camera = _BufferingCamera()
+    vision = CVProcessDevice(camera=camera, analysis=f"{analysis.__name__}:analyze", name="vision")
+    vision.initialize()                                    # not started: nobody read the pulses
+    try:
+        assert vision.analyze_once(timeout=1.0)["data"]["mean"] == 200.0   # the next pulse, not the oldest
+        assert camera.queued == []
+    finally:
+        vision.shutdown()
+
+
 def test_trigger_keys_are_validated():
     entries, issues = validate_devices_config({
         "cam": {"type": "simulated_camera", "trigger": "software"},
@@ -676,3 +703,29 @@ def test_trigger_keys_are_validated():
     })
     assert [e.name for e in entries] == ["cam"] and entries[0].kwargs["trigger"] == "software"
     assert "'trigger_activation' must be one of" in _errors(issues)["bad"]
+
+
+def test_the_example_analyses_each_hardware_trigger_pulse(blob_analysis):
+    import yaml
+
+    with open(os.path.join(EXAMPLE_DIR, "config.yaml"), encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    entries, issues = validate_devices_config(config["devices"], base_dir=EXAMPLE_DIR)
+    assert issues == []
+    by_name = {e.name: e for e in entries}
+    assert by_name["camera"].kwargs["trigger"] == "hardware"
+    assert by_name["vision"].kwargs["autostart"] is True     # analyses every pulse from INITIALIZE on
+    camera = create_device(by_name["camera"])
+    vision = create_device(by_name["vision"], {"camera": camera})
+    try:
+        camera.initialize()
+        vision.initialize()                                   # autostart: analyses from now on
+        first = vision.wait_for_result(timeout=3)
+        second = vision.wait_for_result(timeout=3)
+        assert second["seq"] == first["seq"] + 1              # one result per pulse
+        telemetry = vision.telemetry()
+        assert telemetry["trigger"] == "hardware"
+        assert telemetry["errors"] == 0 and telemetry["capture_errors"] == 0
+    finally:
+        vision.shutdown()
+        camera.shutdown()

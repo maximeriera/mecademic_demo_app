@@ -437,14 +437,18 @@ class CVProcessDevice(Device):
     def analyze_once(self, timeout: float = 5.0) -> dict:
         """One fresh result: the next one of the running analysis, or one frame grabbed and analysed now.
 
-        With the camera's ``trigger: software`` that frame is exposed on
-        request; with ``trigger: hardware`` it is the next pulse's, waited for
-        up to *timeout* seconds (TimeoutError if none comes).
+        Frames the camera buffered while nobody read are dropped first, so the
+        frame is exposed after the call: with the camera's ``trigger:
+        software`` on request, with ``trigger: hardware`` on the next pulse,
+        waited for up to *timeout* seconds (TimeoutError if none comes).
         """
         if self.running:
             return self.wait_for_result(timeout=timeout)
         if not self._initialized:
             raise RuntimeError(f"{self.device_id} is not initialized. Press INITIALIZE first.")
+        discard = getattr(self._camera, "discard_queued", None)
+        if callable(discard):
+            discard()   # e.g. the frames of every pulse since the analysis stopped
         wait = timeout if self._hardware_trigger else min(timeout, self._capture_timeout_s)
         frame = self._camera.capture_frame_8bit(timeout_sec=wait)
         result = self._process(frame)

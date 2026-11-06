@@ -225,6 +225,25 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         finally:
             self._streaming = False
 
+    def discard_queued(self) -> int:
+        """Drop the frames waiting in the host buffers; the number dropped.
+
+        The stream keeps filling its buffers while nobody reads, and fetching
+        returns the oldest one first: with a hardware trigger, a pulse long
+        gone. After this, the next capture is a frame exposed from now on.
+        A stopped stream holds none.
+        """
+        if not self._api:
+            return 0
+        with self._capture_lock:
+            if not self._streaming:
+                return 0
+            try:
+                return self._api.discard_queued()
+            except Exception:
+                self._faulted = True
+                raise
+
     def capture_frame(self, timeout_sec: float = 2.0):
         if not self._api:
             raise RuntimeError("Cannot capture frame. Camera API is not initialized.")
