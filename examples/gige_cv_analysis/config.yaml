@@ -2,11 +2,10 @@
 #
 #   python app.py --workspace examples/gige_cv_analysis
 #
-# `camera` is hardware-triggered: it takes one frame per pulse on its trigger
-# line, e.g. the laser driver's sync output, so every exposure lands while the
-# laser is on. The `vision` device runs blob_analysis.analyze() on the frame of
-# each pulse as it comes, and keeps the last raw image, processed image and
-# result. Press INITIALIZE, then:
+# `camera` is software-triggered: it exposes a frame only when asked. The
+# `vision` device asks for one at its rate_hz (each capture fires
+# TriggerSoftware), runs blob_analysis.analyze() on it, and keeps the last raw
+# image, processed image and result. Press INITIALIZE, then:
 # * Settings > Devices, `vision`, "Show live data": raw and processed
 #   thumbnails, the measurements, and the analysis_running switch that starts
 #   and stops it;
@@ -27,19 +26,16 @@ devices:
   #     Gain: 0.0                  # dB
   #   # Or, to tune them from Settings > Devices > camera > Features... and Save:
   #   features_file: "camera_features.yaml"
-  #   trigger: "hardware"          # one frame per pulse; off (free-run) or software otherwise
-  #   trigger_source: "Line0"      # the input wired to the laser driver's sync output
-  #   trigger_activation: "RisingEdge"
-  #   # Keep the pulse rate within what the analysis keeps up with (rate_hz below):
-  #   # frames it does not take queue up in the camera's buffers.
+  #   trigger: "software"          # one frame per TriggerSoftware, fired by `vision` at its rate_hz
+  #                                # (off: free-run; hardware: on a pulse of trigger_source)
 
   # No camera at hand? Replace the entry above with this one: a moving test
   # pattern with a green ball, which blob_analysis finds with the "test
   # pattern" params under `vision` (the laser-spot ones find nothing useful).
   camera:
     type: "simulated_camera"
-    trigger: "hardware"                        # as the GigE camera: one frame per pulse...
-    fps: 10                                    # ...of a simulated line pulsing at 10 Hz
+    trigger: "software"                        # as the GigE camera: a frame when `vision` asks...
+    fps: 30                                    # ...up to the sensor's 30 fps: rate_hz sets the pace
     # features:
     #   ExposureTime: 4000         # µs (default 10000): too dark for threshold 175
     # features_file: "camera_features.yaml"   # instead of features:, to Save from the UI
@@ -60,16 +56,16 @@ devices:
       # The simulated camera's test pattern instead (green ball, bright background gradient):
       # threshold: 175                   # 0-255, "auto" (Otsu) or "N%"
       # min_area: 500
-    autostart: true                      # analyse every pulse from INITIALIZE on. Stopped (Settings >
-                                         # Devices), "Inspect once" analyses the next pulse alone
-    rate_hz: 10                          # with a hardware trigger the pulses set the pace, not this:
-                                         # keep them under ~10 Hz, as the params above take ~70 ms
-                                         # per 1.3 Mpx frame. Free-run or software trigger: the ceiling
+    autostart: true                      # trigger and analyse from INITIALIZE on. Stopped (Settings >
+                                         # Devices), "Inspect once" triggers one frame itself
+    rate_hz: 10                          # the trigger rate: one TriggerSoftware, then its analysis, at
+                                         # most 10 times a second. A cycle is the exposure, the transfer
+                                         # and ~70 ms of analysis per 1.3 Mpx frame: a longer one lowers it
     fault_on_error: false                # true: an exception in analyze() faults the cell
 
 manual_actions:
   - key: "inspect_once"
     label: "Inspect once"
-    description: "Analyse the frame of the next trigger pulse and log the result."
+    description: "Analyse the next triggered frame and log the result."
     confirm_title: "Inspect once"
-    confirm_message: "Wait for the next trigger pulse and analyse its frame?"
+    confirm_message: "Trigger and analyse one frame now?"

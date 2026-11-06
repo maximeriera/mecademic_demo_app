@@ -557,13 +557,13 @@ The Live panel shows the raw and processed images as thumbnails, with the state,
 - **ABORT** wakes task code blocked in `wait_for_result()` or `analyze_once()`. The analysis itself keeps running.
 - **INITIALIZE** stops the analysis before the camera reconnects, then starts it again if `autostart` is set.
 
-A complete example is in [`examples/gige_cv_analysis`](examples/gige_cv_analysis): a hardware-triggered camera (see [Trigger acquisition](#trigger-acquisition)) and the device above analysing the frame of each pulse, a custom view with the raw and processed feeds side by side, an **Inspect once** manual action and a PROD cycle that locates the part. Run it with:
+A complete example is in [`examples/gige_cv_analysis`](examples/gige_cv_analysis): a software-triggered camera (see [Trigger acquisition](#trigger-acquisition)) and the device above triggering it at its `rate_hz` and analysing each frame, a custom view with the raw and processed feeds side by side, an **Inspect once** manual action and a PROD cycle that locates the part. Run it with:
 
 ```bash
 python app.py --workspace examples/gige_cv_analysis
 ```
 
-Its `analysis_params` are set for a dim laser spot. Without a camera, the example uses a `simulated_camera` whose line pulses at its `fps`; switch to the test-pattern params noted in its `config.yaml` to track the pattern's ball.
+Its `analysis_params` are set for a dim laser spot. Without a camera, the example uses a `simulated_camera`, software-triggered too; switch to the test-pattern params noted in its `config.yaml` to track the pattern's ball.
 
 ---
 

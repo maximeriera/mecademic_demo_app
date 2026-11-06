@@ -705,7 +705,7 @@ def test_trigger_keys_are_validated():
     assert "'trigger_activation' must be one of" in _errors(issues)["bad"]
 
 
-def test_the_example_analyses_each_hardware_trigger_pulse(blob_analysis):
+def test_the_example_triggers_the_camera_at_the_vision_rate(blob_analysis):
     import yaml
 
     with open(os.path.join(EXAMPLE_DIR, "config.yaml"), encoding="utf-8") as f:
@@ -713,18 +713,22 @@ def test_the_example_analyses_each_hardware_trigger_pulse(blob_analysis):
     entries, issues = validate_devices_config(config["devices"], base_dir=EXAMPLE_DIR)
     assert issues == []
     by_name = {e.name: e for e in entries}
-    assert by_name["camera"].kwargs["trigger"] == "hardware"
-    assert by_name["vision"].kwargs["autostart"] is True     # analyses every pulse from INITIALIZE on
+    assert by_name["camera"].kwargs["trigger"] == "software"
+    rate_hz = by_name["vision"].kwargs["rate_hz"]
+    assert by_name["camera"].kwargs["fps"] > rate_hz          # the sensor keeps up: rate_hz sets the pace
+    assert by_name["vision"].kwargs["autostart"] is True      # triggers and analyses from INITIALIZE on
     camera = create_device(by_name["camera"])
     vision = create_device(by_name["vision"], {"camera": camera})
     try:
         camera.initialize()
-        vision.initialize()                                   # autostart: analyses from now on
+        vision.initialize()
         first = vision.wait_for_result(timeout=3)
-        second = vision.wait_for_result(timeout=3)
-        assert second["seq"] == first["seq"] + 1              # one result per pulse
+        for _ in range(3):
+            last = vision.wait_for_result(timeout=3)
+        assert last["seq"] == first["seq"] + 3                # one result per trigger
         telemetry = vision.telemetry()
-        assert telemetry["trigger"] == "hardware"
+        assert telemetry["trigger"] == "software"
+        assert telemetry["analysis_fps"] <= rate_hz + 0.5     # at rate_hz, not the sensor's fps
         assert telemetry["errors"] == 0 and telemetry["capture_errors"] == 0
     finally:
         vision.shutdown()

@@ -1,8 +1,8 @@
 """PROD task: one inspection per cycle, the way a pick cycle would locate its part.
 
-Task code never reads the camera itself: the `vision` device analyses the
-frame of every trigger pulse, and ``analyze_once()`` hands back the next one's
-result, or raises TimeoutError if no pulse comes within the timeout.
+Task code never reads the camera itself: the `vision` device triggers it at
+its rate_hz and analyses each frame, and ``analyze_once()`` hands back the
+next result.
 """
 
 import time
