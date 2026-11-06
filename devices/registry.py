@@ -22,14 +22,21 @@ A workspace can also bring its own driver without touching this file::
         type: "custom"
         driver: "my_package.gripper:MyGripper"   # importable from the workspace
         port: "COM7"                              # passed to the constructor as-is
+
+A ``device`` key links one device to another (a CV process to its camera):
+the config names the other device, the constructor receives the device
+object, and the controller brings the other device up first and down last.
 """
 
 from __future__ import annotations
 
 import difflib
+import os
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Dict, List, Tuple
+
+from devices.CameraFeatures import TRIGGER_ACTIVATIONS, TRIGGER_MODES   # plain constants, no SDK
 
 #: Marks a parameter without default: the config must give it.
 REQUIRED = object()
@@ -49,8 +56,10 @@ class Param:
     """One config key of a device type.
 
     ``type`` is one of ``str``, ``int``, ``float``, ``bool``, ``list``,
-    ``dict``, ``int_list`` (an int or a list of ints) or ``any``. A ``None``
-    default makes the key optional and nullable.
+    ``dict``, ``int_list`` (an int or a list of ints), ``device`` (the name
+    of another device in the config), ``path`` (a file path, relative ones
+    resolved against the config.yaml folder) or ``any``. A ``None`` default
+    makes the key optional and nullable.
     """
     type: str
     default: Any = REQUIRED
@@ -70,6 +79,8 @@ class DeviceSpec:
     params: Dict[str, Param] = field(default_factory=dict)
     aliases: Tuple[str, ...] = ()
     doc: str = ""
+    #: Groups of keys an entry may set only one of, e.g. ``(("features", "features_file"),)``.
+    exclusive: Tuple[Tuple[str, ...], ...] = ()
 
     def load(self):
         module_name, _, class_name = self.target.partition(":")
@@ -83,6 +94,7 @@ class DeviceEntry:
     type: str
     target: str
     kwargs: Dict[str, Any]
+    depends_on: Tuple[str, ...] = ()   # devices named by its ``device`` keys
 
 
 _SPECS: Dict[str, DeviceSpec] = {}
@@ -144,6 +156,14 @@ def _coerce(param: Param, value: Any) -> Any:
     if kind == "str":
         if isinstance(value, (str, int, float)) and not isinstance(value, bool):
             return str(value)
+    elif kind == "path":
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        raise ValueError(f"expected a file path, got {value!r}")
+    elif kind == "device":
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        raise ValueError(f"expected the name of another device, got {value!r}")
     elif kind == "int":
         if isinstance(value, bool):
             raise ValueError("expected an integer, got a boolean")
@@ -202,15 +222,20 @@ def _suggest(word: str, candidates) -> str:
     return f" (did you mean '{match[0]}'?)" if match else ""
 
 
-def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str, str]]]:
+def validate_devices_config(raw: Any, base_dir: str | None = None) -> Tuple[List[DeviceEntry], List[Dict[str, str]]]:
     """Validate a ``devices:`` block.
 
     Returns ``(entries, issues)``. Entries with an error are left out; an
     entry with ``enabled: false`` is skipped silently. Each issue is
-    ``{"device", "level": "error" | "warning", "message"}``.
+    ``{"device", "level": "error" | "warning", "message"}``. An entry whose
+    ``device`` key names a missing, disabled or invalid device is an error
+    too, and so is a dependency cycle: the entries returned can always be
+    created in :func:`dependency_order`. Relative ``path`` values are
+    resolved against *base_dir* (the config.yaml folder).
     """
     entries: List[DeviceEntry] = []
     issues: List[Dict[str, str]] = []
+    disabled: set = set()
 
     def issue(device: str, level: str, message: str) -> None:
         issues.append({"device": device, "level": level, "message": message})
@@ -229,6 +254,7 @@ def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str,
 
         enabled = settings.get("enabled", True)
         if enabled is False or (isinstance(enabled, str) and enabled.strip().lower() in _FALSE):
+            disabled.add(name)
             continue
 
         type_name = settings.get("type")
@@ -274,7 +300,15 @@ def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str,
                 issue(name, "error", f"'{key}' must be one of {choices}, got {coerced!r}.")
                 failed = True
                 continue
+            if param.type == "path" and coerced is not None and base_dir and not os.path.isabs(coerced):
+                coerced = os.path.normpath(os.path.join(base_dir, coerced))
             kwargs[key] = coerced
+
+        for group in spec.exclusive:
+            given = [key for key in group if settings.get(key) is not None]
+            if len(given) > 1:
+                issue(name, "error", "use either " + " or ".join(f"'{key}'" for key in given) + ", not both.")
+                failed = True
 
         for key, param in spec.params.items():
             if key in kwargs or key in settings:
@@ -286,16 +320,112 @@ def validate_devices_config(raw: Any) -> Tuple[List[DeviceEntry], List[Dict[str,
                 kwargs[key] = param.default
 
         if not failed:
-            entries.append(DeviceEntry(name, spec.type, spec.target, kwargs))
+            entry = DeviceEntry(name, spec.type, spec.target, kwargs)
+            entry.depends_on = tuple(dict.fromkeys(dep for _, dep in _device_refs(entry)))
+            entries.append(entry)
 
-    return entries, issues
+    return _check_links(entries, {str(n) for n in raw}, disabled, issue), issues
 
 
-def create_device(entry: DeviceEntry):
-    """Instantiate a validated entry. Import and constructor errors propagate."""
+def _device_refs(entry: DeviceEntry) -> List[Tuple[str, str]]:
+    """``(key, device name)`` for every ``device`` key *entry* sets."""
+    spec = resolve_type(entry.type) if entry.type != CUSTOM_TYPE else None
+    if spec is None:
+        return []
+    return [(key, entry.kwargs[key]) for key, param in spec.params.items()
+            if param.type == "device" and entry.kwargs.get(key) is not None]
+
+
+def _check_links(entries: List[DeviceEntry], declared: set, disabled: set, issue) -> List[DeviceEntry]:
+    """Drop the entries whose links cannot be satisfied, reporting each one.
+
+    Dropping an entry can orphan the entries that depend on it, so this runs
+    until nothing changes.
+    """
+    while True:
+        valid = {e.name for e in entries}
+        broken: Dict[str, str] = {}
+        for entry in entries:
+            for key, dep in _device_refs(entry):
+                if dep == entry.name:
+                    broken[entry.name] = f"'{key}': a device cannot depend on itself."
+                elif dep in disabled:
+                    broken[entry.name] = f"'{key}': device '{dep}' is disabled."
+                elif dep in declared and dep not in valid:
+                    broken[entry.name] = f"'{key}': device '{dep}' has errors."
+                elif dep not in valid:
+                    broken[entry.name] = (f"'{key}': no device named '{dep}'"
+                                          f"{_suggest(dep, sorted(valid - {entry.name}))}.")
+                if entry.name in broken:
+                    break
+        if not broken:
+            deps = {e.name: e.depends_on for e in entries}
+            _, stuck = dependency_order([e.name for e in entries], deps)
+            # Peel off the devices that only depend on a cycle: they are
+            # reported as "has errors" on the next pass.
+            cyclic = set(stuck)
+            while True:
+                leaves = {n for n in cyclic if not any(n in deps[m] for m in cyclic)}
+                if not leaves:
+                    break
+                cyclic -= leaves
+            members = [n for n in stuck if n in cyclic]
+            for name in members:
+                broken[name] = "dependency cycle between " + ", ".join(f"'{n}'" for n in members) + "."
+        if not broken:
+            return entries
+        for name, message in broken.items():
+            issue(name, "error", message)
+        entries = [e for e in entries if e.name not in broken]
+
+
+def dependency_order(names, deps: Dict[str, Tuple[str, ...]],
+                     dependents_first: bool = False) -> Tuple[List[str], List[str]]:
+    """*names* ordered so each device comes after the devices it depends on.
+
+    With ``dependents_first`` each device comes *before* them instead (the
+    order to shut down in). Otherwise the given order is kept, so a config
+    without links is brought up and down exactly as written. Dependencies
+    outside *names* are ignored. Returns ``(order, cyclic)``: names caught in
+    a cycle are left out of ``order`` and listed in ``cyclic``.
+    """
+    names = list(names)
+    known = set(names)
+    waits_for: Dict[str, List[str]] = {n: [] for n in names}
+    for name in names:
+        for dep in deps.get(name, ()):
+            if dep in known and dep != name:
+                if dependents_first:
+                    waits_for[dep].append(name)
+                else:
+                    waits_for[name].append(dep)
+    order: List[str] = []
+    placed: set = set()
+    while len(placed) < len(names):
+        # Always the earliest name that is free to go, to keep the given order.
+        ready = next((n for n in names if n not in placed and all(w in placed for w in waits_for[n])), None)
+        if ready is None:
+            break
+        order.append(ready)
+        placed.add(ready)
+    return order, [n for n in names if n not in placed]
+
+
+def create_device(entry: DeviceEntry, devices: Dict[str, Any] | None = None):
+    """Instantiate a validated entry. Import and constructor errors propagate.
+
+    Each ``device`` key is given the device object itself, looked up in
+    *devices*: create the entries in :func:`dependency_order`.
+    """
+    kwargs = dict(entry.kwargs)
+    for key, dep in _device_refs(entry):
+        device = (devices or {}).get(dep)
+        if device is None:
+            raise RuntimeError(f"depends on '{dep}', which could not be created")
+        kwargs[key] = device
     module_name, _, class_name = entry.target.partition(":")
     cls = getattr(import_module(module_name), class_name)
-    return cls(name=entry.name, **entry.kwargs)
+    return cls(name=entry.name, **kwargs)
 
 
 # --- Built-in device types ----------------------------------------------------
@@ -368,8 +498,49 @@ register_device(DeviceSpec(
         "cti_path": _p("str", doc="path to the GenTL producer (.cti)"),
         "camera_index": _p("int", 0),
         "autostart_stream": _p("bool", False),
+        "features": _p("dict", None, "GenICam features set at every INITIALIZE, in order"),
+        "features_file": _p("path", None, "YAML of features the app reads at INITIALIZE and writes on Save"),
+        "trigger": _p("str", "off", "off (free-run), software, or hardware (an input line)",
+                      choices=TRIGGER_MODES),
+        "trigger_source": _p("str", "Line0", "input line of a hardware trigger"),
+        "trigger_activation": _p("str", "RisingEdge", "edge or level of a hardware trigger",
+                                 choices=TRIGGER_ACTIVATIONS),
     },
     doc="GigE Vision camera (harvesters).",
+    exclusive=(("features", "features_file"),),
+))
+register_device(DeviceSpec(
+    "simulated_camera", "devices.SimulatedCamera:SimulatedCamera",
+    {
+        "width": _p("int", 1600, "pixels"),
+        "height": _p("int", 1200, "pixels"),
+        "fps": _p("float", 15.0, "frame rate ceiling"),
+        "fail_to_connect": _p("bool", False),
+        "features": _p("dict", None, "ExposureTime, Gain, PixelFormat, set at every INITIALIZE"),
+        "features_file": _p("path", None, "YAML of features the app reads at INITIALIZE and writes on Save"),
+        "trigger": _p("str", "off", "off (free-run), software, or hardware (an input line)",
+                      choices=TRIGGER_MODES),
+        "trigger_source": _p("str", "Line0", "input line of a hardware trigger"),
+        "trigger_activation": _p("str", "RisingEdge", "edge or level of a hardware trigger",
+                                 choices=TRIGGER_ACTIVATIONS),
+    },
+    aliases=("test_pattern_camera",),
+    doc="Hardware-free camera serving a moving test pattern.",
+    exclusive=(("features", "features_file"),),
+))
+register_device(DeviceSpec(
+    "cv_process", "devices.CVProcessDevice:CVProcessDevice",
+    {
+        "camera": _p("device", doc="camera device to read frames from"),
+        "analysis": _p("str", doc='"module:function" importable from the workspace'),
+        "analysis_params": _p("dict", None, "passed to the analysis function as params"),
+        "autostart": _p("bool", False, "start analysing at INITIALIZE"),
+        "rate_hz": _p("float", 5.0, "analysis rate ceiling"),
+        "capture_timeout_s": _p("float", 2.0, "seconds to wait for each frame"),
+        "fault_on_error": _p("bool", False, "an analysis exception faults the cell"),
+    },
+    aliases=("vision", "cv"),
+    doc="Computer-vision analysis on the frames of a camera device.",
 ))
 register_device(DeviceSpec(
     "thorlabs_pm", "devices.ThorlabsPowerMeter:ThorlabsPowerMeter",

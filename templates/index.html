@@ -437,6 +437,37 @@
         </div>
     </div>
 
+    <!-- Settings > Devices > Features...: a camera's GenICam features, by category. -->
+    <div id="features-modal" class="modal-overlay" hidden>
+        <div class="modal-content modal-wide" role="dialog" aria-modal="true" aria-labelledby="features-title">
+            <div class="modal-header features-header">
+                <div class="features-heading">
+                    <h2 id="features-title">Features</h2>
+                    <div class="features-source" id="features-source"></div>
+                </div>
+                <div class="features-header-actions">
+                    <span class="badge badge-warn" id="features-unsaved" hidden></span>
+                    <button type="button" class="btn-shutdown" id="features-discard" disabled>Discard</button>
+                    <button type="button" class="btn-start" id="features-save" disabled>Save</button>
+                    <button type="button" class="link-btn" id="features-close">Close</button>
+                </div>
+            </div>
+            <div class="features-toolbar">
+                <input type="search" id="features-search" placeholder="Search features" aria-label="Search features">
+                <select id="features-visibility" aria-label="Visibility">
+                    <option value="Beginner">Beginner</option>
+                    <option value="Expert">Expert</option>
+                    <option value="Guru">Guru</option>
+                </select>
+                <label class="features-check"><input type="checkbox" id="features-writable"> Writable only</label>
+                <button type="button" class="btn-task" id="features-refresh">Refresh</button>
+                <span class="manual-state-hint" id="features-lock" hidden></span>
+            </div>
+            <div class="features-notice" id="features-notice" hidden></div>
+            <div class="modal-body features-body" id="features-body"></div>
+        </div>
+    </div>
+
     <!-- Faults, failed tasks and device link changes, pushed over /api/events. -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 

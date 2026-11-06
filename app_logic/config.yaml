@@ -64,8 +64,47 @@
 # --- GigE Vision Camera (GigEVisionDevice) ---
 #   type: "gige_camera"
 #   cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+#   # In the Docker image: "/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti"
 #   camera_index: 0              # optional, default: 0
 #   autostart_stream: false      # optional, default: false
+#   features:                    # optional — GenICam features written at every INITIALIZE,
+#     ExposureAuto: "Off"        #   in this order, before the stream starts. Names are the
+#     ExposureTime: 20000.0      #   camera's own; change them at runtime from code with
+#     Gain: 3.0                  #   camera.set_feature("ExposureTime", 5000.0)
+#   features_file: "camera_features.yaml"  # optional, instead of features: — a YAML the app reads at
+#                                #   every INITIALIZE and rewrites from Settings > Devices > Features > Save
+#   trigger: "off"               # optional — "off" (free-run), "software" (one TriggerSoftware per
+#                                #   frame) or "hardware" (a pulse on an input line starts each frame)
+#   trigger_source: "Line0"      # optional — hardware trigger input line
+#   trigger_activation: "RisingEdge"  # optional — RisingEdge, FallingEdge, AnyEdge, LevelHigh, LevelLow
+#
+# --- Simulated camera (SimulatedCamera) — no hardware required ---
+#   A moving test pattern behind the same capture_frame_8bit() as gige_camera.
+#   type: "simulated_camera"     # alias: "test_pattern_camera"
+#   width: 1600                  # optional, pixels
+#   height: 1200                 # optional, pixels
+#   fps: 15                      # optional, frame rate ceiling
+#   fail_to_connect: false       # optional — raise on initialize(), to test FAULTED path
+#   features:                    # optional — same contract as gige_camera:
+#     ExposureTime: 10000        #   µs, 100-1000000: scales the brightness
+#     Gain: 0                    #   dB, 0-24: scales the brightness
+#     PixelFormat: "RGB8"        #   or "Mono8"; locked while streaming
+#   features_file: "camera_features.yaml"  # optional, instead of features: (see gige_camera)
+#   trigger: "off"               # optional — as gige_camera; "hardware" pulses at fps
+#
+# --- Computer-vision processing (CVProcessDevice) ---
+#   Runs a workspace function on each frame of a camera device and keeps the
+#   last raw image, processed image and result (see examples/gige_cv_analysis).
+#   type: "cv_process"           # aliases: "vision", "cv"
+#   camera: "camera"             # name of a gige_camera / simulated_camera device above
+#   analysis: "blob_analysis:analyze"   # "module:function": blob_analysis.py in the workspace
+#                                #   folder or in app_logic/ (the Docker image's layout)
+#   analysis_params:             # optional — passed to the function as `params`
+#     threshold: 175
+#   autostart: false             # optional — true: start analysing at every INITIALIZE
+#   rate_hz: 5.0                 # optional — analysis rate ceiling
+#   capture_timeout_s: 2.0       # optional — seconds to wait for each frame
+#   fault_on_error: false        # optional — true: an exception in the analysis faults the cell
 #
 # --- Thorlabs PM-series Power Meter (ThorlabsPowerMeter) ---
 #   PM100A/D/USB, PM101-103, PM16x, PM400, PM5020, ... over USB (or TCPIP).

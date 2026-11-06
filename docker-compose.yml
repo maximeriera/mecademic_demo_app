@@ -109,11 +109,18 @@ services:
     #
     # and set the matching `port:` in app_logic/config.yaml.
     #
-    # For USB instruments (Thorlabs power meters), pass the USB bus through.
-    # Linux hosts only — Docker Desktop on macOS and Windows cannot forward USB:
+    # For USB instruments (Thorlabs power meters, USB3 Vision cameras), pass the
+    # USB bus through. Linux hosts only — Docker Desktop on macOS and Windows
+    # cannot forward USB:
     #
     #   devices:
     #     - "/dev/bus/usb:/dev/bus/usb"
+    #
+    # Teledyne FLIR cameras (gige_camera): the image carries the Spinnaker GenTL
+    # producer, so set
+    #   cti_path: "/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti"
+    # in app_logic/config.yaml. GigE cameras also need host networking (above)
+    # for discovery.
     #
     # NOTE: pmclib (planar motor) cannot import in this image — pythonnet needs
     # a .NET/mono runtime that python:*-slim does not carry. Every other driver

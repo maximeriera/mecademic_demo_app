@@ -71,6 +71,10 @@ class Device(ABC):
     connect() / disconnect(keep_monitoring)
         Default to :meth:`initialize` / :meth:`shutdown`.
 
+    Optional live data  (Devices tab "Live" panel)
+    ----------------------------------------------
+    telemetry(), io_points() / write_io(), images() / get_image()
+
     Example
     -------
     >>> class MyDevice(Device):
@@ -231,8 +235,50 @@ class Device(ABC):
         """Set the writable point *name* (from :meth:`io_points`) to *value*."""
         raise NotImplementedError(f"{self.device_id} has no writable I/O.")
 
+    # --- Optional images (thumbnails in the "Live" panel) ----------------
+    # Served at /api/devices/<id>/image/<name>.jpg; same threading rule as
+    # above: return a cached frame, never grab one from the hardware here.
+
+    def images(self) -> list:
+        """Names of the images :meth:`get_image` can return, e.g. ``["raw", "processed"]``."""
+        return []
+
+    def get_image(self, name: str) -> Any:
+        """Latest image *name*: uint8 NumPy array, mono ``H×W`` or RGB ``H×W×3``; None if none yet."""
+        raise KeyError(name)
+
+    # --- Optional settings (the Features dialog of Settings > Devices) ---
+    # Writes are refused by the controller while a task runs. Cameras get all
+    # of these from devices.CameraFeatures.FeatureSettingsMixin.
+
+    def settings(self, visibility: str = "Beginner") -> dict:
+        """``{groups: [{name, features: [...]}], file, can_save, unsaved, ...}`` for the dialog."""
+        raise NotImplementedError(f"{self.device_id} has no settings.")
+
+    def write_setting(self, name: str, value) -> dict:
+        """Apply *value* to setting *name* now; it stays unsaved until :meth:`save_settings`."""
+        raise NotImplementedError(f"{self.device_id} has no settings.")
+
+    def forget_setting(self, name: str) -> dict:
+        """Drop setting *name* from the saved ones on the next :meth:`save_settings`."""
+        raise NotImplementedError(f"{self.device_id} has no settings.")
+
+    def save_settings(self) -> dict:
+        """Persist the unsaved settings, for the next INITIALIZE."""
+        raise NotImplementedError(f"{self.device_id} has no settings.")
+
+    def discard_settings(self) -> dict:
+        """Undo the unsaved settings on the device."""
+        raise NotImplementedError(f"{self.device_id} has no settings.")
+
+    @property
+    def has_settings(self) -> bool:
+        """True when the driver implements :meth:`settings`."""
+        return type(self).settings is not Device.settings
+
     @property
     def has_live_data(self) -> bool:
-        """True when the driver implements :meth:`telemetry` or :meth:`io_points`."""
+        """True when the driver implements :meth:`telemetry`, :meth:`io_points` or :meth:`images`."""
         cls = type(self)
-        return cls.telemetry is not Device.telemetry or cls.io_points is not Device.io_points
+        return (cls.telemetry is not Device.telemetry or cls.io_points is not Device.io_points
+                or cls.images is not Device.images)

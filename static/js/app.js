@@ -96,6 +96,7 @@ function applyStatus(data) {
     stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
     updateManualActionAvailability(data.status);
     updateWorkspaceButtons(data.status);
+    refreshFeaturesOnStatus(data.status);
     // Another page switched the workspace: everything here is stale.
     if (data.workspace) {
         if (currentWorkspace === null) currentWorkspace = data.workspace;
@@ -104,7 +105,7 @@ function applyStatus(data) {
 }
 
 function updateRobotStatus() {
-    fetch('/api/status')
+    fetch('/api/status', { cache: 'no-store' })
         .then(r => r.json())
         .then(applyStatus)
         .catch(() => {
@@ -1621,7 +1622,7 @@ const devicePending = new Set();   // device ids with a link request in flight
 // Live/status fields the cards show as badges or buttons, not as table rows.
 const DEVICE_STATUS_KEYS = new Set([
     'connected', 'ready', 'faulted', 'device_id', 'link', 'detached',
-    'in_transition', 'supports_reconnect', 'supports_monitoring', 'has_live_data',
+    'in_transition', 'supports_reconnect', 'supports_monitoring', 'has_live_data', 'has_settings',
 ]);
 
 function setDevicesMessage(text, isError = false) {
@@ -1724,9 +1725,11 @@ function createDeviceCard(deviceId) {
         <div class="device-card-body"></div>
         <div class="device-live-toggle-row" hidden>
             <button type="button" class="link-btn device-live-toggle" aria-expanded="false">Show live data</button>
+            <button type="button" class="link-btn device-features-open" hidden>Features…</button>
         </div>
         <div class="device-live" hidden>
             <div class="device-live-error" hidden></div>
+            <div class="device-live-images"></div>
             <div class="device-live-telemetry"></div>
             <div class="device-live-io"></div>
         </div>`;
@@ -1735,6 +1738,7 @@ function createDeviceCard(deviceId) {
         btn.addEventListener('click', () => deviceLinkAction(deviceId, btn.dataset.linkAction));
     });
     card.querySelector('.device-live-toggle').addEventListener('click', () => toggleDeviceLive(deviceId));
+    card.querySelector('.device-features-open').addEventListener('click', () => openFeatures(deviceId));
     return card;
 }
 
@@ -1770,7 +1774,7 @@ function formatLiveValue(value) {
 function refreshDeviceLive(deviceId) {
     if (deviceLiveInFlight.has(deviceId)) return;
     deviceLiveInFlight.add(deviceId);
-    fetch(`/api/devices/${encodeURIComponent(deviceId)}/live`)
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/live`, { cache: 'no-store' })
         .then(r => r.json())
         .then((live) => renderDeviceLive(deviceId, live))
         .catch(() => renderDeviceLive(deviceId, { telemetry: {}, io: [], error: 'Could not reach the server.' }))
@@ -1783,6 +1787,8 @@ function renderDeviceLive(deviceId, live) {
     const errorEl = card.querySelector('.device-live-error');
     errorEl.hidden = !live.error;
     errorEl.textContent = live.error || '';
+
+    renderDeviceLiveImages(card, deviceId, Array.isArray(live.images) ? live.images : []);
 
     const telemetry = live.telemetry || {};
     const rows = Object.keys(telemetry).map((key) =>
@@ -1824,6 +1830,330 @@ function renderDeviceLive(deviceId, live) {
         el.classList.toggle('on', !!point.value);
         if (point.writable) el.disabled = writeLocked;
     });
+}
+
+// Thumbnails are built once per image list; each poll reloads an image only
+// once the previous one has arrived, so a slow link never piles requests up.
+function renderDeviceLiveImages(card, deviceId, images) {
+    const imagesEl = card.querySelector('.device-live-images');
+    const signature = images.map((image) => image.url).join('|');
+    if (imagesEl.dataset.signature !== signature) {
+        imagesEl.dataset.signature = signature;
+        imagesEl.innerHTML = '';
+        images.forEach((image) => {
+            const figure = document.createElement('figure');
+            figure.className = 'device-live-image empty';
+            const frame = document.createElement('div');
+            frame.className = 'device-live-frame';
+            const img = document.createElement('img');
+            img.alt = `${deviceId} ${image.name}`;
+            img.dataset.url = image.url;
+            frame.appendChild(img);
+            const caption = document.createElement('figcaption');
+            caption.textContent = image.name.replace(/_/g, ' ');
+            img.addEventListener('load', () => {
+                delete img.dataset.loading;
+                figure.classList.remove('empty');
+            });
+            img.addEventListener('error', () => {
+                delete img.dataset.loading;
+                figure.classList.add('empty');
+            });
+            figure.append(frame, caption);
+            imagesEl.appendChild(figure);
+        });
+    }
+    imagesEl.querySelectorAll('img').forEach((img) => {
+        if (img.dataset.loading) return;
+        img.dataset.loading = '1';
+        img.src = `${img.dataset.url}?w=480&t=${Date.now()}`;
+    });
+}
+
+/* ---- Settings > Devices: the Features dialog (a camera's GenICam features) ---- */
+// The tree is read from the camera when the dialog opens, after each action
+// and on Refresh, never on a timer: each feature is one control-channel read.
+// Unsaved changes live on the server, so closing the dialog loses nothing.
+const FEATURES_VISIBILITY_KEY = 'mecademic.features.visibility';
+const features = { deviceId: null, data: null, request: 0, openGroups: new Set(), rowErrors: {}, busy: null };
+
+function storedFeaturesVisibility() {
+    try {
+        const value = localStorage.getItem(FEATURES_VISIBILITY_KEY);
+        return ['Beginner', 'Expert', 'Guru'].includes(value) ? value : 'Beginner';
+    } catch (e) {
+        return 'Beginner';
+    }
+}
+
+function storeFeaturesVisibility(value) {
+    try {
+        localStorage.setItem(FEATURES_VISIBILITY_KEY, value);
+    } catch (e) {
+        // Private window or blocked storage: the choice is just not remembered.
+    }
+}
+
+function openFeatures(deviceId) {
+    features.deviceId = deviceId;
+    features.data = null;
+    features.openGroups = new Set();
+    features.rowErrors = {};
+    document.getElementById('features-title').textContent = `${deviceId} features`;
+    document.getElementById('features-source').textContent = '';
+    document.getElementById('features-visibility').value = storedFeaturesVisibility();
+    document.getElementById('features-search').value = '';
+    showFeaturesNotice('');
+    document.getElementById('features-body').innerHTML =
+        '<p class="empty-state">Reading the features from the camera…</p>';
+    document.getElementById('features-modal').hidden = false;
+    loadFeatures();
+    document.getElementById('features-search').focus();
+}
+
+function closeFeatures() {
+    document.getElementById('features-modal').hidden = true;
+    features.deviceId = null;
+    features.data = null;
+}
+
+function showFeaturesNotice(text, isError = false) {
+    const el = document.getElementById('features-notice');
+    el.hidden = !text;
+    el.textContent = text || '';
+    el.classList.toggle('features-notice-error', !!isError);
+}
+
+function loadFeatures() {
+    const deviceId = features.deviceId;
+    if (!deviceId) return;
+    const request = ++features.request;   // only the latest answer is drawn
+    const visibility = document.getElementById('features-visibility').value;
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/settings?visibility=${encodeURIComponent(visibility)}`)
+        .then(r => r.json())
+        .then((data) => {
+            if (request !== features.request || features.deviceId !== deviceId) return;
+            if (!data.success) {
+                showFeaturesNotice(data.message || 'Could not read the features.', true);
+                if (!features.data) document.getElementById('features-body').innerHTML = '';
+                return;
+            }
+            features.data = data;
+            renderFeatures();
+        })
+        .catch(() => {
+            if (request === features.request) showFeaturesNotice('Could not reach the server.', true);
+        });
+}
+
+// While open, a task starting or ending re-reads the lock state.
+function refreshFeaturesOnStatus(status) {
+    const busy = ['BUSY', 'INITIALIZING'].includes(normalizeStatus(status));
+    if (features.deviceId && features.busy !== null && busy !== features.busy) loadFeatures();
+    features.busy = busy;
+}
+
+function featureEditable(feature) {
+    // A feature the stream locks is written with the stream stopped (set_feature restarts it).
+    return !!(feature.writable || feature.stream_locked);
+}
+
+function featureInputHtml(feature, disabled) {
+    const attrs = `data-feature-input="${escapeHtml(feature.name)}" ${disabled ? 'disabled' : ''}`;
+    const value = feature.value;
+    if (feature.type === 'IBoolean') {
+        return `<input type="checkbox" ${attrs} ${value ? 'checked' : ''}>`;
+    }
+    if (feature.type === 'IEnumeration' && Array.isArray(feature.choices)) {
+        const options = feature.choices.map((choice) =>
+            `<option value="${escapeHtml(choice)}" ${choice === value ? 'selected' : ''}>${escapeHtml(choice)}</option>`);
+        if (!feature.choices.includes(value)) {
+            options.unshift(`<option value="" selected disabled>${escapeHtml(formatLiveValue(value))}</option>`);
+        }
+        return `<select ${attrs}>${options.join('')}</select>`;
+    }
+    if (feature.type === 'IInteger' || feature.type === 'IFloat') {
+        const integer = feature.type === 'IInteger';
+        const bound = (key) => (feature[key] === null || feature[key] === undefined)
+            ? '' : ` ${key}="${escapeHtml(feature[key])}"`;
+        return `<input type="number" step="${escapeHtml(feature.inc || (integer ? 1 : 'any'))}"${bound('min')}${bound('max')}`
+            + ` inputmode="${integer ? 'numeric' : 'decimal'}" value="${escapeHtml(value ?? '')}" ${attrs}>`;
+    }
+    return `<input type="text" value="${escapeHtml(value ?? '')}" ${attrs}>`;
+}
+
+function featureMetaHtml(feature) {
+    const parts = [];
+    const has = (key) => feature[key] !== null && feature[key] !== undefined;
+    const unit = feature.unit ? ` ${escapeHtml(feature.unit)}` : '';
+    if (has('min') || has('max')) {
+        parts.push(`<span>${has('min') ? escapeHtml(formatLiveValue(feature.min)) : '…'} – `
+            + `${has('max') ? escapeHtml(formatLiveValue(feature.max)) : '…'}${unit}</span>`);
+    } else if (unit) {
+        parts.push(`<span>${unit.trim()}</span>`);
+    }
+    if (!feature.writable && feature.stream_locked) {
+        parts.push('<span class="badge badge-info" title="Locked while the camera streams: Apply stops and restarts the stream">stream restart</span>');
+    }
+    if (feature.forget) parts.push('<span class="badge badge-off">leaves the file on Save</span>');
+    else if (feature.pending) parts.push('<span class="badge badge-warn">unsaved</span>');
+    if (feature.in_file && !feature.forget) {
+        parts.push(`<span class="badge badge-ok">saved: ${escapeHtml(formatLiveValue(feature.saved))}</span>`);
+    }
+    return parts.join('');
+}
+
+function featureRowHtml(feature, locked, canSave) {
+    const name = escapeHtml(feature.name);
+    const editable = featureEditable(feature);
+    const error = features.rowErrors[feature.name];
+    const value = editable
+        ? featureInputHtml(feature, locked)
+        : `<span class="feature-readonly">${escapeHtml(formatLiveValue(feature.value))}</span>`;
+    const actions = [];
+    if (editable) {
+        actions.push(`<button type="button" class="btn-task" data-feature-apply="${name}" ${locked ? 'disabled' : ''}>Apply</button>`);
+    }
+    if (feature.in_file && !feature.forget && canSave) {
+        actions.push(`<button type="button" class="link-btn" data-feature-forget="${name}" ${locked ? 'disabled' : ''}`
+            + ' title="Remove it from the features file on the next Save">Forget</button>');
+    }
+    return `
+        <div class="feature-row${feature.pending ? ' feature-pending' : ''}">
+            <div class="feature-label" title="${escapeHtml(feature.tooltip || '')}">
+                <span class="feature-display">${escapeHtml(feature.display_name || feature.name)}</span>
+                <span class="feature-name">${name}</span>
+            </div>
+            <div class="feature-value">${value}</div>
+            <div class="feature-meta">${featureMetaHtml(feature)}</div>
+            <div class="feature-actions">${actions.join('')}</div>
+            ${error ? `<div class="feature-error">${escapeHtml(error)}</div>` : ''}
+        </div>`;
+}
+
+function renderFeatures() {
+    const data = features.data;
+    if (!data) return;
+    const body = document.getElementById('features-body');
+    const query = document.getElementById('features-search').value.trim().toLowerCase();
+    const writableOnly = document.getElementById('features-writable').checked;
+    const locked = !!data.locked;
+
+    document.getElementById('features-source').textContent = data.source === 'file'
+        ? `Saved to ${data.file}`
+        : 'From config.yaml (features:). Set features_file to save changes from here.';
+    const unsaved = document.getElementById('features-unsaved');
+    unsaved.hidden = !data.unsaved;
+    unsaved.textContent = `${data.unsaved} unsaved`;
+    const save = document.getElementById('features-save');
+    save.disabled = locked || !data.can_save || !data.unsaved;
+    save.title = data.can_save ? '' : 'Set features_file in config.yaml to save from here.';
+    document.getElementById('features-discard').disabled = locked || !data.unsaved;
+    const lockHint = document.getElementById('features-lock');
+    lockHint.hidden = !locked;
+    lockHint.textContent = locked ? `Locked: ${data.locked}` : '';
+    lockHint.className = 'manual-state-hint manual-state-blocked';
+
+    const groupsHtml = (data.groups || []).map((group) => {
+        const rows = group.features.filter((f) => (!writableOnly || featureEditable(f))
+            && (!query || f.name.toLowerCase().includes(query)
+                || String(f.display_name || '').toLowerCase().includes(query)));
+        if (rows.length === 0) return '';
+        const open = query || features.openGroups.has(group.name);
+        return `
+            <details class="features-group" data-group="${escapeHtml(group.name)}" ${open ? 'open' : ''}>
+                <summary>${escapeHtml(group.name)} <span class="features-count">${rows.length}</span></summary>
+                <div class="features-rows">${rows.map((f) => featureRowHtml(f, locked, data.can_save)).join('')}</div>
+            </details>`;
+    }).join('');
+    const scroll = body.scrollTop;
+    body.innerHTML = groupsHtml
+        || `<p class="empty-state">${query ? 'No feature matches the search.' : 'No feature at this visibility.'}</p>`;
+    body.scrollTop = scroll;
+}
+
+function featureInputValue(input, feature) {
+    if (input.type === 'checkbox') return input.checked;
+    if (input.type === 'number') {
+        const number = Number(input.value);
+        if (input.value.trim() === '' || !Number.isFinite(number)) throw new Error('Enter a number.');
+        return number;
+    }
+    return input.value;
+}
+
+function postFeatures(path, payload, rowName = null) {
+    const deviceId = features.deviceId;
+    if (!deviceId) return;
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/settings${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+    })
+        .then(r => r.json())
+        .then((result) => {
+            if (rowName) {
+                if (result.success) delete features.rowErrors[rowName];
+                else features.rowErrors[rowName] = result.message;
+            }
+            showFeaturesNotice(result.message, !result.success);
+        })
+        .catch(() => showFeaturesNotice('Could not reach the server.', true))
+        .finally(loadFeatures);   // selectors change other features: always re-read
+}
+
+function applyFeature(name) {
+    const feature = (features.data?.groups || []).flatMap((g) => g.features).find((f) => f.name === name);
+    const input = document.querySelector(`#features-body [data-feature-input="${CSS.escape(name)}"]`);
+    if (!feature || !input) return;
+    let value;
+    try {
+        value = featureInputValue(input, feature);
+    } catch (e) {
+        features.rowErrors[name] = e.message;
+        renderFeatures();
+        return;
+    }
+    postFeatures('', { name, value }, name);
+}
+
+function initFeaturesDialog() {
+    const modal = document.getElementById('features-modal');
+    const body = document.getElementById('features-body');
+    document.getElementById('features-close').addEventListener('click', closeFeatures);
+    modal.addEventListener('click', (event) => { if (event.target === modal) closeFeatures(); });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !modal.hidden) closeFeatures();
+    });
+    document.getElementById('features-search').addEventListener('input', renderFeatures);
+    document.getElementById('features-writable').addEventListener('change', renderFeatures);
+    document.getElementById('features-visibility').addEventListener('change', (event) => {
+        storeFeaturesVisibility(event.target.value);
+        loadFeatures();
+    });
+    document.getElementById('features-refresh').addEventListener('click', loadFeatures);
+    document.getElementById('features-save').addEventListener('click', () => postFeatures('/save'));
+    document.getElementById('features-discard').addEventListener('click', () => postFeatures('/discard'));
+    body.addEventListener('click', (event) => {
+        const apply = event.target.closest('[data-feature-apply]');
+        if (apply) applyFeature(apply.dataset.featureApply);
+        const forget = event.target.closest('[data-feature-forget]');
+        if (forget) postFeatures('/forget', { name: forget.dataset.featureForget }, forget.dataset.featureForget);
+    });
+    body.addEventListener('keydown', (event) => {
+        const input = event.target.closest('[data-feature-input]');
+        if (input && event.key === 'Enter') {
+            event.preventDefault();
+            applyFeature(input.dataset.featureInput);
+        }
+    });
+    // <details> toggles do not bubble: listen in the capture phase.
+    body.addEventListener('toggle', (event) => {
+        const group = event.target.closest?.('.features-group');
+        if (!group || document.getElementById('features-search').value.trim()) return;
+        if (group.open) features.openGroups.add(group.dataset.group);
+        else features.openGroups.delete(group.dataset.group);
+    }, true);
 }
 
 function writeDeviceIo(deviceId, name, value) {
@@ -1904,7 +2234,9 @@ function renderDeviceCards(devices) {
 
         card.querySelector('.device-card-actions').hidden =
             releaseBtn.hidden && connectBtn.hidden && clearBtn.hidden;
-        card.querySelector('.device-live-toggle-row').hidden = !device.has_live_data;
+        card.querySelector('.device-live-toggle-row').hidden = !device.has_live_data && !device.has_settings;
+        card.querySelector('.device-live-toggle').hidden = !device.has_live_data;
+        card.querySelector('.device-features-open').hidden = !device.has_settings;
     });
     existing.forEach((card) => card.remove());
 }
@@ -2641,6 +2973,7 @@ renderBackupRestoreSelectMenu('backup-robot-picker');
 renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
 initCustomViewLink();
+initFeaturesDialog();
 loadSystemInfo();
 initProdTimeline();
 loadWorkspaces();

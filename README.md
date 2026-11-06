@@ -35,6 +35,8 @@ Users can build their own application logic in `app_logic/` and trigger it via t
   - [Releasing a device](#releasing-a-device)
   - [Workspaces](#workspaces)
   - [Camera feed in a custom view](#camera-feed-in-a-custom-view)
+  - [Camera features](#camera-features)
+  - [Computer-vision processing](#computer-vision-processing)
   - [State Machine](#state-machine)
   - [Stop vs. Abort](#stop-vs-abort)
   - [Build your own application logic](#build-your-own-application-logic)
@@ -154,6 +156,8 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 | `smaract_mcs2` | `SmarActMCS2` | SmarAct MCS2 positioner controller and its linear stages (Ethernet ASCII) |
 | `brainboxes_ed_digital` | `BrainboxesEDDigital` | Brainboxes ED digital I/O module |
 | `gige_camera` | `GigEVisionDevice` | GigE Vision camera (harvesters / GenTL) |
+| `simulated_camera` | `SimulatedCamera` | Hardware-free camera serving a moving test pattern |
+| `cv_process` | `CVProcessDevice` | Computer-vision analysis on the frames of a camera device (see [Computer-vision processing](#computer-vision-processing)) |
 | `zaber` | `ZaberAxis` | Zaber linear axis (legacy driver) |
 | `simulated` | `SimulatedDevice` | Hardware-free stand-in for any of the above |
 | `custom` | your class | A workspace driver: `driver: "module:ClassName"`, every other key goes to its constructor |
@@ -340,7 +344,7 @@ How the feed works:
 
 - **Compressed once, on the server.** One thread grabs each frame and shrinks it by an integer factor to at most `max_width` pixels. It then compresses it to JPEG at `quality` (1–95) and sends the same bytes to every viewer as an MJPEG stream. For example, a 5 MP mono frame is ~5 MB raw and ~150 kB as a 1280-px JPEG at quality 75. Lower `quality` or `max_width` on a slow network; the manifest shows the size of each frame.
 - **Only while someone watches.** The camera is read only while a page shows the feed (pass `always_on=True` to keep it running). The feed pauses while its `device` is released.
-- **One reader.** That thread is the camera's only reader, so task code must not fetch frames from the same camera concurrently.
+- **Shared camera.** `GigEVisionDevice` serialises its captures, so the feed and another reader take turns and each gets every other frame. To show what a `cv_process` device sees, stream its cache instead (`vision.video_source("raw")`): the camera keeps one reader.
 - **8-bit, colour-correct frames.** `GigEVisionDevice.capture_frame_8bit()` scales 10–16-bit pixels by their pixel format. It turns Bayer mosaics into half-resolution RGB and BGR into RGB, and restarts the stream if an abort stopped it.
 - **Reconnecting.** `/api/data` lists each video's size, measured fps, kB per frame and `stream_id`. The stream ends at INITIALIZE, so a page reopens it when the `stream_id` changes.
 - **Snapshot.** `/api/data/video/<name>.jpg` returns one frame.
@@ -351,7 +355,215 @@ A complete example is in [`examples/gige_live_view`](examples/gige_live_view): o
 python app.py --workspace examples/gige_live_view
 ```
 
-Then press INITIALIZE and open **Custom view**. Switch the device to `type: "simulated"` to see a moving test pattern without a camera.
+Then press INITIALIZE and open **Custom view**. Switch the device to `type: "simulated_camera"` to see a moving test pattern without a camera.
+
+The `cti_path` in these examples is the Windows install of the Spinnaker SDK. The Docker image installs the Linux producer from `ressources/spinnaker-*-amd64-pkg.tar.gz`, so in a container use `cti_path: "/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti"`. GigE cameras also need `network_mode: host` for discovery (see `docker-compose.yml`).
+
+---
+
+## Camera features
+
+A `gige_camera` can set GenICam features from `config.yaml`. They are written at every INITIALIZE, in the order listed, after the camera connects and before its stream starts. That way, features the camera locks while streaming can be set too:
+
+```yaml
+camera:
+  type: "gige_camera"
+  cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  features:
+    PixelFormat: "BayerRG8"
+    ExposureAuto: "Off"        # before ExposureTime: an auto mode overrides manual values
+    ExposureTime: 20000.0      # µs
+    Gain: 3.0                  # dB
+```
+
+Names are the camera's own GenICam names. They are case-sensitive and vary by vendor, and the vendor's viewer (SpinView, for example) lists them. A feature the camera doesn't have, or a value it refuses, fails INITIALIZE with a message that names the feature.
+
+To change them at runtime, call these from task code, a manual action or a custom view:
+
+```python
+camera = devices["camera"]
+camera.set_feature("ExposureTime", 5000.0)
+camera.get_feature("ExposureTime")       # 5000.0
+camera.describe_feature("ExposureTime")  # {value, type, writable, min, max, inc, unit, choices}
+```
+
+- **Values are converted** to the feature's type: a whole number for an integer feature, any number for a float feature, a string for an enumeration.
+- **Features locked while streaming** (PixelFormat, Width, Height, OffsetX/Y and Binning on most cameras): `set_feature()` stops the stream, writes the value and restarts the stream. It first waits for the frame being fetched, so a `cv_process` reading the camera only skips a beat.
+- **Errors go to the caller.** You get `KeyError` for an unknown feature, and `ValueError` for a refused value or a read-only feature. They never fault the camera or the cell.
+- **A runtime change lasts until the next INITIALIZE**, which writes `features` from `config.yaml` again. Features not listed there keep whatever value the camera has.
+
+### A features file the app writes
+
+To tune features from the UI and keep them, point the camera at a features file instead of listing `features:`:
+
+```yaml
+camera:
+  type: "gige_camera"
+  cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  features_file: "camera_features.yaml"   # next to config.yaml; created by the first Save
+```
+
+The file is a plain mapping of feature to value, applied in its order at every INITIALIZE, like `features:`. The app writes it with a generated header, so comments you add are not kept:
+
+```yaml
+# Features of `camera`, written by the app (Settings > Devices > camera > Features > Save).
+# Applied in this order at every INITIALIZE. Edit it by hand, then INITIALIZE to reload it.
+ExposureAuto: 'Off'
+ExposureTime: 20000.0
+```
+
+- **One source per camera.** Setting both `features` and `features_file` is a config error. With inline `features:`, the dialog can apply changes but not save them.
+- **The file is read at every INITIALIZE**, so a hand edit takes effect at the next INITIALIZE. A missing file means no features. Invalid YAML, or a feature the camera refuses, fails INITIALIZE with the file and feature named.
+- **Hand edits are never overwritten.** If the file changed on disk since INITIALIZE read it, Save is refused until you INITIALIZE or Discard.
+- **Docker:** keep the file inside `app_logic/`, the folder docker-compose mounts. A file elsewhere in the container is lost when the container is recreated.
+
+### The Features dialog
+
+Settings > Devices > *camera* > **Features…** lists every feature the camera exposes, grouped by its GenICam categories:
+
+- **Filter** with the search box (name or display name), the visibility level (Beginner, Expert, Guru; your choice is remembered in the browser), and **Writable only**. **Refresh** reads the camera again.
+- **Apply** writes the camera at once; the row is marked *unsaved*. Features the camera locks while streaming are tagged *stream restart*: Apply stops the stream, writes the value and restarts the stream.
+- **Save** writes every unsaved change to the features file. An updated feature keeps its place; a new one goes last, in the order you applied them, so applying `ExposureAuto: Off` before `ExposureTime` keeps that order in the file.
+- **Discard** puts the unsaved features back to their saved value, or to the value they had before. **Forget** removes a saved feature from the file on the next Save; the camera keeps its current value.
+- **Unsaved changes stay on the server**, so closing the dialog loses nothing. INITIALIZE drops them and re-applies the file.
+- **Locked while a task runs**, like the Variables tab and the I/O switches.
+
+The dialog reads the camera only when it opens, after each action and on Refresh: each feature is one read over the camera's control channel, so it is never polled. Commands (AcquisitionStart, UserSetSave…) are not listed, because running them from a browser can stop the acquisition or overwrite the camera's saved settings.
+
+### Trigger acquisition
+
+By default a camera free-runs: it streams at its own frame rate, and a reader takes the next frame. `trigger` makes each frame start on a trigger instead:
+
+```yaml
+camera:
+  type: "gige_camera"
+  cti_path: "..."
+  trigger: "hardware"            # off (default, free-run), software or hardware
+  trigger_source: "Line0"        # hardware: the input line (Line0, Line1, ...)
+  trigger_activation: "RisingEdge"   # hardware: RisingEdge, FallingEdge, AnyEdge, LevelHigh, LevelLow
+```
+
+- **`software`:** each capture fires `TriggerSoftware` and waits for that frame. Frames left over from an earlier trigger are dropped first, so the frame is always the one just requested. A `cv_process` triggers at its `rate_hz` while it runs, and `analyze_once()` or **Inspect once** takes one picture when it is stopped. The timing is deterministic, but software triggers don't line up with a pulsed light source.
+- **`hardware`:** each frame starts on a pulse on the input line, for example a laser or LED driver's sync output, or a PLC or robot output. Synced to a pulsed light, every exposure lands while the light is on, which ends the black frames of [Black or flashing frames](#black-or-flashing-frames). A `cv_process` analyses every pulse as it comes, so `rate_hz` doesn't apply. Between pulses it shows *waiting for trigger*, and no pulse is never an error. Stopped, `analyze_once(timeout)` drops the frames of the pulses that came meanwhile (the camera buffers them, oldest first) and waits up to `timeout` for the next pulse, raising `TimeoutError` if none comes. Task code reading a `gige_camera` directly can do the same with `camera.discard_queued()` before `capture_frame_8bit()`. Keep the pulse rate within what the analysis keeps up with: frames the analysis doesn't take queue up in the camera's buffers.
+- **At INITIALIZE**, before the features, the camera gets `TriggerSelector: FrameStart`, then `TriggerMode: Off`, `TriggerSource`, `TriggerActivation` and `TriggerMode: On`. These are the standard GenICam names. `trigger: off` writes `TriggerMode: Off`, so a camera left in trigger mode by another program free-runs again. A feature you list afterwards (`TriggerDelay`, `LineDebouncerTime`…) tunes the trigger further.
+- **`simulated_camera`** accepts the same keys. With `trigger: hardware`, a simulated line pulses at its `fps`.
+
+### Black or flashing frames
+
+A camera's Live panel (Settings > Devices > camera > Show live data) shows the stream's health, without reading anything extra from the camera:
+
+| Value | Meaning |
+|---|---|
+| `frame_brightness` | Mean level of the last frame, 0–255 |
+| `frame_peak` | Level of the last frame's brightest pixels (its top 0.05%): a laser spot, a lamp, a lit part |
+| `dark_frames` | Frames whose peak fell under half of the recent frames' peak, since the app started. Each one is also logged, at most every 10 s. Judging by the peak, not the mean, keeps this right on a dark scene with a small spot. A scene with no light (peak under 20) never counts, and once the light stays off for most of the last 30 frames, that becomes the new normal |
+| `incomplete_frames` | Frames harvesters discarded because GigE packets went missing (since INITIALIZE) |
+
+- **`dark_frames` climbs while the feed flashes black:** the camera itself delivered frames with the light off. The light flickers faster than the eye sees, and some exposures fall entirely in an off phase:
+  - **A laser or LED driven by PWM or modulation:** run it in continuous (CW) mode, or use an `ExposureTime` of several modulation periods. If it pulses on purpose, trigger the camera from its driver's sync output with `trigger: hardware` (see [Trigger acquisition](#trigger-acquisition)).
+  - **Lamps on the mains** flicker at 100 or 120 Hz. Use an exposure of at least one period (10 ms at 50 Hz, 8.33 ms at 60 Hz), or a multiple of it.
+  - **Auto modes:** set `ExposureAuto` and `GainAuto` to `Off` (FLIR cameras default to `Continuous`). On a dark scene with a bright spot they hunt.
+- **`incomplete_frames` climbs:** packets are lost on the way. The feed drops frames rather than showing black ones. Give the GigE NIC its own network, enable jumbo frames (`GevSCPSPacketSize`), add an inter-packet delay (`GevSCPD`), or raise the host's UDP receive buffers (`net.core.rmem_max`). In Docker, use `network_mode: host`.
+- **Neither counter moves:** the camera's frames are fine and the problem is further on, in the encoding, the network to the browser or the browser itself.
+
+`simulated_camera` accepts the same `features:` and `features_file:` keys and the same methods and dialog:
+
+| Feature | Values | Effect |
+|---|---|---|
+| `ExposureTime` | µs, 100–1,000,000 (default 10000) | Scales the image brightness |
+| `Gain` | dB, 0–24 (default 0) | Scales the image brightness |
+| `PixelFormat` | `RGB8` (default) or `Mono8` | Colour or mono frames. Locked while streaming, like on a real camera |
+| `Width`, `Height`, `DeviceModelName`, `DeviceTemperature` | read-only | Shown in the dialog (`DeviceTemperature` at Expert visibility) |
+
+---
+
+## Computer-vision processing
+
+A `cv_process` device runs your own analysis on the frames of a camera device. It keeps the last raw image, the last processed image and the last result for task code, the custom view and Settings > Devices.
+
+```yaml
+devices:
+  camera:
+    type: "gige_camera"
+    cti_path: "C:/Program Files/Teledyne/Spinnaker/cti64/vs2015/Spinnaker_GenTL_v140.cti"
+  vision:
+    type: "cv_process"
+    camera: "camera"                     # another device: initialized before, shut down after
+    analysis: "blob_analysis:analyze"    # "module:function", importable from the workspace
+    analysis_params: {threshold: 175}    # passed to the function as `params`
+    autostart: true                      # default false: start and stop it yourself
+    rate_hz: 5                           # analysis rate ceiling (default 5)
+    capture_timeout_s: 2.0               # seconds to wait for each frame (default 2)
+    fault_on_error: false                # true: an exception in the analysis faults the cell
+```
+
+`camera` accepts any device with `capture_frame_8bit()`: today `gige_camera` and `simulated_camera`.
+
+### The analysis function
+
+```python
+from devices.CVProcessDevice import AnalysisResult
+
+def analyze(frame, params):
+    ...
+    return AnalysisResult(image=overlay, data={"x_px": 512.0, "y_px": 384.0}, ok=True)
+```
+
+- `frame` is 8-bit, mono `H×W` or RGB `H×W×3`, from the camera's `capture_frame_8bit()`. It is read-only, so copy it before drawing on it.
+- `params` is `analysis_params`. A function that takes only `frame` is called without it.
+- The return value is an `AnalysisResult`:
+  - `image` is shown as the processed image (`None` shows the raw frame);
+  - `data` holds JSON-serialisable measurements;
+  - `ok` is an optional pass/fail verdict.
+
+  A bare image, a bare dict, `(image, data)` or `None` work too.
+- It runs on the device's own thread, at most `rate_hz` times per second.
+- The module is looked up as written, then in the workspace's `app_logic` package, as task modules are. So `"blob_analysis:analyze"` also finds `app_logic/blob_analysis.py`, which is where it lives in the Docker image (`--workspace /webapp`, with `./app_logic` mounted).
+- A wrong `analysis` path is a config error at startup. **Reload code** picks up your edits.
+
+[`examples/gige_cv_analysis/blob_analysis.py`](examples/gige_cv_analysis/blob_analysis.py) is a prototype to copy. It finds the largest bright blob and returns its centre, area, bounding box and orientation, with an overlay. It uses only NumPy, Pillow and SciPy. OpenCV is not installed with the app; add `opencv-python-headless` to `requirements.txt` to use it.
+
+### Starting and stopping
+
+- `autostart: true` starts the analysis at every INITIALIZE.
+- Otherwise, start and stop it with the `analysis_running` switch in the device's Live panel (Settings > Devices), or from code with `vision.start()` and `vision.stop()`. Like any I/O write, the switch is refused while a task runs.
+
+### Using the results
+
+| Method | Returns |
+|---|---|
+| `last_raw_image()` | The last frame acquired (a read-only NumPy array), or `None` |
+| `last_processed_image()` | The image of the last successful analysis (read-only), or `None` |
+| `last_result()` | `{seq, time, ok, data, analysis_ms}` of the last successful analysis, or `None` |
+| `wait_for_result(after_seq=None, timeout=5.0)` | The next result newer than `after_seq` (default: newer than the current one). Raises `TimeoutError`, or `RuntimeError` on ABORT |
+| `analyze_once(timeout=5.0)` | One fresh result: the next one while the analysis runs, otherwise one frame grabbed and analysed in the calling thread. Frames the camera buffered while nobody read are dropped first, so that frame is exposed after the call |
+| `video_source(kind)` | A `grab` for `hub.add_video()`, `"raw"` or `"processed"`, read from the cache rather than the camera |
+| `start()`, `stop()`, `running` | Control the continuous analysis |
+
+In a task, `devices["vision"].analyze_once()["data"]` gives fresh measurements. To tune the camera between inspections, call `devices["camera"].set_feature("ExposureTime", ...)` (see [Camera features](#camera-features)). In a custom view:
+
+```python
+def setup(hub, devices):
+    vision = devices["vision"]
+    hub.add_video("processed", vision.video_source("processed"), fps=10, device="vision")
+```
+
+The Live panel shows the raw and processed images as thumbnails, with the state, rate, timing, errors and the one-line `data` values. Its `last_ok` point lights when the last verdict was OK.
+
+### Errors, faults and abort
+
+- **An exception in the analysis** is counted and shown in the Live panel (`errors`, `last_error`). The raw image keeps updating, and the processed image and result keep their last good values. With `fault_on_error: true` the device also faults, which faults the cell until **Clear faults**.
+- **A capture error** faults the camera device, as for any reader of the camera. The analysis waits until the camera is healthy again.
+- **ABORT** wakes task code blocked in `wait_for_result()` or `analyze_once()`. The analysis itself keeps running.
+- **INITIALIZE** stops the analysis before the camera reconnects, then starts it again if `autostart` is set.
+
+A complete example is in [`examples/gige_cv_analysis`](examples/gige_cv_analysis): a software-triggered camera (see [Trigger acquisition](#trigger-acquisition)) and the device above triggering it at its `rate_hz` and analysing each frame, a custom view with the raw and processed feeds side by side, an **Inspect once** manual action and a PROD cycle that locates the part. Run it with:
+
+```bash
+python app.py --workspace examples/gige_cv_analysis
+```
+
+Its `analysis_params` are set for a dim laser spot. Without a camera, the example uses a `simulated_camera`, software-triggered too; switch to the test-pattern params noted in its `config.yaml` to track the pattern's ball.
 
 ---
 
@@ -597,6 +809,8 @@ def prod_cycle(devices: Dict[str, Device], context=None):
 
 A driver only needed by one workspace can stay in that workspace and use `type: "custom"` with `driver: "module:ClassName"` instead of steps 2–3.
 
+**Linking to another device.** A key of type `"device"` (for example `"camera": _p("device")`) takes the name of another device in the config. Validation rejects a missing, disabled or invalid device and a dependency cycle. The constructor receives the device object itself, and the controller initializes the other device first and shuts it down last. It also stops the linked device before it re-initializes the other one at INITIALIZE. `cv_process` is the example.
+
 **Optional members** (not abstract, so existing drivers keep working):
 
 | Member | Purpose |
@@ -605,6 +819,8 @@ A driver only needed by one workspace can stay in that workspace and use `type: 
 | `supports_monitoring = True`, `disconnect(keep_monitoring)`, `link` | Keep a read-only link while released (see `MecaRobot`) |
 | `telemetry()` → `dict` | Values for the Live panel. It is polled from a web thread, so use cached values or the driver's own lock. |
 | `io_points()` → `[{name, kind, value, writable}]`, `write_io(name, value)` | I/O points for the Live panel. `kind` is `di`, `do`, `ai` or `ao`. |
+| `images()` → `[name, ...]`, `get_image(name)` → NumPy array or `None` | Thumbnails for the Live panel, served at `/api/devices/<id>/image/<name>.jpg`. Return a cached frame; never grab one from the hardware here. |
+| `settings(visibility)`, `write_setting()`, `save_settings()`, `discard_settings()`, `forget_setting()` | The Features dialog. Cameras get them from `devices/CameraFeatures.py` (`FeatureSettingsMixin`), which only needs `set_feature`, `get_feature`, `describe_feature` and `feature_tree`. |
 
 ---
 
@@ -703,6 +919,11 @@ devices/
     Device.py                 # Abstract base class — contract for all devices
     registry.py               # Device types, their config keys, and config validation
     SimulatedDevice.py        # Hardware-free stand-in
+    SimulatedCamera.py        # Hardware-free camera (moving test pattern)
+    GigEVisionDevice.py       # GigE Vision camera (harvesters / GenTL)
+    CVProcessDevice.py        # Computer-vision analysis on a camera's frames
+    CameraFeatures.py         # Camera features: features_file, Apply / Save / Discard (Features dialog)
+    CameraDiagnostics.py      # Frame brightness and near-black frames, for a camera's Live panel
     MecaRobot.py              # Mecademic robot (mecademicpy)
     Asyril.py                 # Asyril Eye+ intelligent feeder
     PlanarMotor.py            # Planar motor system
@@ -728,6 +949,7 @@ static/js/app.js              # UI logic (fallback polling when the stream is do
 
 tests/                        # pytest suite (simulated devices, no hardware)
 examples/gige_live_view/      # Example workspace: a GigE camera's live feed in the custom view
+examples/gige_cv_analysis/    # Example workspace: CV analysis (cv_process) with a prototype blob finder
 
 logs/
     app/                      # Rotating logs for Flask + ApplicationController
@@ -759,10 +981,16 @@ logs/
 | `POST` | `/api/devices/<id>/disconnect` | Release one device (a robot keeps a monitoring link). 409 while a task runs |
 | `POST` | `/api/devices/<id>/connect` | Connect one device again |
 | `POST` | `/api/devices/<id>/clear_fault` | Clear one device's fault |
-| `GET` | `/api/devices/<id>/live` | Telemetry and I/O points |
+| `GET` | `/api/devices/<id>/live` | Telemetry, I/O points and the images the device serves |
+| `GET` | `/api/devices/<id>/image/<name>.jpg` | Latest image of a device (a `cv_process`'s `raw` or `processed`) as a JPEG; `?w=` caps the width (default 480, max 1920). 503 until the first frame |
+| `GET` | `/api/devices/<id>/settings?visibility=Beginner` | A camera's features by category, each with its saved and unsaved state (the Features dialog). `visibility`: `Beginner`, `Expert` or `Guru` |
+| `POST` | `/api/devices/<id>/settings` | Apply one feature now, unsaved: `{"name": "ExposureTime", "value": 5000}`. 400 for a refused value, 409 while a task runs |
+| `POST` | `/api/devices/<id>/settings/save` | Write the unsaved features to the camera's `features_file` |
+| `POST` | `/api/devices/<id>/settings/discard` | Put the unsaved features back on the camera |
+| `POST` | `/api/devices/<id>/settings/forget` | Remove a saved feature from the file on the next save: `{"name": "Gain"}` |
 | `POST` | `/api/devices/<id>/io` | Set a writable point: `{"name": "do3", "value": true}`. 409 while a task runs or the device is released |
 
-`/api/info` entries also carry `link` (`control` / `monitoring` / `disconnected`), `detached`, `in_transition`, `supports_reconnect`, `supports_monitoring` and `has_live_data`.
+`/api/info` entries also carry `link` (`control` / `monitoring` / `disconnected`), `detached`, `in_transition`, `supports_reconnect`, `supports_monitoring`, `has_live_data` and `has_settings`.
 
 ### Tasks
 

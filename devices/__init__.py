@@ -16,6 +16,9 @@ __all__ = [
 	"SmarActMCS2",
 	"ZaberAxis",
 	"SimulatedDevice",
+	"SimulatedCamera",
+	"CVProcessDevice",
+	"AnalysisResult",
 ]
 
 
@@ -68,4 +71,16 @@ def __getattr__(name):
 		from .SimulatedDevice import SimulatedDevice
 
 		return SimulatedDevice
+	if name == "SimulatedCamera":
+		from .SimulatedCamera import SimulatedCamera
+
+		return SimulatedCamera
+	if name == "CVProcessDevice":
+		from .CVProcessDevice import CVProcessDevice
+
+		return CVProcessDevice
+	if name == "AnalysisResult":
+		from .CVProcessDevice import AnalysisResult
+
+		return AnalysisResult
 	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

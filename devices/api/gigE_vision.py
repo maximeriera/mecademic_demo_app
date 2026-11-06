@@ -4,7 +4,9 @@ import argparse
 import time
 import signal
 import numpy as np
-from harvesters.core import Harvester
+from genicam import genapi
+from genicam.gentl import TimeoutException
+from harvesters.core import Callback, Harvester
 
 from core.LogSetup import get_module_logger
 
@@ -22,6 +24,131 @@ logger = get_module_logger("device.gige.transport")
 
 class CameraConnectionError(RuntimeError):
     """Raised when a camera connection attempt fails."""
+
+
+class _IncompleteFrameCounter(Callback):
+    """Counts the frames harvesters discards because packets went missing on the way."""
+
+    def __init__(self, camera: "GigECamera"):
+        self.camera = camera
+
+    def emit(self, context=None) -> None:
+        self.camera.incomplete_frames += 1
+
+
+#: GenICam node interfaces, in the order a node is matched against them. The
+#: first five are the value features the app reads and writes.
+_NODE_TYPES = ("IBoolean", "IInteger", "IFloat", "IEnumeration", "IString", "ICommand", "ICategory")
+_VALUE_TYPES = _NODE_TYPES[:5]
+#: GenICam visibility levels, from fewest features to most ("Invisible" is never shown).
+_VISIBILITIES = ("Beginner", "Expert", "Guru", "Invisible")
+
+
+def _node_type(node) -> str:
+    """``"IFloat"``, ``"IEnumeration"``... for a GenICam node."""
+    for name in _NODE_TYPES:
+        cls = getattr(genapi, name, None)
+        if cls is not None and isinstance(node, cls):
+            return name
+    try:   # an untyped node: its principal interface says what it is
+        interface = node.node.principal_interface_type
+    except Exception:
+        return type(node).__name__
+    for name in _NODE_TYPES:
+        if interface == getattr(genapi.EInterfaceType, f"intf{name}", None):
+            return name
+    return type(node).__name__
+
+
+def _node_info(node, feature_name: str) -> dict:
+    """``{display_name, tooltip, visibility}`` of a node, with fallbacks for nodes without them."""
+    info = {"display_name": feature_name, "tooltip": "", "visibility": "Beginner"}
+    inode = getattr(node, "node", None)
+    if inode is None:
+        return info
+    try:
+        info["display_name"] = inode.display_name or feature_name
+    except Exception:
+        pass
+    try:
+        info["tooltip"] = inode.tooltip or ""
+    except Exception:
+        pass
+    try:
+        visibility = inode.visibility
+        info["visibility"] = next(v for v in _VISIBILITIES if visibility == getattr(genapi.EVisibility, v))
+    except Exception:
+        pass
+    return info
+
+
+def _access(node, *modes: str) -> bool:
+    """True if the node's access mode is one of *modes* ("RW", "RO", "WO")."""
+    try:
+        mode = node.get_access_mode()
+    except Exception:
+        return True  # no access information: let the write itself decide
+    return any(mode == getattr(genapi.EAccessMode, m) for m in modes)
+
+
+def _access_name(node) -> str:
+    """The node's access mode: "RW", "RO", "WO", "NA" (not available now) or "NI" (not implemented)."""
+    try:
+        mode = node.get_access_mode()
+    except Exception:
+        return "unknown"
+    for name in ("RW", "RO", "WO", "NA", "NI"):
+        if mode == getattr(genapi.EAccessMode, name, None):
+            return name
+    return str(mode)
+
+
+def _property(node, name: str) -> tuple[str, str]:
+    """``(value, attribute)`` of a property of the node's INode (``pIsLocked``...), ``("", "")`` if none."""
+    try:
+        inode = node.node
+        if name not in list(inode.property_names):
+            return "", ""
+        prop = inode.get_property(name)
+    except Exception:
+        return "", ""
+    value, attribute = (list(prop) + ["", ""])[:2] if isinstance(prop, (tuple, list)) else (prop, "")
+    return str(value or "").strip(), str(attribute or "").strip()
+
+
+def _value_of(node) -> str:
+    """A node's current value as text, ``?`` if it has none or cannot be read now."""
+    try:
+        return str(node.value)
+    except Exception:
+        return "?"
+
+
+def _stream_locked(node) -> bool:
+    """True if the camera can lock this feature (``pIsLocked``, usually TLParamsLocked while streaming).
+
+    That is what tells a feature locked by the stream, which ``set_feature``
+    writes with the stream stopped, from one that is read-only for good.
+    """
+    return bool(_property(node, "pIsLocked")[0])
+
+
+def _coerce(feature_name: str, node, value):
+    """*value* converted to what the node takes; ValueError if it cannot be."""
+    kind = _node_type(node)
+    is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if kind == "IBoolean" and isinstance(value, bool):
+        return value
+    if kind == "IInteger" and is_number and float(value).is_integer():
+        return int(value)
+    if kind == "IFloat" and is_number:
+        return float(value)
+    if kind in ("IEnumeration", "IString") and isinstance(value, str):
+        return value
+    if kind not in _VALUE_TYPES:
+        return value  # an interface we do not know: hand the value over as is
+    raise ValueError(f"feature '{feature_name}' ({kind}) cannot take {value!r}")
+
 
 class GigECamera:
     def __init__(self, cti_path: str, camera_index: int = 0):
@@ -43,6 +170,8 @@ class GigECamera:
         self._is_streaming = False
         #: GenICam PixelFormat of the last captured frame (e.g. "Mono12", "BayerRG8").
         self.last_pixel_format: str | None = None
+        #: Frames discarded since connect() because packets were lost (UDP on GigE).
+        self.incomplete_frames = 0
 
     @staticmethod
     def _safe_attr(obj, name: str, default="N/A"):
@@ -122,6 +251,12 @@ class GigECamera:
             else:
                 self.ia = self.harvester.create_image_acquirer(self.camera_index)
 
+            self.incomplete_frames = 0
+            try:
+                self.ia.add_callback(self.ia.Events.INCOMPLETE_BUFFER, _IncompleteFrameCounter(self))
+            except Exception as exc:   # an older harvesters: the count just stays at 0
+                logger.debug(f"Incomplete-frame counter unavailable: {exc}")
+
             selected_device = self.harvester.device_info_list[self.camera_index]
             connected_model = self._safe_attr(selected_device, 'model')
             connected_serial = self._safe_attr(selected_device, 'serial_number')
@@ -134,21 +269,198 @@ class GigECamera:
             self.disconnect()
             raise CameraConnectionError(f"Failed to connect to GigE camera: {exc}") from exc
 
+    def _node(self, feature_name: str):
+        """The GenICam node of *feature_name*. KeyError if the camera has none."""
+        if not self._is_connected:
+            raise RuntimeError("Cannot access features. Camera is not connected.")
+        try:
+            # remote_device.node_map exposes the GenICam XML tree on the camera
+            node = getattr(self.ia.remote_device.node_map, feature_name)
+        except Exception:
+            node = None
+        if node is None:
+            raise KeyError(f"camera has no feature '{feature_name}'")
+        return node
+
     def set_feature(self, feature_name: str, value):
         """
         Directly adjusts GenICam nodes/features on the camera hardware.
         Example: camera.set_feature('ExposureTime', 20000.0)
+
+        The value is converted to the node's type (a whole float for an
+        integer node, any number for a float node). KeyError for an unknown
+        feature, ValueError for a value the node refuses.
+        """
+        node = self._node(feature_name)
+        value = _coerce(feature_name, node, value)
+        try:
+            node.value = value
+        except Exception as e:
+            raise ValueError(f"feature '{feature_name}' refused {value!r}: {e}") from e
+        logger.info(f"Set GenICam node '{feature_name}' to {value}")
+
+    def get_feature(self, feature_name: str):
+        """Current value of a GenICam feature. KeyError if the camera has none."""
+        return self._node(feature_name).value
+
+    def discard_queued(self) -> int:
+        """Drop the frames already waiting in the acquirer (a software trigger wants a fresh one)."""
+        dropped = 0
+        while self._is_streaming:
+            buffer = self.ia.try_fetch(timeout=0.001)
+            if buffer is None:
+                break
+            buffer.queue()
+            dropped += 1
+        return dropped
+
+    def release_stale_acquisition(self) -> bool:
+        """Stop an acquisition an earlier session left running; True if there was one.
+
+        harvesters sets TLParamsLocked to 1 when it starts a stream and back
+        to 0 when it stops it. A process killed or crashed while streaming
+        never stops it, so the camera keeps acquiring and keeps locking what
+        it locks while streaming (TriggerSource, PixelFormat, Width...),
+        although this session streams nothing. This does what
+        ``ImageAcquirer.stop()`` would have: AcquisitionStop, then
+        TLParamsLocked 0.
+        """
+        if self._is_streaming:
+            return False
+        try:
+            locked = self._node("TLParamsLocked")
+            if not int(locked.value):
+                return False
+        except Exception:
+            return False   # no such node, or unreadable: nothing to release
+        try:
+            self._node("AcquisitionStop").execute()
+        except Exception as e:
+            logger.debug(f"AcquisitionStop on a stale acquisition: {e}")
+        locked.value = 0
+        return True
+
+    def execute(self, command_name: str) -> None:
+        """Run a GenICam command node, e.g. ``camera.execute("TriggerSoftware")``."""
+        node = self._node(command_name)
+        try:
+            node.execute()
+        except Exception as e:
+            raise ValueError(f"command '{command_name}' failed: {e}") from e
+
+    def is_writable(self, feature_name: str) -> bool:
+        """True if the feature can be written now (many are locked while streaming)."""
+        return _access(self._node(feature_name), "RW", "WO")
+
+    def lock_report(self, feature_name: str) -> str:
+        """What keeps *feature_name* from being written, as the camera's own description says.
+
+        Its access mode, then the nodes its ``pIsLocked`` and ``pIsAvailable``
+        point at with their values, and their formula and its variables for a
+        SwissKnife, e.g. ``access RO, pIsLocked TriggerSourceLock=1 (= M || E = 2;
+        M=TriggerMode=0, E=ExposureMode=2)``.
+        """
+        node = self._node(feature_name)
+        parts = [f"access {_access_name(node)}"]
+        for prop in ("pIsLocked", "pIsAvailable"):
+            ref = _property(node, prop)[0]
+            if ref:
+                parts.append(f"{prop} {self._node_state(ref)}")
+        return ", ".join(parts)
+
+    def _node_state(self, name: str) -> str:
+        """``name=value``, with the formula and variable values of a SwissKnife."""
+        try:
+            node = self._node(name)
+        except Exception:
+            return f"{name} (unreadable)"
+        state = f"{name}={_value_of(node)}"
+        formula = _property(node, "Formula")[0]
+        if formula:
+            refs, variables = (part.split("\t") for part in _property(node, "pVariable"))
+            values = [f"{var}={ref}={_value_of(self._node_or_none(ref))}"
+                      for var, ref in zip(variables, refs) if ref]
+            state += f" (= {formula}; {', '.join(values)})" if values else f" (= {formula})"
+        return state
+
+    def _node_or_none(self, name: str):
+        try:
+            return self._node(name)
+        except Exception:
+            return None
+
+    def describe_feature(self, feature_name: str) -> dict:
+        """``{name, value, type, writable, stream_locked, min, max, inc, unit, choices, display_name, tooltip, visibility}``.
+
+        Entries the node does not have are None; ``choices`` lists an
+        enumeration's values. ``stream_locked``: the camera may lock it while
+        streaming, so ``writable`` False does not mean read-only for good.
+        """
+        node = self._node(feature_name)
+        info = {"name": feature_name, "value": None, "type": _node_type(node),
+                "writable": _access(node, "RW", "WO"), "stream_locked": _stream_locked(node),
+                "min": None, "max": None, "inc": None, "unit": None, "choices": None,
+                **_node_info(node, feature_name)}
+        if _access(node, "RW", "RO"):
+            try:
+                info["value"] = node.value
+            except Exception:
+                pass
+        for key in ("min", "max", "inc", "unit"):
+            try:
+                info[key] = getattr(node, key)
+            except Exception:
+                pass
+        if info["type"] == "IEnumeration":
+            try:
+                info["choices"] = list(node.symbolics)
+            except Exception:
+                pass
+        return info
+
+    def feature_tree(self, visibility: str = "Beginner") -> list:
+        """Every value feature up to *visibility*, by category: ``[{name, features: [describe...]}]``.
+
+        Walks the camera's GenICam ``Root`` category. Nested categories become
+        "Parent / Child" groups. Commands, registers, ports and features the
+        camera does not implement or offer right now are left out. Reading
+        every feature is one control-channel read each: fetch it on demand,
+        never on a timer.
         """
         if not self._is_connected:
-            raise RuntimeError("Cannot set features. Camera is not connected.")
-        try:
-            # remote_device.node_map exposes the GenICam XML tree on the camera
-            node = getattr(self.ia.remote_device.node_map, feature_name)
-            node.value = value
-            logger.info(f"Set GenICam node '{feature_name}' to {value}")
-        except AttributeError:
-            logger.error(f"GenICam node '{feature_name}' does not exist on this camera.")
-            raise
+            raise RuntimeError("Cannot read features. Camera is not connected.")
+        limit = _VISIBILITIES.index(visibility)   # ValueError for an unknown level
+        groups: list = []
+
+        def shown(child, name) -> bool:
+            level = _node_info(child, name)["visibility"]
+            return level != "Invisible" and _VISIBILITIES.index(level) <= limit
+
+        def walk(category, path):
+            features, subcategories = [], []
+            for child in category.features:
+                try:
+                    name = child.node.name
+                except Exception:
+                    continue
+                if not shown(child, name):
+                    continue
+                kind = _node_type(child)
+                if kind == "ICategory":
+                    subcategories.append((child, name))
+                elif kind in _VALUE_TYPES and _access(child, "RW", "RO", "WO"):
+                    try:
+                        features.append(self.describe_feature(name))
+                    except Exception as e:   # one odd node must not hide the others
+                        logger.debug(f"Feature '{name}' left out of the tree: {e}")
+            if features:
+                groups.append({"name": " / ".join(path) or "Root", "features": features})
+            for child, name in subcategories:
+                walk(child if hasattr(child, "features") else self._node(name),
+                     path + [_node_info(child, name)["display_name"]])
+
+        walk(self.ia.remote_device.node_map.get_node("Root"), [])
+        return groups
 
     def start_stream(self):
         """Allocates host buffers and tells the camera to begin transmitting data."""
@@ -164,12 +476,19 @@ class GigECamera:
     def capture_frame(self, timeout_sec: float = 2.0) -> np.ndarray:
         """
         Blocks until a frame is received, processes it into a NumPy array, and returns it.
+
+        Raises the built-in TimeoutError when no frame arrives within
+        *timeout_sec*: with a hardware trigger, that only means no pulse came.
         """
         if not self._is_streaming:
             raise RuntimeError("Cannot capture frame. Stream has not been started.")
 
         # fetch() blocks until a new image buffer arrives from the GigE network
-        with self.ia.fetch(timeout=timeout_sec) as buffer:
+        try:
+            fetched = self.ia.fetch(timeout=timeout_sec)
+        except TimeoutException:
+            raise TimeoutError(f"no frame within {timeout_sec:g} s") from None
+        with fetched as buffer:
             payload = buffer.payload
             component = payload.components[0]
 
