@@ -119,7 +119,8 @@
             const params = new URLSearchParams();
             names.forEach(name => params.append('ch', name));
             if (cursor !== null) params.set('after', cursor);
-            fetch('/api/data/read?' + params.toString())
+            // A new URL every poll: never cached (a kiosk Firefox piled up 3 GB of them).
+            fetch('/api/data/read?' + params.toString(), { cache: 'no-store' })
                 .then(r => {
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     return r.json();

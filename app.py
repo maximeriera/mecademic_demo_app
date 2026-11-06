@@ -293,6 +293,20 @@ def _assign_request_id():
 
 
 @app.after_request
+def _no_store_api(response):
+    """Keep API replies out of browser caches, unless a route chose its own caching.
+
+    The pages poll several times a second, with a new URL each time (e.g.
+    ``/api/data/read?after=<cursor>``): cached, every reply became a disk-cache
+    entry. A kiosk Firefox had piled up 3 GB in 677,000 entries, and its cache
+    thread was using most of a core.
+    """
+    if request.path.startswith('/api/') and 'Cache-Control' not in response.headers:
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.after_request
 def _log_request(response):
     """Log one line per meaningful request: method, path, status, duration."""
     started = getattr(request, '_mecademic_start', None)

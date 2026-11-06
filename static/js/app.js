@@ -105,7 +105,7 @@ function applyStatus(data) {
 }
 
 function updateRobotStatus() {
-    fetch('/api/status')
+    fetch('/api/status', { cache: 'no-store' })
         .then(r => r.json())
         .then(applyStatus)
         .catch(() => {
@@ -1774,7 +1774,7 @@ function formatLiveValue(value) {
 function refreshDeviceLive(deviceId) {
     if (deviceLiveInFlight.has(deviceId)) return;
     deviceLiveInFlight.add(deviceId);
-    fetch(`/api/devices/${encodeURIComponent(deviceId)}/live`)
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/live`, { cache: 'no-store' })
         .then(r => r.json())
         .then((live) => renderDeviceLive(deviceId, live))
         .catch(() => renderDeviceLive(deviceId, { telemetry: {}, io: [], error: 'Could not reach the server.' }))

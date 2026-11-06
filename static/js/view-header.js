@@ -14,7 +14,9 @@
 (function () {
     'use strict';
 
-    const POLL_MS = 100;
+    // A step lasts seconds: 4 updates a second keep the timer live, at less
+    // than half the requests and repaints of 10.
+    const POLL_MS = 250;
 
     const MARKUP = `
         <a class="view-topbar-logo" href="/" title="Open the controller">
@@ -40,9 +42,9 @@
     function formatDuration(value) {
         const seconds = Number(value);
         if (value === null || value === undefined || !Number.isFinite(seconds)) return '—';
-        if (seconds < 60) return `${seconds.toFixed(2)} s`;
+        if (seconds < 60) return `${seconds.toFixed(1)} s`;
         const minutes = Math.floor(seconds / 60);
-        return `${minutes}m ${(seconds - minutes * 60).toFixed(2).padStart(5, '0')}s`;
+        return `${minutes}m ${(seconds - minutes * 60).toFixed(1).padStart(4, '0')}s`;
     }
 
     function setText(el, text) {
@@ -50,7 +52,8 @@
     }
 
     function renderStatus(el, status, task, stateClass = status) {
-        el.className = 'status-box ' + String(stateClass).toUpperCase();
+        const className = 'status-box ' + String(stateClass).toUpperCase();
+        if (el.className !== className) el.className = className;
         const key = `${status}|${task || ''}`;
         if (el.dataset.renderKey === key) return;
         el.dataset.renderKey = key;
@@ -79,7 +82,7 @@
             setText(refs.timer, '—');
             setText(refs.name, 'Idle');
             refs.name.removeAttribute('title');
-            refs.fill.style.width = '0%';
+            setWidth(refs.fill, '0%');
             return;
         }
         // "Pick part › Close gripper": a sub-step alone loses its context.
@@ -90,11 +93,15 @@
         setText(refs.timer, formatDuration(step.elapsed_s));
         setText(refs.name, label);
         if (refs.name.title !== label) refs.name.title = label;
-        refs.fill.style.width = `${Math.round((step.progress ?? 0) * 100)}%`;
+        setWidth(refs.fill, `${Math.round((step.progress ?? 0) * 100)}%`);
+    }
+
+    function setWidth(el, width) {
+        if (el.style.width !== width) el.style.width = width;
     }
 
     function poll(refs) {
-        fetch('/api/status')
+        fetch('/api/status', { cache: 'no-store' })
             .then(r => r.json())
             .then(data => {
                 renderStatus(refs.status, data.status, data.task || null);
