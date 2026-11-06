@@ -5,6 +5,7 @@ import time
 import signal
 import numpy as np
 from genicam import genapi
+from genicam.gentl import TimeoutException
 from harvesters.core import Callback, Harvester
 
 from core.LogSetup import get_module_logger
@@ -277,6 +278,25 @@ class GigECamera:
         """Current value of a GenICam feature. KeyError if the camera has none."""
         return self._node(feature_name).value
 
+    def discard_queued(self) -> int:
+        """Drop the frames already waiting in the acquirer (a software trigger wants a fresh one)."""
+        dropped = 0
+        while self._is_streaming:
+            buffer = self.ia.try_fetch(timeout=0.001)
+            if buffer is None:
+                break
+            buffer.queue()
+            dropped += 1
+        return dropped
+
+    def execute(self, command_name: str) -> None:
+        """Run a GenICam command node, e.g. ``camera.execute("TriggerSoftware")``."""
+        node = self._node(command_name)
+        try:
+            node.execute()
+        except Exception as e:
+            raise ValueError(f"command '{command_name}' failed: {e}") from e
+
     def is_writable(self, feature_name: str) -> bool:
         """True if the feature can be written now (many are locked while streaming)."""
         return _access(self._node(feature_name), "RW", "WO")
@@ -368,12 +388,19 @@ class GigECamera:
     def capture_frame(self, timeout_sec: float = 2.0) -> np.ndarray:
         """
         Blocks until a frame is received, processes it into a NumPy array, and returns it.
+
+        Raises the built-in TimeoutError when no frame arrives within
+        *timeout_sec*: with a hardware trigger, that only means no pulse came.
         """
         if not self._is_streaming:
             raise RuntimeError("Cannot capture frame. Stream has not been started.")
 
         # fetch() blocks until a new image buffer arrives from the GigE network
-        with self.ia.fetch(timeout=timeout_sec) as buffer:
+        try:
+            fetched = self.ia.fetch(timeout=timeout_sec)
+        except TimeoutException:
+            raise TimeoutError(f"no frame within {timeout_sec:g} s") from None
+        with fetched as buffer:
             payload = buffer.payload
             component = payload.components[0]
 

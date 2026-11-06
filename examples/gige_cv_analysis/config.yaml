@@ -25,6 +25,10 @@ devices:
   #     Gain: 0.0                  # dB
   #   # Or, to tune them from Settings > Devices > camera > Features... and Save:
   #   features_file: "camera_features.yaml"
+  #   # Take each frame on a pulse, e.g. the laser driver's sync output on Line0:
+  #   trigger: "hardware"          # off (free-run), software or hardware
+  #   trigger_source: "Line0"
+  #   trigger_activation: "RisingEdge"
 
   # No camera at hand? Replace the entry above with this one: a moving test
   # pattern with a green ball, which blob_analysis finds with the "test
@@ -35,6 +39,7 @@ devices:
     # features:
     #   ExposureTime: 4000         # µs (default 10000): too dark for threshold 175
     # features_file: "camera_features.yaml"   # instead of features:, to Save from the UI
+    # trigger: "hardware"                      # a simulated line pulsing at fps
 
   vision:
     type: "cv_process"

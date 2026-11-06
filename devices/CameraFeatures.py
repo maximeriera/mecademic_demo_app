@@ -37,6 +37,37 @@ import yaml
 #: GenICam visibility levels the dialog offers, from fewest features to most.
 VISIBILITIES = ("Beginner", "Expert", "Guru")
 
+#: A camera's ``trigger``: free-run, one TriggerSoftware command per frame, or an input line.
+TRIGGER_MODES = ("off", "software", "hardware")
+#: GenICam TriggerActivation values for a hardware trigger.
+TRIGGER_ACTIVATIONS = ("RisingEdge", "FallingEdge", "AnyEdge", "LevelHigh", "LevelLow")
+
+
+def trigger_features(trigger: str, source: str = "Line0", activation: str = "RisingEdge") -> list:
+    """``(feature, value, optional)`` to write, in order, for a trigger mode (GenICam SFNC names).
+
+    Frames start on the trigger (TriggerSelector FrameStart). TriggerMode goes
+    Off first: many cameras only change the source with the trigger off. An
+    optional feature the camera lacks is skipped.
+    """
+    if trigger == "off":
+        return [("TriggerMode", "Off", True)]
+    steps = [("TriggerSelector", "FrameStart", True),
+             ("TriggerMode", "Off", False),
+             ("TriggerSource", "Software" if trigger == "software" else source, False)]
+    if trigger == "hardware":
+        steps.append(("TriggerActivation", activation, True))
+    steps.append(("TriggerMode", "On", False))
+    return steps
+
+
+def check_trigger(trigger: str, activation: str) -> None:
+    """ValueError for a ``trigger`` or ``trigger_activation`` a camera does not take."""
+    if trigger not in TRIGGER_MODES:
+        raise ValueError(f"trigger must be one of {', '.join(TRIGGER_MODES)}, got {trigger!r}")
+    if activation not in TRIGGER_ACTIVATIONS:
+        raise ValueError(f"trigger_activation must be one of {', '.join(TRIGGER_ACTIVATIONS)}, got {activation!r}")
+
 _FORGET = object()   # pending marker: drop the feature from the file on Save
 
 

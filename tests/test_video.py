@@ -197,6 +197,9 @@ class _FakeNode:
         self.log.append(self.name)
         self._value = value
 
+    def execute(self):
+        self.log.append(f"{self.name}()")
+
 
 class _FakeCategory:
     """A GenICam category: its children are nodes or other categories."""
@@ -232,6 +235,9 @@ class _FakeAcquirer:
             if node.locked_while_streaming:
                 node.mode = mode
 
+    def try_fetch(self, timeout):
+        return None
+
     def start(self):
         self.log.append("start")
         self._lock("RO")
@@ -265,6 +271,12 @@ def gige_features(tmp_path, monkeypatch):
         _FakeNode("BinningUnavailable", "IInteger", 1, log, mode="NA"),
         _FakeNode("DeviceRegister", "IRegister", b"", log),
         _FakeNode("Secret", "IInteger", 7, log),
+        _FakeNode("TriggerSelector", "IEnumeration", "FrameStart", log, choices=("FrameStart", "LineStart")),
+        _FakeNode("TriggerMode", "IEnumeration", "Off", log, choices=("Off", "On")),
+        _FakeNode("TriggerSource", "IEnumeration", "Software", log, choices=("Software", "Line0", "Line1")),
+        _FakeNode("TriggerActivation", "IEnumeration", "RisingEdge", log,
+                  choices=("RisingEdge", "FallingEdge", "AnyEdge")),
+        _FakeNode("TriggerSoftware", "ICommand", None, log),
     )}
     nodes["Root"] = _FakeCategory("Root", [
         _FakeCategory("AcquisitionControl", [nodes[n] for n in ("ExposureAuto", "ExposureTime", "AcquisitionStart",
@@ -347,7 +359,8 @@ def test_gige_config_features_apply_in_order_at_initialize(gige_features):
     camera = gige_features(features={"ExposureAuto": "Off", "ExposureTime": 20000, "PixelFormat": "Mono8"},
                            autostart_stream=True)
     camera.initialize()
-    assert gige_features.log == ["ExposureAuto", "ExposureTime", "PixelFormat", "start"]
+    # trigger: off puts the camera in free-run first, then the features go in, in order.
+    assert gige_features.log == ["TriggerMode", "ExposureAuto", "ExposureTime", "PixelFormat", "start"]
     assert camera.info["features"] == "ExposureAuto=Off, ExposureTime=20000, PixelFormat=Mono8"
 
     broken = gige_features(features={"ExposureTime": 20000, "Gian": 3})
@@ -432,3 +445,81 @@ def test_gige_counts_the_incomplete_frames_harvesters_discards(gige_features):
     counter.emit(context=None)
     counter.emit(context=None)
     assert camera.telemetry()["incomplete_frames"] == 2
+
+
+# --- GigE trigger -----------------------------------------------------------------------
+
+def test_gige_trigger_modes_are_set_before_the_features(gige_features):
+    nodes = gige_features.nodes
+    software = gige_features(trigger="software", features={"ExposureTime": 20000})
+    software.initialize()
+    assert gige_features.log[:5] == ["TriggerSelector", "TriggerMode", "TriggerSource", "TriggerMode", "ExposureTime"]
+    assert (nodes["TriggerMode"].value, nodes["TriggerSource"].value) == ("On", "Software")
+    assert software.info["trigger"] == "software" and software.telemetry()["trigger"] == "software"
+
+    gige_features.log.clear()
+    hardware = gige_features(trigger="hardware", trigger_source="Line1", trigger_activation="FallingEdge")
+    hardware.initialize()
+    assert (nodes["TriggerSource"].value, nodes["TriggerActivation"].value, nodes["TriggerMode"].value) ==         ("Line1", "FallingEdge", "On")
+    assert hardware.info["trigger"] == "hardware (Line1, FallingEdge)"
+
+    free = gige_features()
+    free.initialize()
+    assert nodes["TriggerMode"].value == "Off" and free.trigger == "off"
+
+    with pytest.raises(ValueError, match="trigger must be one of"):
+        gige_features(trigger="sometimes")
+    broken = gige_features(trigger="hardware", trigger_source="Line9")
+    with pytest.raises(RuntimeError, match="trigger hardware: TriggerSource='Line9'"):
+        broken.initialize()
+    assert not broken.connected
+
+
+def test_gige_software_trigger_fires_before_each_capture(gige_features, monkeypatch):
+    camera = gige_features(trigger="software")
+    camera.initialize()
+    api = camera.api
+
+    def fetch(timeout_sec):
+        gige_features.log.append("fetch")
+        api.last_pixel_format = "Mono8"
+        return np.full((8, 8), 50, np.uint8)
+
+    monkeypatch.setattr(api, "capture_frame", fetch)
+    gige_features.log.clear()
+    camera.capture_frame_8bit()
+    camera.capture_frame_8bit()
+    assert gige_features.log == ["start", "TriggerSoftware()", "fetch", "TriggerSoftware()", "fetch"]
+
+
+def test_gige_no_pulse_is_not_a_fault_with_a_hardware_trigger(gige_features, monkeypatch):
+    def no_frame(timeout_sec):
+        raise TimeoutError(f"no frame within {timeout_sec:g} s")
+
+    hardware = gige_features(trigger="hardware")
+    hardware.initialize()
+    monkeypatch.setattr(hardware.api, "capture_frame", no_frame)
+    with pytest.raises(TimeoutError):
+        hardware.capture_frame_8bit(timeout_sec=0.1)
+    assert not hardware.faulted                     # just no pulse yet
+
+    free = gige_features()
+    free.initialize()
+    with pytest.raises(TimeoutError):
+        free.capture_frame_8bit(timeout_sec=0.1)
+    assert free.faulted                             # a free-running camera should have answered
+
+
+def test_gige_fetch_timeout_becomes_a_timeout_error(gige_features, monkeypatch):
+    from genicam.gentl import TimeoutException
+
+    camera = gige_features()
+    camera.initialize()
+    camera.start_stream()
+
+    def fetch(timeout):
+        raise TimeoutException()
+
+    monkeypatch.setattr(camera.api.ia, "fetch", fetch, raising=False)
+    with pytest.raises(TimeoutError, match="no frame within 0.2 s"):
+        camera.api.capture_frame(timeout_sec=0.2)

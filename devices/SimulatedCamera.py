@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 from .CameraDiagnostics import FrameDiagnostics
-from .CameraFeatures import VISIBILITIES, FeatureSettingsMixin
+from .CameraFeatures import VISIBILITIES, FeatureSettingsMixin, check_trigger
 from .Device import Device
 
 #: The simulated GenICam features: same names, types, categories and errors as
@@ -101,14 +101,19 @@ class SimulatedCamera(FeatureSettingsMixin, Device):
 
     def __init__(self, width: int = 1600, height: int = 1200, fps: float = 15.0,
                  fail_to_connect: bool = False, features: dict | None = None,
-                 features_file: str | None = None, name: str | None = None):
+                 features_file: str | None = None, trigger: str = "off",
+                 trigger_source: str = "Line0", trigger_activation: str = "RisingEdge",
+                 name: str | None = None):
         super().__init__(device_id=name or "simulated_camera")
         if width < 2 * TestPattern.RADIUS or height < 2 * TestPattern.RADIUS:
             raise ValueError(f"width and height must be at least {2 * TestPattern.RADIUS} pixels")
         if fps <= 0:
             raise ValueError("fps must be > 0")
+        check_trigger(trigger, trigger_activation)
         self._width, self._height, self._fps = int(width), int(height), float(fps)
         self._fail_to_connect = fail_to_connect
+        # Like a gige_camera's; "hardware" stands in for a line pulsing at fps.
+        self._trigger = trigger
         # Written at every INITIALIZE, in order (devices/CameraFeatures.py).
         self._init_feature_settings(features, features_file)
         self._values = {name: spec["default"] for name, spec in FEATURES.items()}
@@ -131,8 +136,14 @@ class SimulatedCamera(FeatureSettingsMixin, Device):
             "height": self._height,
             "fps": self._fps,
             "streaming": self._streaming,
+            "trigger": self._trigger,
             "features": self._features_summary(),
         }
+
+    @property
+    def trigger(self) -> str:
+        """``"off"`` (free-run), ``"software"`` or ``"hardware"`` (pulses at ``fps``)."""
+        return self._trigger
 
     @property
     def connected(self) -> bool:
@@ -188,13 +199,20 @@ class SimulatedCamera(FeatureSettingsMixin, Device):
         self._streaming = False
 
     def capture_frame_8bit(self, timeout_sec: float = 2.0) -> np.ndarray:
-        """One frame, RGB ``H×W×3`` (``Mono8``: ``H×W``), paced to ``fps`` like a real sensor. Thread-safe."""
+        """One frame, RGB ``H×W×3`` (``Mono8``: ``H×W``), paced to ``fps`` like a real sensor. Thread-safe.
+
+        With ``trigger: hardware`` the frame comes on the next pulse of the
+        simulated line, at ``fps``: TimeoutError if none comes within *timeout_sec*.
+        """
         with self._lock:
             if not self._connected:
                 raise RuntimeError("Cannot capture frame. Camera is not connected.")
             if not self._streaming:
                 self.start_stream()
             now = time.monotonic()
+            if self._trigger == "hardware" and self._next_frame - now > timeout_sec:
+                time.sleep(max(0.0, timeout_sec))
+                raise TimeoutError(f"no trigger within {timeout_sec:g} s")
             if self._next_frame > now:
                 time.sleep(self._next_frame - now)
             self._next_frame = max(now, self._next_frame) + 1.0 / self._fps
@@ -211,7 +229,7 @@ class SimulatedCamera(FeatureSettingsMixin, Device):
 
     def telemetry(self) -> dict:
         """Same Live panel values as a gige_camera (no packets to lose here)."""
-        return {"streaming": self._streaming, "pixel_format": self._values["PixelFormat"],
+        return {"streaming": self._streaming, "trigger": self._trigger, "pixel_format": self._values["PixelFormat"],
                 "incomplete_frames": 0, **self._diagnostics.telemetry()}
 
     # --- Features (same contract as GigEVisionDevice) -------------------------

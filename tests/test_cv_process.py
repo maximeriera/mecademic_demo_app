@@ -627,3 +627,52 @@ def test_exposure_change_reaches_the_analysis(camera, blob_analysis):
         assert vision.analyze_once()["data"]["found"] is True
     finally:
         vision.shutdown()
+
+
+# --- Trigger acquisition -----------------------------------------------------------------
+
+def test_simulated_hardware_trigger_waits_for_the_next_pulse():
+    camera = SimulatedCamera(width=320, height=240, fps=2, trigger="hardware", name="cam")
+    camera.initialize()
+    camera.capture_frame_8bit(timeout_sec=1.0)            # the first pulse is due at once
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="no trigger within 0.1 s"):
+        camera.capture_frame_8bit(timeout_sec=0.1)        # the next one is 0.5 s away
+    assert 0.08 <= time.monotonic() - started < 0.4
+    assert not camera.faulted and camera.telemetry()["trigger"] == "hardware"
+    camera.capture_frame_8bit(timeout_sec=1.0)            # waits for it within a longer timeout
+
+
+def test_vision_analyses_each_hardware_pulse_without_errors(analysis):
+    # A pulse every 0.67 s: longer than the loop's 0.5 s wait, so it shows it is waiting.
+    camera = SimulatedCamera(width=320, height=240, fps=1.5, trigger="hardware", name="cam")
+    camera.initialize()
+    vision = CVProcessDevice(camera=camera, analysis=f"{analysis.__name__}:analyze", rate_hz=50, name="vision")
+    try:
+        vision.initialize()
+        vision.start()
+        first = vision.wait_for_result(timeout=2)
+        wait_for(lambda: vision.telemetry()["state"] == "waiting for trigger", timeout=2)
+        second = vision.wait_for_result(timeout=2)
+        assert second["seq"] == first["seq"] + 1                    # one result per pulse
+        assert 0.5 < second["time"] - first["time"] < 0.9           # at the pulses' pace, not rate_hz
+        telemetry = vision.telemetry()
+        assert telemetry["capture_errors"] == 0 and telemetry["trigger"] == "hardware"
+        assert not vision.faulted and not camera.faulted
+
+        vision.stop()
+        with pytest.raises(TimeoutError):                 # stopped: analyze_once waits for one pulse
+            vision.analyze_once(timeout=0.05)
+        assert vision.analyze_once(timeout=1.0)["ok"] is True
+    finally:
+        vision.shutdown()
+        camera.shutdown()
+
+
+def test_trigger_keys_are_validated():
+    entries, issues = validate_devices_config({
+        "cam": {"type": "simulated_camera", "trigger": "software"},
+        "bad": {"type": "simulated_camera", "trigger": "hardware", "trigger_activation": "Sideways"},
+    })
+    assert [e.name for e in entries] == ["cam"] and entries[0].kwargs["trigger"] == "software"
+    assert "'trigger_activation' must be one of" in _errors(issues)["bad"]

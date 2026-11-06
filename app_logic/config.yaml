@@ -73,6 +73,10 @@
 #     Gain: 3.0                  #   camera.set_feature("ExposureTime", 5000.0)
 #   features_file: "camera_features.yaml"  # optional, instead of features: — a YAML the app reads at
 #                                #   every INITIALIZE and rewrites from Settings > Devices > Features > Save
+#   trigger: "off"               # optional — "off" (free-run), "software" (one TriggerSoftware per
+#                                #   frame) or "hardware" (a pulse on an input line starts each frame)
+#   trigger_source: "Line0"      # optional — hardware trigger input line
+#   trigger_activation: "RisingEdge"  # optional — RisingEdge, FallingEdge, AnyEdge, LevelHigh, LevelLow
 #
 # --- Simulated camera (SimulatedCamera) — no hardware required ---
 #   A moving test pattern behind the same capture_frame_8bit() as gige_camera.
@@ -86,6 +90,7 @@
 #     Gain: 0                    #   dB, 0-24: scales the brightness
 #     PixelFormat: "RGB8"        #   or "Mono8"; locked while streaming
 #   features_file: "camera_features.yaml"  # optional, instead of features: (see gige_camera)
+#   trigger: "off"               # optional — as gige_camera; "hardware" pulses at fps
 #
 # --- Computer-vision processing (CVProcessDevice) ---
 #   Runs a workspace function on each frame of a camera device and keeps the

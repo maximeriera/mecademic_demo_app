@@ -430,6 +430,24 @@ Settings > Devices > *camera* > **Features…** lists every feature the camera e
 
 The dialog reads the camera only when it opens, after each action and on Refresh: each feature is one read over the camera's control channel, so it is never polled. Commands (AcquisitionStart, UserSetSave…) are not listed, because running them from a browser can stop the acquisition or overwrite the camera's saved settings.
 
+### Trigger acquisition
+
+By default a camera free-runs: it streams at its own frame rate, and a reader takes the next frame. `trigger` makes each frame start on a trigger instead:
+
+```yaml
+camera:
+  type: "gige_camera"
+  cti_path: "..."
+  trigger: "hardware"            # off (default, free-run), software or hardware
+  trigger_source: "Line0"        # hardware: the input line (Line0, Line1, ...)
+  trigger_activation: "RisingEdge"   # hardware: RisingEdge, FallingEdge, AnyEdge, LevelHigh, LevelLow
+```
+
+- **`software`:** each capture fires `TriggerSoftware` and waits for that frame. Frames left over from an earlier trigger are dropped first, so the frame is always the one just requested. A `cv_process` triggers at its `rate_hz` while it runs, and `analyze_once()` or **Inspect once** takes one picture when it is stopped. The timing is deterministic, but software triggers don't line up with a pulsed light source.
+- **`hardware`:** each frame starts on a pulse on the input line, for example a laser or LED driver's sync output, or a PLC or robot output. Synced to a pulsed light, every exposure lands while the light is on, which ends the black frames of [Black or flashing frames](#black-or-flashing-frames). A `cv_process` analyses every pulse as it comes, so `rate_hz` doesn't apply. Between pulses it shows *waiting for trigger*, and no pulse is never an error. Stopped, `analyze_once(timeout)` waits up to `timeout` for the next pulse, raising `TimeoutError` if none comes. Keep the pulse rate within what the analysis keeps up with: frames the analysis doesn't take queue up in the camera's buffers.
+- **At INITIALIZE**, before the features, the camera gets `TriggerSelector: FrameStart`, then `TriggerMode: Off`, `TriggerSource`, `TriggerActivation` and `TriggerMode: On`. These are the standard GenICam names. `trigger: off` writes `TriggerMode: Off`, so a camera left in trigger mode by another program free-runs again. A feature you list afterwards (`TriggerDelay`, `LineDebouncerTime`…) tunes the trigger further.
+- **`simulated_camera`** accepts the same keys. With `trigger: hardware`, a simulated line pulses at its `fps`.
+
 ### Black or flashing frames
 
 A camera's Live panel (Settings > Devices > camera > Show live data) shows the stream's health, without reading anything extra from the camera:
@@ -442,7 +460,7 @@ A camera's Live panel (Settings > Devices > camera > Show live data) shows the s
 | `incomplete_frames` | Frames harvesters discarded because GigE packets went missing (since INITIALIZE) |
 
 - **`dark_frames` climbs while the feed flashes black:** the camera itself delivered frames with the light off. The light flickers faster than the eye sees, and some exposures fall entirely in an off phase:
-  - **A laser or LED driven by PWM or modulation:** run it in continuous (CW) mode, or use an `ExposureTime` of several modulation periods. If it pulses on purpose, trigger the camera from its driver (`TriggerMode: On`, `TriggerSource: Line0`).
+  - **A laser or LED driven by PWM or modulation:** run it in continuous (CW) mode, or use an `ExposureTime` of several modulation periods. If it pulses on purpose, trigger the camera from its driver's sync output with `trigger: hardware` (see [Trigger acquisition](#trigger-acquisition)).
   - **Lamps on the mains** flicker at 100 or 120 Hz. Use an exposure of at least one period (10 ms at 50 Hz, 8.33 ms at 60 Hz), or a multiple of it.
   - **Auto modes:** set `ExposureAuto` and `GainAuto` to `Off` (FLIR cameras default to `Continuous`). On a dark scene with a bright spot they hunt.
 - **`incomplete_frames` climbs:** packets are lost on the way. The feed drops frames rather than showing black ones. Give the GigE NIC its own network, enable jumbo frames (`GevSCPSPacketSize`), add an inter-packet delay (`GevSCPD`), or raise the host's UDP receive buffers (`net.core.rmem_max`). In Docker, use `network_mode: host`.

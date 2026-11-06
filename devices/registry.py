@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Dict, List, Tuple
 
+from devices.CameraFeatures import TRIGGER_ACTIVATIONS, TRIGGER_MODES   # plain constants, no SDK
+
 #: Marks a parameter without default: the config must give it.
 REQUIRED = object()
 
@@ -498,6 +500,11 @@ register_device(DeviceSpec(
         "autostart_stream": _p("bool", False),
         "features": _p("dict", None, "GenICam features set at every INITIALIZE, in order"),
         "features_file": _p("path", None, "YAML of features the app reads at INITIALIZE and writes on Save"),
+        "trigger": _p("str", "off", "off (free-run), software, or hardware (an input line)",
+                      choices=TRIGGER_MODES),
+        "trigger_source": _p("str", "Line0", "input line of a hardware trigger"),
+        "trigger_activation": _p("str", "RisingEdge", "edge or level of a hardware trigger",
+                                 choices=TRIGGER_ACTIVATIONS),
     },
     doc="GigE Vision camera (harvesters).",
     exclusive=(("features", "features_file"),),
@@ -511,6 +518,11 @@ register_device(DeviceSpec(
         "fail_to_connect": _p("bool", False),
         "features": _p("dict", None, "ExposureTime, Gain, PixelFormat, set at every INITIALIZE"),
         "features_file": _p("path", None, "YAML of features the app reads at INITIALIZE and writes on Save"),
+        "trigger": _p("str", "off", "off (free-run), software, or hardware (an input line)",
+                      choices=TRIGGER_MODES),
+        "trigger_source": _p("str", "Line0", "input line of a hardware trigger"),
+        "trigger_activation": _p("str", "RisingEdge", "edge or level of a hardware trigger",
+                                 choices=TRIGGER_ACTIVATIONS),
     },
     aliases=("test_pattern_camera",),
     doc="Hardware-free camera serving a moving test pattern.",

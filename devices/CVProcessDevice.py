@@ -306,22 +306,26 @@ class CVProcessDevice(Device):
                     self._state = "waiting for camera"
                     stop.wait(0.5)
                     continue
-                self._state = "running"
+                hardware = self._hardware_trigger
                 started = time.monotonic()
                 try:
-                    frame = camera.capture_frame_8bit(timeout_sec=self._capture_timeout_s)
+                    # A hardware trigger is waited for in short slices, so stop() stays quick.
+                    frame = camera.capture_frame_8bit(
+                        timeout_sec=min(self._capture_timeout_s, 0.5) if hardware else self._capture_timeout_s)
                 except Exception as e:
-                    # The camera marks itself faulted: the cell stops through it, not us.
-                    with self._cond:
-                        self._capture_errors += 1
-                        self._last_error = f"capture: {type(e).__name__}: {e}"
+                    if hardware and isinstance(e, TimeoutError):
+                        self._state = "waiting for trigger"   # no pulse yet: nothing went wrong
+                        continue
+                    self._capture_failed(e)
                     stop.wait(0.5)
                     continue
+                self._state = "running"
                 if frame is None:
                     stop.wait(0.05)
                     continue
                 self._process(frame, stop)
-                stop.wait(max(0.0, period - (time.monotonic() - started)))
+                if not hardware:   # with a hardware trigger the pulses set the pace
+                    stop.wait(max(0.0, period - (time.monotonic() - started)))
                 loop_s = time.monotonic() - started
                 if loop_s > 0:
                     self._fps = 1.0 / loop_s if self._fps is None else 0.8 * self._fps + 0.2 / loop_s
@@ -330,6 +334,17 @@ class CVProcessDevice(Device):
             self._last_error = f"loop: {type(e).__name__}: {e}"
         finally:
             self._state = "stopped"
+
+    @property
+    def _hardware_trigger(self) -> bool:
+        """True when the camera takes a frame on an external pulse (its ``trigger: hardware``)."""
+        return getattr(self._camera, "trigger", "off") == "hardware"
+
+    def _capture_failed(self, error: Exception) -> None:
+        # The camera marks itself faulted: the cell stops through it, not us.
+        with self._cond:
+            self._capture_errors += 1
+            self._last_error = f"capture: {type(error).__name__}: {error}"
 
     def _process(self, frame: Any, stop: threading.Event | None = None) -> dict | None:
         """Analyse one frame and publish it. The new result, or None if the analysis failed."""
@@ -420,12 +435,18 @@ class CVProcessDevice(Device):
                 self._cond.wait(remaining)
 
     def analyze_once(self, timeout: float = 5.0) -> dict:
-        """One fresh result: the next one of the running analysis, or one frame grabbed and analysed now."""
+        """One fresh result: the next one of the running analysis, or one frame grabbed and analysed now.
+
+        With the camera's ``trigger: software`` that frame is exposed on
+        request; with ``trigger: hardware`` it is the next pulse's, waited for
+        up to *timeout* seconds (TimeoutError if none comes).
+        """
         if self.running:
             return self.wait_for_result(timeout=timeout)
         if not self._initialized:
             raise RuntimeError(f"{self.device_id} is not initialized. Press INITIALIZE first.")
-        frame = self._camera.capture_frame_8bit(timeout_sec=min(timeout, self._capture_timeout_s))
+        wait = timeout if self._hardware_trigger else min(timeout, self._capture_timeout_s)
+        frame = self._camera.capture_frame_8bit(timeout_sec=wait)
         result = self._process(frame)
         if result is None:
             raise RuntimeError(f"{self.device_id}: analysis failed: {self._last_error}")
@@ -460,6 +481,7 @@ class CVProcessDevice(Device):
             result = self._result
             values = {
                 "state": (self._state if self.running else "stopped") if self._initialized else "not initialized",
+                "trigger": getattr(self._camera, "trigger", "off"),
                 "frames": self._frames,
                 "analysis_fps": round(self._fps, 2) if self._fps and self.running else None,
                 "analysis_ms": round(self._analysis_ms, 1) if self._analysis_ms is not None else None,

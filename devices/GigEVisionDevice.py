@@ -6,7 +6,7 @@ import threading
 import numpy as np
 
 from .CameraDiagnostics import FrameDiagnostics
-from .CameraFeatures import FeatureSettingsMixin
+from .CameraFeatures import FeatureSettingsMixin, check_trigger, trigger_features
 from .Device import Device
 from .api.gigE_vision import GigECamera
 
@@ -43,15 +43,23 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         autostart_stream: bool = False,
         features: dict | None = None,
         features_file: str | None = None,
+        trigger: str = "off",
+        trigger_source: str = "Line0",
+        trigger_activation: str = "RisingEdge",
         name: str | None = None,
     ):
         if name is None:
             name = f"gige_camera_{camera_index}"
         super().__init__(device_id=name)
+        check_trigger(trigger, trigger_activation)
 
         self._cti_path = cti_path
         self._camera_index = camera_index
         self._autostart_stream = autostart_stream
+        # off: free-run; software: one TriggerSoftware per capture; hardware: an input line.
+        self._trigger = trigger
+        self._trigger_source = trigger_source
+        self._trigger_activation = trigger_activation
         # GenICam features written at every INITIALIZE, in order (devices/CameraFeatures.py).
         self._init_feature_settings(features, features_file)
 
@@ -86,8 +94,19 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
             "faulted": self._faulted,
             "model": model,
             "serial_number": serial,
+            "trigger": self._trigger_summary(),
             "features": self._features_summary(),
         }
+
+    def _trigger_summary(self) -> str:
+        if self._trigger == "hardware":
+            return f"hardware ({self._trigger_source}, {self._trigger_activation})"
+        return self._trigger
+
+    @property
+    def trigger(self) -> str:
+        """``"off"`` (free-run), ``"software"`` or ``"hardware"``."""
+        return self._trigger
 
     @property
     def connected(self) -> bool:
@@ -122,7 +141,8 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
             self._streaming = False
             self._connected = True   # set_feature() needs it; undone below on failure
             try:
-                self._load_and_apply_features()
+                self._apply_trigger()
+                self._load_and_apply_features()   # after: the file may tune TriggerDelay...
             except Exception:
                 try:
                     self._api.disconnect()
@@ -138,6 +158,20 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
             self._streaming = False
             self._faulted = True
             raise
+
+    def _apply_trigger(self):
+        """Put the camera in free-run, software- or hardware-triggered acquisition."""
+        for feature_name, value, optional in trigger_features(self._trigger, self._trigger_source,
+                                                              self._trigger_activation):
+            try:
+                self.set_feature(feature_name, value)
+            except KeyError:
+                if not optional:
+                    raise RuntimeError(f"trigger {self._trigger}: the camera has no {feature_name}") from None
+            except Exception as e:
+                raise RuntimeError(f"trigger {self._trigger}: {feature_name}={value!r}: {e}") from e
+        if self._trigger != "off":
+            self.logger.info(f"[{self.device_id}] Trigger: {self._trigger_summary()}.")
 
     def shutdown(self):
         if not self._api:
@@ -197,6 +231,11 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         with self._capture_lock:
             try:
                 return self._api.capture_frame(timeout_sec=timeout_sec)
+            except TimeoutError:
+                # With a hardware trigger, no frame only means no pulse came.
+                if self._trigger != "hardware":
+                    self._faulted = True
+                raise
             except Exception:
                 self._faulted = True
                 raise
@@ -208,10 +247,21 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         (not by the image content, so brightness does not pump), and Bayer
         mosaics become half-resolution RGB. Starts the stream if needed, e.g.
         after an abort stopped it. Safe to call from several threads.
+
+        With ``trigger: software`` it fires TriggerSoftware for a fresh frame;
+        with ``trigger: hardware`` it waits for the next pulse, raising
+        TimeoutError (without faulting) if none comes within *timeout_sec*.
         """
         with self._capture_lock:
             if not self._streaming:
                 self.start_stream()
+            if self._trigger == "software":
+                try:
+                    self._api.discard_queued()   # a late frame from an earlier trigger is stale
+                    self._api.execute("TriggerSoftware")
+                except Exception:
+                    self._faulted = True
+                    raise
             frame = self.capture_frame(timeout_sec=timeout_sec)
             pixel_format = self._api.last_pixel_format or ""
         bits = _bit_depth(pixel_format) or 8
@@ -229,6 +279,7 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
         api = self._api
         return {
             "streaming": self._streaming,
+            "trigger": self._trigger,
             "pixel_format": api.last_pixel_format if api else None,
             "incomplete_frames": getattr(api, "incomplete_frames", 0),
             **self._diagnostics.telemetry(),
