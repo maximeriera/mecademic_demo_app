@@ -91,21 +91,46 @@ def _access(node, *modes: str) -> bool:
     return any(mode == getattr(genapi.EAccessMode, m) for m in modes)
 
 
+def _access_name(node) -> str:
+    """The node's access mode: "RW", "RO", "WO", "NA" (not available now) or "NI" (not implemented)."""
+    try:
+        mode = node.get_access_mode()
+    except Exception:
+        return "unknown"
+    for name in ("RW", "RO", "WO", "NA", "NI"):
+        if mode == getattr(genapi.EAccessMode, name, None):
+            return name
+    return str(mode)
+
+
+def _property(node, name: str) -> tuple[str, str]:
+    """``(value, attribute)`` of a property of the node's INode (``pIsLocked``...), ``("", "")`` if none."""
+    try:
+        inode = node.node
+        if name not in list(inode.property_names):
+            return "", ""
+        prop = inode.get_property(name)
+    except Exception:
+        return "", ""
+    value, attribute = (list(prop) + ["", ""])[:2] if isinstance(prop, (tuple, list)) else (prop, "")
+    return str(value or "").strip(), str(attribute or "").strip()
+
+
+def _value_of(node) -> str:
+    """A node's current value as text, ``?`` if it has none or cannot be read now."""
+    try:
+        return str(node.value)
+    except Exception:
+        return "?"
+
+
 def _stream_locked(node) -> bool:
     """True if the camera can lock this feature (``pIsLocked``, usually TLParamsLocked while streaming).
 
     That is what tells a feature locked by the stream, which ``set_feature``
     writes with the stream stopped, from one that is read-only for good.
     """
-    try:
-        inode = node.node
-        if "pIsLocked" not in list(inode.property_names):
-            return False
-        prop = inode.get_property("pIsLocked")
-    except Exception:
-        return False
-    value = prop[0] if isinstance(prop, (tuple, list)) and prop else prop
-    return bool(str(value or "").strip())
+    return bool(_property(node, "pIsLocked")[0])
 
 
 def _coerce(feature_name: str, node, value):
@@ -326,6 +351,43 @@ class GigECamera:
     def is_writable(self, feature_name: str) -> bool:
         """True if the feature can be written now (many are locked while streaming)."""
         return _access(self._node(feature_name), "RW", "WO")
+
+    def lock_report(self, feature_name: str) -> str:
+        """What keeps *feature_name* from being written, as the camera's own description says.
+
+        Its access mode, then the nodes its ``pIsLocked`` and ``pIsAvailable``
+        point at with their values, and their formula and its variables for a
+        SwissKnife, e.g. ``access RO, pIsLocked TriggerSourceLock=1 (= M || E = 2;
+        M=TriggerMode=0, E=ExposureMode=2)``.
+        """
+        node = self._node(feature_name)
+        parts = [f"access {_access_name(node)}"]
+        for prop in ("pIsLocked", "pIsAvailable"):
+            ref = _property(node, prop)[0]
+            if ref:
+                parts.append(f"{prop} {self._node_state(ref)}")
+        return ", ".join(parts)
+
+    def _node_state(self, name: str) -> str:
+        """``name=value``, with the formula and variable values of a SwissKnife."""
+        try:
+            node = self._node(name)
+        except Exception:
+            return f"{name} (unreadable)"
+        state = f"{name}={_value_of(node)}"
+        formula = _property(node, "Formula")[0]
+        if formula:
+            refs, variables = (part.split("\t") for part in _property(node, "pVariable"))
+            values = [f"{var}={ref}={_value_of(self._node_or_none(ref))}"
+                      for var, ref in zip(variables, refs) if ref]
+            state += f" (= {formula}; {', '.join(values)})" if values else f" (= {formula})"
+        return state
+
+    def _node_or_none(self, name: str):
+        try:
+            return self._node(name)
+        except Exception:
+            return None
 
     def describe_feature(self, feature_name: str) -> dict:
         """``{name, value, type, writable, stream_locked, min, max, inc, unit, choices, display_name, tooltip, visibility}``.

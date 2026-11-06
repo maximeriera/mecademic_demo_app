@@ -359,8 +359,10 @@ def test_gige_config_features_apply_in_order_at_initialize(gige_features):
     camera = gige_features(features={"ExposureAuto": "Off", "ExposureTime": 20000, "PixelFormat": "Mono8"},
                            autostart_stream=True)
     camera.initialize()
-    # trigger: off puts the camera in free-run first, then the features go in, in order.
-    assert gige_features.log == ["TriggerMode", "ExposureAuto", "ExposureTime", "PixelFormat", "start"]
+    # trigger: off puts the camera in free-run first (every trigger checked, FrameStart selected
+    # back), then the features go in, in order.
+    assert gige_features.log == ["TriggerSelector", "TriggerSelector", "TriggerMode",
+                                 "ExposureAuto", "ExposureTime", "PixelFormat", "start"]
     assert camera.info["features"] == "ExposureAuto=Off, ExposureTime=20000, PixelFormat=Mono8"
 
     broken = gige_features(features={"ExposureTime": 20000, "Gian": 3})
@@ -451,9 +453,12 @@ def test_gige_counts_the_incomplete_frames_harvesters_discards(gige_features):
 
 def test_gige_trigger_modes_are_set_before_the_features(gige_features):
     nodes = gige_features.nodes
+    nodes["TriggerSource"]._value = "Line0"
     software = gige_features(trigger="software", features={"ExposureTime": 20000})
     software.initialize()
-    assert gige_features.log[:5] == ["TriggerSelector", "TriggerMode", "TriggerSource", "TriggerMode", "ExposureTime"]
+    # Every trigger checked (FrameStart selected back), then FrameStart set up, then the features.
+    assert gige_features.log == ["TriggerSelector", "TriggerSelector", "TriggerSelector", "TriggerMode",
+                                 "TriggerSource", "TriggerMode", "ExposureTime"]
     assert (nodes["TriggerMode"].value, nodes["TriggerSource"].value) == ("On", "Software")
     assert software.info["trigger"] == "software" and software.telemetry()["trigger"] == "software"
 
@@ -534,6 +539,7 @@ def test_gige_initialize_stops_an_acquisition_an_earlier_session_left_running(gi
     # A process killed while streaming: the camera still acquires, TriggerSource is locked,
     # and TriggerMode is not (a FLIR camera's "TriggerSource is read-only" at INITIALIZE).
     nodes, log = gige_features.nodes, gige_features.log
+    nodes["TriggerSource"]._value = "Line0"               # the earlier session's hardware trigger
     camera = gige_features(trigger="software")
     node_map = camera.api.ia.remote_device.node_map
     node_map.TLParamsLocked = _ParamsLock(log, [nodes["TriggerSource"]])
@@ -548,15 +554,67 @@ def test_gige_initialize_stops_an_acquisition_an_earlier_session_left_running(gi
     assert "AcquisitionStop()" not in log and "TLParamsLocked" not in log
 
 
-def test_gige_trigger_error_shows_the_lock_state(gige_features):
+class _PerSelector(_FakeNode):
+    """A feature holding one value per TriggerSelector entry, as a camera's TriggerMode does."""
+
+    def __init__(self, base, selector, values):
+        super().__init__(base.name, base.kind, base._value, base.log, choices=base.symbolics)
+        self.selector, self.values = selector, dict(values)
+
+    @property
+    def value(self):
+        return self.values.get(self.selector.value, self._value)
+
+    @value.setter
+    def value(self, value):
+        _FakeNode.value.fset(self, value)
+        self.values[self.selector.value] = value
+
+
+def test_gige_trigger_switches_off_every_trigger_first(gige_features):
+    # Another program left the LineStart trigger on: free-run or not, it goes off first.
     nodes, log = gige_features.nodes, gige_features.log
     camera = gige_features(trigger="software")
     node_map = camera.api.ia.remote_device.node_map
+    node_map.TriggerMode = _PerSelector(nodes["TriggerMode"], nodes["TriggerSelector"], {"LineStart": "On"})
+    camera.initialize()
+    assert node_map.TriggerMode.values == {"LineStart": "Off", "FrameStart": "On"}
+    assert nodes["TriggerSelector"].value == "FrameStart" and nodes["TriggerSource"].value == "Software"
+
+
+def test_gige_trigger_source_already_set_is_not_written(gige_features):
+    # Locked, but already what the trigger wants: nothing to write, nothing to fail.
+    nodes = gige_features.nodes
+    nodes["TriggerSource"].mode = "RO"
+    camera = gige_features(trigger="software")                # the fake's TriggerSource is "Software"
+    camera.initialize()
+    assert nodes["TriggerSource"].writes == [] and nodes["TriggerMode"].value == "On"
+
+
+def test_gige_trigger_error_shows_what_locks_the_feature(gige_features):
+    from types import SimpleNamespace
+
+    nodes, log = gige_features.nodes, gige_features.log
+    nodes["TriggerSource"]._value = "Line0"
     nodes["TriggerSource"].mode = "RO"                    # locked by something this cannot release
+    camera = gige_features(trigger="software")
+    node_map = camera.api.ia.remote_device.node_map
     node_map.TLParamsLocked = _ParamsLock(log, [], value=0)
-    with pytest.raises(RuntimeError, match=r"TriggerSource='Software': .*read-only.*"
-                                           r"\(TriggerMode=Off, TLParamsLocked=0\)"):
+    # The camera describes the lock: TriggerSource's pIsLocked is a SwissKnife over ExposureMode.
+    properties = {"pIsLocked": ("TriggerSourceLock", "")}
+    nodes["TriggerSource"].node = SimpleNamespace(property_names=list(properties),
+                                                  get_property=lambda key: properties[key])
+    lock = _FakeNode("TriggerSourceLock", "IInteger", 1, log, mode="RO")
+    knife = {"Formula": ("E = 1", ""), "pVariable": ("ExposureMode", "E")}
+    lock.node = SimpleNamespace(property_names=list(knife), get_property=lambda key: knife[key])
+    node_map.TriggerSourceLock = lock
+    node_map.ExposureMode = _FakeNode("ExposureMode", "IInteger", 1, log)
+    with pytest.raises(RuntimeError) as failed:
         camera.initialize()
+    message = str(failed.value)
+    assert "TriggerSource='Software': feature 'TriggerSource' is read-only." in message
+    assert "TriggerMode=Off, TLParamsLocked=0" in message
+    assert "TriggerSource: access RO, pIsLocked TriggerSourceLock=1 (= E = 1; E=ExposureMode=1)" in message
 
 
 def test_gige_discard_queued_drops_the_buffered_frames(gige_features, monkeypatch):

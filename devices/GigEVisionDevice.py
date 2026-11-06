@@ -165,27 +165,69 @@ class GigEVisionDevice(FeatureSettingsMixin, Device):
 
     def _apply_trigger(self):
         """Put the camera in free-run, software- or hardware-triggered acquisition."""
+        self._all_triggers_off()
         for feature_name, value, optional in trigger_features(self._trigger, self._trigger_source,
                                                               self._trigger_activation):
             try:
+                if feature_name == "TriggerSource" and self._current(feature_name) == value:
+                    continue   # already set: nothing to write, even where the camera locks it
                 self.set_feature(feature_name, value)
             except KeyError:
                 if not optional:
                     raise RuntimeError(f"trigger {self._trigger}: the camera has no {feature_name}") from None
             except Exception as e:
                 raise RuntimeError(f"trigger {self._trigger}: {feature_name}={value!r}: {e} "
-                                   f"({self._lock_state()})") from e
+                                   f"({self._lock_state(feature_name)})") from e
         if self._trigger != "off":
             self.logger.info(f"[{self.device_id}] Trigger: {self._trigger_summary()}.")
 
-    def _lock_state(self) -> str:
-        """``TriggerMode=..., TLParamsLocked=...`` as the camera reads them now, for an error message."""
+    def _all_triggers_off(self):
+        """TriggerMode Off for every trigger the camera has: FrameStart, AcquisitionStart...
+
+        One left on by another program (SpinView) or an earlier config keeps the
+        camera from free-running and, on some cameras, locks TriggerSource. A
+        trigger the camera lists but will not switch off here is left to the
+        steps that follow, which report it.
+        """
+        try:
+            selectors = self._api.describe_feature("TriggerSelector")["choices"] or []
+        except Exception:
+            selectors = []   # no TriggerSelector: the one TriggerMode goes off with the steps
+        selected = self._current("TriggerSelector")
+        for selector in selectors:
+            try:
+                if self._current("TriggerSelector") != selector:
+                    self._api.set_feature("TriggerSelector", selector)
+                if self._current("TriggerMode") not in (None, "Off"):
+                    self._api.set_feature("TriggerMode", "Off")
+                    self.logger.info(f"[{self.device_id}] Trigger {selector} was on: switched it off.")
+            except Exception as e:
+                self.logger.debug(f"[{self.device_id}] Trigger {selector}: {e}")
+        if selected is not None and self._current("TriggerSelector") != selected:
+            try:
+                self._api.set_feature("TriggerSelector", selected)
+            except Exception:
+                pass
+
+    def _current(self, feature_name: str):
+        """The feature's value now, or None if the camera has none or cannot read it now."""
+        try:
+            return self._api.get_feature(feature_name)
+        except Exception:
+            return None
+
+    def _lock_state(self, feature_name: str) -> str:
+        """``TriggerMode=..., TLParamsLocked=...`` and what locks *feature_name*, for an error message."""
         values = []
         for name in ("TriggerMode", "TLParamsLocked"):
             try:
                 values.append(f"{name}={self._api.get_feature(name)}")
             except Exception:
                 values.append(f"{name} unreadable")
+        try:
+            values.append(f"{feature_name}: {self._api.lock_report(feature_name)}")
+        except Exception:
+            pass
         return ", ".join(values)
 
     def shutdown(self):
