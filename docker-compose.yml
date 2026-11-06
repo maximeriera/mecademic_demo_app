@@ -41,6 +41,8 @@ services:
       # Level echoed to stdout, i.e. what `docker compose logs -f` shows.
       # Set to DEBUG when chasing a problem live.
       MECADEMIC_CONSOLE_LOG_LEVEL: "${MECADEMIC_CONSOLE_LOG_LEVEL:-INFO}"
+      # Folder whose subfolders the workspace picker lists (see the volume below).
+      # MECADEMIC_WORKSPACES_ROOT: /workspaces
 
     volumes:
       # Cell configuration and task logic, editable without rebuilding the
@@ -55,6 +57,10 @@ services:
       # real data — without this mount they are lost whenever the container is
       # recreated.
       - ./backups:/webapp/backups
+
+      # Workspace picker (Control tab): mount the folder holding your
+      # workspaces and set MECADEMIC_WORKSPACES_ROOT below to list them.
+      # - ../:/workspaces
 
     # python:*-slim ships no curl/wget, so probe with the interpreter.
     healthcheck:

@@ -9,7 +9,7 @@
 
 -r requirements.txt
 
-# Tests (app_logic/tests/: the alignment on a simulated cell)
+# Tests: python -m pytest -q tests  (simulated devices, no hardware)
 pytest==9.1.1
 
 # Notebook workflow

@@ -41,6 +41,8 @@ class GigECamera:
         self.ia = None  # Image Acquirer object
         self._is_connected = False
         self._is_streaming = False
+        #: GenICam PixelFormat of the last captured frame (e.g. "Mono12", "BayerRG8").
+        self.last_pixel_format: str | None = None
 
     @staticmethod
     def _safe_attr(obj, name: str, default="N/A"):
@@ -170,14 +172,18 @@ class GigECamera:
         with self.ia.fetch(timeout=timeout_sec) as buffer:
             payload = buffer.payload
             component = payload.components[0]
-            
+
             # Extract dimensions
             width = component.width
             height = component.height
-            
-            # Reshape raw data buffer without copying memory (Zero-Copy)
-            raw_data = component.data.reshape(height, width)
-            
+            self.last_pixel_format = getattr(component, "data_format", None)
+
+            # Reshape raw data buffer without copying memory (Zero-Copy):
+            # H×W for mono and Bayer formats, H×W×C for RGB8/BGR8 and the like.
+            channels = component.data.size // (width * height)
+            shape = (height, width) if channels == 1 else (height, width, channels)
+            raw_data = component.data.reshape(shape)
+
             # Return a hard copy so the buffer can be safely released back to the queue immediately
             return raw_data.copy()
 

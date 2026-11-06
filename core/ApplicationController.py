@@ -31,16 +31,18 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 from devices import Device
+from devices.registry import create_device, validate_devices_config
 
 from .Task import Task, TaskType
 from .ControllerState import ControllerState
 from .AppContext import AppContext
 from .ContextStore import ContextStore
 from .DataHub import DataHub
+from .History import HistoryStore
 from .ProductionMetrics import ProductionMetrics
 from .StepTracker import StepTracker
 from .ManualActions import load_manual_actions_registry, normalize_manual_actions_config
-from .LogSetup import get_controller_logger
+from .LogSetup import get_controller_logger, log_root_dir
 
 #: Workspace module candidates for the optional custom view, tried in order
 #: (same flat-then-package convention as ``Task.TASK_FUNCTION_MODULES``).
@@ -79,6 +81,19 @@ class ApplicationController:
         self._state = ControllerState.OFF
         self._current_task: Task | None = None
         self._state_lock = threading.Lock() # Protects state changes
+
+        # Per-device link control. A detached device was released on purpose
+        # (e.g. a robot handed to its web portal): the monitor ignores it, and
+        # only manual actions may run until it is reconnected.
+        # _command_lock serialises task starts against link changes, so a task
+        # cannot be accepted while a device is being released under it.
+        self._command_lock = threading.RLock()
+        self._detached: Dict[str, str] = {}      # device_id -> "monitoring" | "disconnected"
+        self._in_transition: set[str] = set()    # device ids mid connect/disconnect
+
+        #: Callable[[level, message], None] for operator-facing notices (the UI
+        #: shows them as toasts). Set by the web layer; never required.
+        self.on_notice = None
         
         # Threads for monitoring and task execution
         
@@ -89,6 +104,7 @@ class ApplicationController:
         self.logger.info(f"Loading controller config from: {config_path}")
         self.config: Dict = ApplicationController.get_devices_config(config_path) 
         self.devices: Dict[str, Device] = {}
+        self.config_issues: list[Dict[str, str]] = []
         self._manual_actions = self._load_manual_actions_config()
         
         self.context = self._create_context(config_path, context_path)
@@ -158,8 +174,63 @@ class ApplicationController:
             )
 
         steps = StepTracker(self.logger, StepTracker.normalize_sequences(sequences, self.logger))
-        return AppContext(store=store, steps=steps, metrics=ProductionMetrics(self.logger),
-                          data=DataHub(self.logger))
+        hub = DataHub(self.logger)
+        hub.device_available = self._device_available
+        metrics = ProductionMetrics(self.logger)
+
+        self.workspace_name = self._workspace_name(config_path)
+        self.history = self._create_history()
+        if self.history is not None:
+            steps.on_cycle_end = self.history.record_cycle
+            metrics.on_run_archived = self._on_run_archived
+            # The Production tab keeps showing the last runs after a restart.
+            metrics.restore_run_history(self.history.runs(limit=20))
+        return AppContext(store=store, steps=steps, metrics=metrics, data=hub)
+
+    @staticmethod
+    def _workspace_name(config_path: str) -> str:
+        """Folder name of the workspace (the parent of app_logic/ when config.yaml sits there)."""
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        if os.path.basename(config_dir) == "app_logic":
+            config_dir = os.path.dirname(config_dir)
+        return os.path.basename(config_dir) or "workspace"
+
+    def _create_history(self) -> HistoryStore | None:
+        """Production history on disk (``history:`` in config.yaml), or None if disabled."""
+        settings = self.config.get('history') or {}
+        if not isinstance(settings, dict):
+            self.logger.warning("'history' in config.yaml must be a mapping; using defaults.")
+            settings = {}
+        if settings.get('enabled', True) is False:
+            self.logger.info("Production history disabled in config.yaml.")
+            return None
+        root = os.path.join(log_root_dir(), 'history', self.workspace_name)
+        try:
+            store = HistoryStore(root, self.logger, retention_days=int(settings.get('retention_days', 30)))
+        except Exception as e:
+            self.logger.error(f"Production history unavailable ({root}): {e}", exc_info=True)
+            return None
+        self.logger.info(f"Production history: {root}")
+        return store
+
+    def _on_run_archived(self, run: Dict[str, Any]) -> None:
+        """Persist an archived run, with the workspace and each top-level step's average."""
+        record = dict(run)
+        record["workspace"] = self.workspace_name
+        try:
+            stats = self.context.steps.snapshot()["stats"]
+            record["step_avg_s"] = {s["name"]: round(s["avg_s"], 4) for s in stats
+                                    if s["depth"] == 0 and s["avg_s"] is not None}
+        except Exception:
+            pass
+        self.history.record_run(record)
+
+    def _device_available(self, device_id: str) -> bool:
+        """False while *device_id* is detached with no link left (DataHub sources pause)."""
+        if device_id not in self._detached:
+            return True
+        device = self.devices.get(device_id)
+        return device is not None and self._safe_link(device) != "disconnected"
 
     def _start_custom_view(self) -> None:
         """Load the workspace's optional ``custom_view`` module and start its data sources.
@@ -243,157 +314,29 @@ class ApplicationController:
         return get_controller_logger()
     
     def _create_devices(self):
-        """Instantiate all devices declared in the config and store them in
-        :attr:`devices`.
+        """Instantiate every device declared under ``devices:`` in the config.
 
-        Supported ``type`` values (case-insensitive):
-        ``mecademic``, ``asyril``, ``arduino``, ``planarmotor``, ``iologik``,
-        ``brainboxes_ed_digital``, ``zaber``, ``gige_camera``, ``lmi``,
-        ``thorlabs_pm`` (alias: ``thorlabs_power_meter``),
-        ``smaract_mcs2`` (aliases: ``mcs2``, ``smaract``),
-        ``simulated`` (aliases: ``dummy``, ``fake``).
-        Unknown types are skipped with a warning.
+        Types, aliases and the keys each one accepts come from
+        :mod:`devices.registry`. Problems never stop the controller from
+        starting: they are collected in :attr:`config_issues` (shown by the UI),
+        and an entry with an error is not created. :meth:`initialize` refuses
+        to run while any error remains.
         """
-        devices_config = self.config.get('devices', {})
-        if devices_config is None:
-            devices_config = {}
-        for device_name, device_info in devices_config.items():
-            device_type = device_info.get('type', '').lower()
-            if device_type == 'mecademic':
-                from devices.MecaRobot import MecaRobot
-                self.logger.info(f"Creating Mecademic Robot API for device: {device_name}")
-                device = MecaRobot(ip_address=device_info.get('ip_address', ''), name=device_name)
-                self.devices[device_name] = device
-            
-            elif device_type == 'zaber':
-                from devices.OLD_ZaberAxis import ZaberAxis
-                self.logger.info(f"Creating Zaber Stage API for device: {device_name}")
-                device = ZaberAxis(
-                    port=device_info.get('port', 'COM3'),
-                    axis_number=device_info.get('axis_number', 1),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
+        entries, issues = validate_devices_config(self.config.get('devices'))
+        for entry in entries:
+            try:
+                self.logger.info(f"Creating {entry.type} device: {entry.name}")
+                self.devices[entry.name] = create_device(entry)
+            except Exception as e:
+                # Typically a driver SDK that is not installed (pyvisa, harvesters...).
+                self.logger.error(f"Could not create device '{entry.name}': {e}", exc_info=True)
+                issues.append({"device": entry.name, "level": "error",
+                               "message": f"could not be created: {type(e).__name__}: {e}"})
+        for item in issues:
+            log = self.logger.error if item["level"] == "error" else self.logger.warning
+            log(f"config.yaml devices.{item['device']}: {item['message']}")
+        self.config_issues = issues
 
-            elif device_type == 'planarmotor':
-                from devices.PlanarMotor import PlanarMotor
-                self.logger.info(f"Creating Planar Motor API for device: {device_name}")
-                device = PlanarMotor(ip_address=device_info.get('ip_address', '192.168.10.200'), name=device_name)
-                self.devices[device_name] = device
-
-            elif device_type == 'asyril':
-                from devices.Asyril import AsyrilEyePlus
-                self.logger.info(f"Creating Asyril API for device: {device_name}")
-                device = AsyrilEyePlus(ip_address=device_info.get('ip_address', ''), recipe=device_info.get('recipe', 0), name=device_name)
-                self.devices[device_name] = device
-                
-            elif device_type == 'arduino':
-                from devices.ArduinoBoard import ArduinoBoard
-                self.logger.info(f"Creating Arduino IO API for device: {device_name}")
-                device = ArduinoBoard(port=device_info.get('port', 'COM3'), name=device_name)
-                self.devices[device_name] = device
-
-            elif device_type == 'iologik':
-                from devices.IoLogikE1212 import IoLogikE1212
-                self.logger.info(f"Creating ioLogik E1212 API for device: {device_name}")
-                device = IoLogikE1212(
-                    ip_address=device_info.get('ip_address', ''),
-                    port=device_info.get('port', 502),
-                    slave_id=device_info.get('slave_id', 1),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('brainboxes_ed_digital', 'brainboxes_dio', 'ed_digital'):
-                from devices.BrainboxesED import BrainboxesEDDigital
-                self.logger.info(f"Creating Brainboxes ED Digital API for device: {device_name}")
-                device = BrainboxesEDDigital(
-                    ip_address=device_info.get('ip_address', ''),
-                    address=device_info.get('address', 0x01),
-                    port=device_info.get('port', 9500),
-                    timeout=device_info.get('timeout', 5.0),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type == 'lmi':
-                from devices.LMISensor import LMISensor
-                self.logger.info(f"Creating LMI Sensor API for device: {device_name}")
-                device = LMISensor(
-                    ip_address=device_info.get('ip_address', ''),
-                    control_port=device_info.get('control_port', 3190),
-                    data_port=device_info.get('data_port', 3192),
-                    health_port=device_info.get('health_port', 3194),
-                    delimiter=device_info.get('delimiter', ','),
-                    terminator=device_info.get('terminator', '\r\n'),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type == 'gige_camera':
-                from devices.GigEVisionDevice import GigEVisionDevice
-
-                cti_path = device_info.get('cti_path', '')
-                if not cti_path:
-                    raise ValueError(
-                        f"Missing required 'cti_path' for gige_camera device '{device_name}'."
-                    )
-
-                self.logger.info(f"Creating GigE Vision camera API for device: {device_name}")
-                device = GigEVisionDevice(
-                    cti_path=cti_path,
-                    camera_index=device_info.get('camera_index', 0),
-                    autostart_stream=device_info.get('autostart_stream', False),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('thorlabs_pm', 'thorlabs_power_meter'):
-                from devices.ThorlabsPowerMeter import ThorlabsPowerMeter
-                self.logger.info(f"Creating Thorlabs power meter API for device: {device_name}")
-                device = ThorlabsPowerMeter(
-                    resource=device_info.get('resource'),
-                    backend=device_info.get('backend'),
-                    timeout_ms=device_info.get('timeout_ms', 5000),
-                    wavelength=device_info.get('wavelength'),
-                    averaging=device_info.get('averaging'),
-                    power_unit=device_info.get('power_unit'),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('smaract_mcs2', 'mcs2', 'smaract'):
-                from devices.SmarActMCS2 import SmarActMCS2
-                self.logger.info(f"Creating SmarAct MCS2 API for device: {device_name}")
-                device = SmarActMCS2(
-                    ip_address=device_info.get('ip_address', ''),
-                    port=device_info.get('port', 55551),
-                    timeout=device_info.get('timeout', 5.0),
-                    channels=device_info.get('channels'),
-                    reference=device_info.get('reference', 'if_needed'),
-                    reference_reverse=device_info.get('reference_reverse', False),
-                    reference_timeout_s=device_info.get('reference_timeout_s', 120.0),
-                    velocity_mm_s=device_info.get('velocity_mm_s'),
-                    acceleration_mm_s2=device_info.get('acceleration_mm_s2'),
-                    name=device_name,
-                )
-                self.devices[device_name] = device
-
-            elif device_type in ('simulated', 'dummy', 'fake'):
-                from devices.SimulatedDevice import SimulatedDevice
-                self.logger.info(f"Creating Simulated (no-hardware) device for: {device_name}")
-                device = SimulatedDevice(
-                    name=device_name,
-                    connect_delay=device_info.get('connect_delay', 0.0),
-                    fail_to_connect=device_info.get('fail_to_connect', False),
-                    fail_rate=device_info.get('fail_rate', 0.0),
-                    info=device_info.get('info'),
-                )
-                self.devices[device_name] = device
-
-            else:
-                self.logger.warning(f"Unknown device type '{device_type}' for device '{device_name}'. Skipping API creation.")
-                
     def initialize(self):
         """Connect and initialise every device, then transition to ``READY``.
 
@@ -410,16 +353,34 @@ class ApplicationController:
             Re-raised from the failing device's ``initialize()`` after the
             controller is transitioned to ``FAULTED``.
         """
-        self.set_state(ControllerState.INITIALIZING)
+        config_errors = [i for i in self.config_issues if i["level"] == "error"]
+        if config_errors:
+            details = "; ".join(f"{i['device']}: {i['message']}" if i['device'] else i['message']
+                                for i in config_errors)
+            raise RuntimeError(f"Fix the devices in config.yaml first ({details})")
+        with self._command_lock:
+            if self._current_task and self._current_task.is_alive():
+                raise RuntimeError("Cannot initialize while a task is running. Stop or abort it first.")
+            if self._in_transition:
+                raise RuntimeError(
+                    f"Cannot initialize while {', '.join(sorted(self._in_transition))} is connecting or disconnecting."
+                )
+            self.set_state(ControllerState.INITIALIZING)
         # No sampler may read a device while it (re)connects.
         self.context.data.clear()
         for _, device in self.devices.items():
+            if device.device_id in self._detached:
+                # Never grab a device someone else is driving: it is reconnected
+                # from its card once it is free.
+                self.logger.info(f"Device {device.device_id} is detached: left detached by INITIALIZE.")
+                continue
             try:
                 self.logger.info(f"Initializing device: {device.device_id}")
                 device.initialize()
                     
             except Exception as e:
                 self.logger.error(f"Initialization failed for device {device.device_id}: {e}", exc_info=True)
+                self._notice("error", f"Initialization failed for {device.device_id}: {e}")
                 self.set_state(ControllerState.FAULTED)
                 raise Exception(f"Initialization failed for device {device.device_id}: {e}")
         
@@ -520,36 +481,64 @@ class ApplicationController:
             manual_action_key,
             self.get_state().value,
         )
-        if self.get_state() != ControllerState.READY:
-            self.logger.info(f"Cannot start task. Robot is {self.get_state().value}.")
-            return False
+        with self._command_lock:
+            if self.get_state() != ControllerState.READY:
+                self.logger.info(f"Cannot start task. Robot is {self.get_state().value}.")
+                return False
 
-        if self._current_task and self._current_task.is_alive():
-             # Should not happen if state is READY, but good safety check
-             self.logger.info("A task is already running.")
-             return False
+            if self._current_task and self._current_task.is_alive():
+                # Should not happen if state is READY, but good safety check
+                self.logger.info("A task is already running.")
+                return False
 
-        # Start the new task
-        if task_type == TaskType.PROD:
-            self.context.apply_event("prod_start")
-            self.context.metrics.mark_prod_running(True)
+            reason = self.task_refusal_reason(task_type)
+            if reason:
+                self.logger.info(f"Cannot start task {task_type.name}: {reason}")
+                return False
 
-        self._current_task = Task(
-            logger=self.logger,
-            task_type=task_type, 
-            state_change_callback=self.set_state, 
-            devices=self.devices,
-            context=self.context,
-            manual_action_key=manual_action_key,
-        )
-        self.logger.info(
-            "Starting task thread: name=%s type=%s manual_action_key=%s",
-            self._current_task.name,
-            task_type.name,
-            manual_action_key,
-        )
-        self._current_task.start()
-        return True
+            # Start the new task
+            if task_type == TaskType.PROD:
+                self.context.apply_event("prod_start")
+                self.context.metrics.mark_prod_running(True)
+
+            self._current_task = Task(
+                logger=self.logger,
+                task_type=task_type,
+                state_change_callback=self.set_state,
+                devices=self.devices,
+                context=self.context,
+                manual_action_key=manual_action_key,
+                is_detached=self.is_detached,
+                notify=self._notice,
+            )
+            self.logger.info(
+                "Starting task thread: name=%s type=%s manual_action_key=%s",
+                self._current_task.name,
+                task_type.name,
+                manual_action_key,
+            )
+            self._current_task.start()
+            return True
+
+    def is_busy(self) -> bool:
+        """True while a task runs, the cell initializes or a device switches link."""
+        task = self._current_task
+        return ((task is not None and task.is_alive())
+                or self.get_state() == ControllerState.INITIALIZING
+                or bool(self._in_transition))
+
+    def task_refusal_reason(self, task_type: TaskType) -> str | None:
+        """Why *task_type* may not start because of device links, or None.
+
+        Only manual actions run while a device is detached: the cell sequences
+        (PROD, HOME, SHIPMENT, CALIBRATION) assume every device is theirs.
+        """
+        if self._in_transition:
+            return f"Wait for {', '.join(sorted(self._in_transition))} to finish connecting or disconnecting."
+        if task_type != TaskType.MANUAL_ACTION and self._detached:
+            return (f"Reconnect {', '.join(sorted(self._detached))} first: "
+                    "only manual actions run while a device is detached.")
+        return None
 
     def get_manual_actions(self) -> list[dict[str, str]]:
         """Return configured manual action metadata for UI rendering."""
@@ -650,6 +639,14 @@ class ApplicationController:
             "steps": self.context.steps.snapshot(),
         }
 
+    def get_prod_timelines(self) -> Dict[str, Any]:
+        """Finished PROD cycle timelines (Gantt chart), with each top-level step's average."""
+        data = self.context.steps.timelines()
+        stats = self.context.steps.snapshot()["stats"]
+        data["avg_s"] = {s["name"]: s["avg_s"] for s in stats
+                         if s["depth"] == 0 and s["avg_s"] is not None}
+        return data
+
     def get_context_snapshot(self) -> Dict[str, Any]:
         """Params/variables for the Variables tab. ``enabled`` is False without a context file."""
         snapshot = self.context.store.snapshot()
@@ -666,6 +663,212 @@ class ApplicationController:
         """Reset params/variables to their defaults. Refused while a task is running."""
         locked = self.get_state() == ControllerState.BUSY
         self.context.store.reset(namespace, key=key, locked=locked)
+
+    # --- Per-device link control ---
+
+    def _notice(self, level: str, message: str) -> None:
+        callback = self.on_notice
+        if callback is None:
+            return
+        try:
+            callback(level, message)
+        except Exception:
+            self.logger.debug("Notice callback failed.", exc_info=True)
+
+    def is_detached(self, device_id: str) -> bool:
+        return device_id in self._detached
+
+    def get_detached(self) -> Dict[str, str]:
+        """``{device_id: "monitoring" | "disconnected"}`` for every detached device."""
+        return dict(self._detached)
+
+    def is_in_transition(self, device_id: str) -> bool:
+        return device_id in self._in_transition
+
+    def _link_refusal_locked(self, device_id: str) -> str | None:
+        """Why a link action on *device_id* may not run now, or None. Caller holds _command_lock."""
+        device = self.devices.get(device_id)
+        if device is None:
+            return f"Unknown device '{device_id}'."
+        if self._current_task and self._current_task.is_alive():
+            return "A task is running. Stop or abort it first."
+        if self.get_state() == ControllerState.INITIALIZING:
+            return "The controller is initializing."
+        if device_id in self._in_transition:
+            return f"{device_id} is already connecting or disconnecting."
+        return None
+
+    @staticmethod
+    def _safe_link(device: Device) -> str:
+        try:
+            return device.link
+        except Exception:
+            return "disconnected"
+
+    def disconnect_device(self, device_id: str) -> Dict[str, Any]:
+        """Release one device so another program can use it.
+
+        A device that supports monitoring (a Mecademic robot) keeps a read-only
+        link, so the custom view still receives its data. Device errors are
+        reported in the result, never raised.
+        """
+        with self._command_lock:
+            reason = self._link_refusal_locked(device_id)
+            device = self.devices.get(device_id)
+            if reason is None and not device.supports_reconnect:
+                reason = f"{device_id} does not support reconnecting, so it cannot be disconnected on its own."
+            if reason:
+                self.logger.info(f"Disconnect of {device_id} refused: {reason}")
+                return {"success": False, "message": reason}
+            keep_monitoring = bool(device.supports_monitoring)
+            # Detached BEFORE the call: the monitor must never catch the device
+            # half-disconnected (most drivers report faulted when the link drops)
+            # and fault the whole cell.
+            self._detached[device_id] = "monitoring" if keep_monitoring else "disconnected"
+            self._in_transition.add(device_id)
+
+        self.logger.info(f"Disconnecting device {device_id} (keep_monitoring={keep_monitoring}).")
+        error = None
+        try:
+            device.disconnect(keep_monitoring=keep_monitoring)
+        except Exception as e:
+            error = str(e)
+            self.logger.warning(f"Disconnect of {device_id} reported an error: {e}", exc_info=True)
+        finally:
+            with self._command_lock:
+                self._in_transition.discard(device_id)
+
+        link = self._safe_link(device)
+        if error is None:
+            message = (f"{device_id} released; monitoring link kept." if link == "monitoring"
+                       else f"{device_id} disconnected.")
+        else:
+            message = f"{device_id} detached with an error: {error}"
+        self._notice("info" if error is None else "warning", message)
+        return {"success": error is None, "message": message, "link": link, "detached": True}
+
+    def connect_device(self, device_id: str) -> Dict[str, Any]:
+        """Bring one device (back) under this app's control.
+
+        The device stays detached unless the connection succeeds, so a failed
+        attempt (robot still held by its web portal) cannot fault the cell.
+        """
+        with self._command_lock:
+            reason = self._link_refusal_locked(device_id)
+            device = self.devices.get(device_id)
+            if reason is None and not device.supports_reconnect:
+                reason = f"{device_id} does not support reconnecting on its own. Use INITIALIZE."
+            if reason:
+                self.logger.info(f"Connect of {device_id} refused: {reason}")
+                return {"success": False, "message": reason}
+            self._in_transition.add(device_id)
+
+        self.logger.info(f"Connecting device {device_id}.")
+        error = None
+        try:
+            device.connect()
+        except Exception as e:
+            error = str(e)
+            self.logger.warning(f"Connect of {device_id} failed: {e}", exc_info=True)
+        finally:
+            with self._command_lock:
+                self._in_transition.discard(device_id)
+                if error is None:
+                    self._detached.pop(device_id, None)
+
+        message = f"{device_id} connected." if error is None else f"Connect of {device_id} failed: {error}"
+        self._notice("info" if error is None else "error", message)
+        return {
+            "success": error is None,
+            "message": message,
+            "link": self._safe_link(device),
+            "detached": device_id in self._detached,
+        }
+
+    def clear_device_fault(self, device_id: str) -> Dict[str, Any]:
+        """Clear the fault of one device; leave FAULTED if the cell is healthy afterwards."""
+        with self._command_lock:
+            reason = self._link_refusal_locked(device_id)
+            if reason is None and device_id in self._detached:
+                reason = f"{device_id} is detached. Connect it first."
+            if reason:
+                return {"success": False, "message": reason}
+            device = self.devices[device_id]
+
+        try:
+            device.clear_fault()
+            still_faulted = bool(device.faulted)
+        except Exception as e:
+            self.logger.warning(f"Error clearing fault on {device_id}: {e}", exc_info=True)
+            return {"success": False, "message": f"Error clearing fault on {device_id}: {e}"}
+
+        if still_faulted:
+            return {"success": False, "message": f"{device_id} is still faulted."}
+        self._leave_faulted_if_healthy()
+        return {"success": True, "message": f"Fault cleared on {device_id}. Controller is {self.get_state().value}."}
+
+    # --- Live data and I/O (Devices tab) ---
+
+    def get_device_live(self, device_id: str) -> Dict[str, Any] | None:
+        """Telemetry and I/O points of one device, or None if it does not exist.
+
+        Read errors are returned in ``error``, never raised: the panel polls
+        this while the device may be disconnecting.
+        """
+        device = self.devices.get(device_id)
+        if device is None:
+            return None
+        result: Dict[str, Any] = {"telemetry": {}, "io": [], "error": None}
+        if device_id in self._in_transition:
+            result["error"] = "Connecting or disconnecting..."
+            return result
+        try:
+            result["telemetry"] = device.telemetry() or {}
+            result["io"] = device.io_points() or []
+        except Exception as e:
+            result["error"] = f"{type(e).__name__}: {e}"
+        return result
+
+    def write_device_io(self, device_id: str, name: str, value: Any) -> Dict[str, Any]:
+        """Set one writable I/O point from the UI. Refused while a task runs or the device is detached."""
+        with self._command_lock:
+            reason = self._link_refusal_locked(device_id)
+            if reason is None and device_id in self._detached:
+                reason = f"{device_id} is released. Connect it first."
+            if reason:
+                return {"success": False, "message": reason}
+            device = self.devices[device_id]
+        try:
+            device.write_io(name, value)
+        except (ValueError, NotImplementedError) as e:
+            return {"success": False, "message": str(e), "bad_request": True}
+        except Exception as e:
+            self.logger.warning(f"I/O write {device_id}.{name}={value!r} failed: {e}", exc_info=True)
+            return {"success": False, "message": f"Write failed: {e}"}
+        self.logger.info(f"I/O write from UI: {device_id}.{name} = {value!r}")
+        shown = ("ON" if value else "OFF") if isinstance(value, bool) else value
+        return {"success": True, "message": f"{device_id}.{name} set to {shown}."}
+
+    def _attached_devices(self) -> list[Device]:
+        """Devices the cell currently owns: every device that is not detached."""
+        return [d for d in self.devices.values() if d.device_id not in self._detached]
+
+    def _leave_faulted_if_healthy(self) -> None:
+        """Step out of the latching FAULTED state when no attached device is faulted."""
+        if self.get_state() != ControllerState.FAULTED:
+            return
+        try:
+            if any(d.faulted for d in self._attached_devices()):
+                return
+        except Exception as e:
+            self.logger.warning(f"Could not re-check device faults: {e}")
+            return
+        # FAULTED is latching, so step out of it explicitly. Going through
+        # INITIALIZING keeps the documented transition order intact without
+        # reconnecting or re-homing anything.
+        self.set_state(ControllerState.INITIALIZING)
+        self._last_not_ready_device_id = None
+        self.set_state(ControllerState.READY)
 
     # --- Monitoring Thread ---
 
@@ -695,9 +898,17 @@ class ApplicationController:
             all_ready = True
             
             for _, device in self.devices.items():
-                if device.faulted:
+                device_id = device.device_id
+                if device_id in self._detached or device_id in self._in_transition:
+                    continue  # released on purpose: never faults or blocks the cell
+                faulted = device.faulted
+                # Re-check: the device may have been detached while it was read.
+                if device_id in self._detached or device_id in self._in_transition:
+                    continue
+                if faulted:
                     if self.get_state() != ControllerState.FAULTED:
                         self.logger.warning(f"Device {device.device_id} is faulted. Transitioning controller to FAULTED state and aborting task.")
+                        self._notice("error", f"{device.device_id} faulted: the cell is stopped. Clear faults to resume.")
                         self.context.apply_event("fault")
                         self.context.metrics.mark_prod_running(False)
                         self.context.steps.abandon_open_steps("faulted")
@@ -707,7 +918,7 @@ class ApplicationController:
                     all_ready = False
                     break # Break the inner loop, controller is faulted
             
-                if not device.ready:
+                if not device.ready and device_id not in self._detached:
                     if self._last_not_ready_device_id != device.device_id:
                         self.logger.warning(f"Device {device.device_id} is not ready. Controller cannot be READY.")
                         self._last_not_ready_device_id = device.device_id
@@ -770,7 +981,7 @@ class ApplicationController:
             self._abort_current_task()
             self._current_task.join(timeout=5)
 
-        for _, device in self.devices.items():
+        for device in self._attached_devices():
             try:
                 device.clear_fault()
                 cleared.append(device.device_id)
@@ -780,7 +991,7 @@ class ApplicationController:
 
         # Re-poll health: clear_fault() only asks, it does not guarantee.
         still_faulted: list[str] = []
-        for _, device in self.devices.items():
+        for device in self._attached_devices():
             try:
                 if device.faulted:
                     still_faulted.append(device.device_id)
@@ -796,13 +1007,7 @@ class ApplicationController:
                 self.get_state().value,
             )
         else:
-            # FAULTED is latching, so step out of it explicitly. Going through
-            # INITIALIZING keeps the documented transition order intact without
-            # reconnecting or re-homing anything.
-            if self.get_state() == ControllerState.FAULTED:
-                self.set_state(ControllerState.INITIALIZING)
-                self._last_not_ready_device_id = None
-                self.set_state(ControllerState.READY)
+            self._leave_faulted_if_healthy()
             self.logger.info("Faults cleared on all devices. Controller is %s.", self.get_state().value)
 
         state = self.get_state()
@@ -862,21 +1067,35 @@ class ApplicationController:
 
         # Wait for monitor thread
         self._monitor_thread.join(timeout=10)
-        
-        if self._monitor_thread.is_alive():
+        monitor_stuck = self._monitor_thread.is_alive()
+        if monitor_stuck:
             self.logger.warning("Monitor thread did not shut down gracefully.")
-            raise Exception("Monitor thread did not shut down gracefully.")
-        
+
+        # Devices are shut down even when the monitor is stuck: raising first
+        # used to leave every robot connected (and its control port taken).
+        # Detached devices too, which also closes a robot's monitoring link.
         for _, device in self.devices.items():
             try:
                 device.shutdown()
             except Exception as e:
                 self.logger.warning(f"Error during shutdown of device {device.device_id}: {e}")
+        with self._command_lock:
+            self._detached.clear()
 
         self.set_state(ControllerState.OFF) # Final state after shutdown
+        # The abort above archived the run: get it on disk before the process may exit.
+        if self.history is not None:
+            self.history.flush()
         self.logger.info("Controller shutdown complete.")
+        if monitor_stuck:
+            raise Exception("Monitor thread did not shut down gracefully.")
         
         
+    def close(self) -> None:
+        """Release what outlives :meth:`shutdown` (the history writer). Call once, last."""
+        if self.history is not None:
+            self.history.close()
+
     @staticmethod
     def get_devices_config(config_file_path: str = 'config.yaml') -> Dict[str, Any]:
         """Load and return the raw configuration from a YAML file.

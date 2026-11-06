@@ -163,6 +163,8 @@ class Task(threading.Thread):
         devices: Dict[str, Device],
         context: AppContext,
         manual_action_key: str | None = None,
+        is_detached=None,
+        notify=None,
     ):
         super().__init__()
         
@@ -175,6 +177,11 @@ class Task(threading.Thread):
         self.devices = devices
         self.context = context
         self.manual_action_key = (manual_action_key or "").strip() or None
+        # Callable[[device_id], bool]: devices released to another program are
+        # never sent an abort, which could command a robot someone else drives.
+        self._is_detached = is_detached or (lambda _device_id: False)
+        # Callable[[level, message], None]: operator-facing notices (UI toasts).
+        self._notify = notify or (lambda _level, _message: None)
 
     def run(self):
         """Entry point called by ``threading.Thread.start()``.
@@ -195,7 +202,8 @@ class Task(threading.Thread):
         )
 
         faulted = False
-        self.context.steps.begin_task(self.task_type.value, self._sequence_key())
+        run_id = self.context.metrics.current_run_id() if self.task_type == TaskType.PROD else None
+        self.context.steps.begin_task(self.task_type.value, self._sequence_key(), run_id=run_id)
 
         try:
             match self.task_type:
@@ -211,6 +219,7 @@ class Task(threading.Thread):
                     self._run_manual_action()
         except Exception as e:
             self.logger.warning(f"[{self.name}] Task failed: {e}")
+            self._notify("error", f"{self._display_name()} failed: {e}")
             if self.task_type == TaskType.PROD:
                 self.context.apply_event("fault")
                 self.context.metrics.mark_prod_running(False)
@@ -225,6 +234,11 @@ class Task(threading.Thread):
                 # Only transition to READY if no FAULT was set during execution
                 self.state_change_callback(ControllerState.READY)
             self.logger.info(f"[{self.name}] Task finished.")
+
+    def _display_name(self) -> str:
+        if self.task_type == TaskType.MANUAL_ACTION:
+            return f"Manual action '{self.manual_action_key}'"
+        return self.task_type.value
 
     def _sequence_key(self) -> str:
         """Key used to look up a declared step sequence for this task."""
@@ -337,13 +351,19 @@ class Task(threading.Thread):
                 self.context.metrics.mark_cycle_start()
                 self.context.steps.begin_cycle(cycle_number)
                 self.context.data.mark("cycle_start", cycle=cycle_number)
+                # Closes the cycle's timeline on every exit path, exactly once
+                # (end_cycle is a no-op if the monitor already closed it on a
+                # fault). "aborted" covers a BaseException escaping the cycle.
+                cycle_status = "aborted"
                 try:
                     prod_cycle(self.devices, self.context)
+                    cycle_status = "ok"
                     self.context.metrics.mark_cycle_end()
                     self.context.data.mark("cycle_end", cycle=cycle_number)
                     self.context.steps.log_cycle_summary(cycle_number)
                     self.logger.info(f"[{self.name}] PROD cycle complete #{cycle_number}")
                 except Exception as e:
+                    cycle_status = "aborted" if self.stopped() else "failed"
                     self.context.metrics.mark_cycle_error(str(e))
                     self.context.data.mark("cycle_error", cycle=cycle_number, error=str(e))
                     if self.stopped():
@@ -352,6 +372,8 @@ class Task(threading.Thread):
                         self.context.metrics.mark_prod_running(False)
                         return
                     raise  # genuine device error → propagate → FAULTED
+                finally:
+                    self.context.steps.end_cycle(cycle_status)
             # stop() called between cycles: finish the loop cleanly
             self.context.apply_event("prod_stop")
             self.context.metrics.mark_prod_running(False)
@@ -430,6 +452,8 @@ class Task(threading.Thread):
         self.logger.warning(f"[{self.name}] Aborting task immediately!")
         self._stop_event.set()
         for device in self.devices.values():
+            if self._is_detached(device.device_id):
+                continue
             try:
                 device.abort()
             except Exception as e:

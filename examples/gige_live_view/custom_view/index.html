@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Camera | Custom View</title>
+    <!-- Brand font, colour tokens and background from the standard app. -->
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body {
+            justify-content: flex-start;
+            padding: 0 16px 16px;
+        }
+        /* One browser window: the feed takes whatever height the rest leaves. */
+        .screen {
+            width: min(100%, 1800px);
+            height: 100vh;
+            height: 100dvh;
+            min-height: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 10px 0 12px;
+        }
+        .screen .view-topbar {
+            width: 100%;
+            margin-bottom: 0;
+            padding-bottom: 10px;
+        }
+        .view-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 4px 14px;
+        }
+        .view-header h1 {
+            margin: 0;
+            font-size: 1.15em;
+            color: var(--color-accent);
+        }
+        .view-sub {
+            color: var(--color-muted);
+            font-size: 0.8em;
+            font-variant-numeric: tabular-nums;
+        }
+        .view-header a {
+            margin-left: auto;
+            color: var(--color-accent-soft);
+            font-size: 0.75em;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            text-decoration: none;
+        }
+        .banner {
+            padding: 8px 14px;
+            border: 1px solid var(--color-red);
+            border-radius: var(--radius-control);
+            color: var(--color-red);
+            background: rgba(255, 90, 107, 0.08);
+            font-size: 0.9em;
+        }
+        .feed {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .feed img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .feed .placeholder {
+            color: var(--color-muted);
+            font-size: 0.9em;
+        }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="screen">
+        <!-- Default top bar (logo, system status, current step), from view-header.js. -->
+        <div id="view-topbar"></div>
+
+        <header class="view-header">
+            <h1>Camera</h1>
+            <div class="view-sub" id="stats">Connecting…</div>
+            <a id="snapshot" href="/api/data/video/camera.jpg" target="_blank" rel="noopener">Snapshot &#8599;</a>
+        </header>
+
+        <div class="banner" id="error" hidden></div>
+
+        <div class="feed">
+            <img id="feed" alt="Live camera feed" hidden>
+            <div class="placeholder" id="placeholder">Press INITIALIZE in the controller to start the camera.</div>
+        </div>
+    </div>
+
+    <script src="/static/js/view-header.js"></script>
+    <script>
+        // The feed is an MJPEG stream (/api/data/video/camera.mjpg): the server
+        // compresses each frame once and the <img> shows it as it arrives. The
+        // manifest (/api/data) gives its stats, and a new stream_id after every
+        // INITIALIZE, which is when the <img> must reopen the stream.
+        const VIDEO = 'camera';
+        const img = document.getElementById('feed');
+        const placeholder = document.getElementById('placeholder');
+        const stats = document.getElementById('stats');
+        const error = document.getElementById('error');
+        let streamId = null;
+
+        function showError(text) {
+            error.hidden = !text;
+            error.textContent = text || '';
+        }
+
+        function refresh() {
+            fetch('/api/data')
+                .then(r => r.json())
+                .then((manifest) => {
+                    const video = (manifest.videos || {})[VIDEO];
+                    if (manifest.setup_error) {
+                        showError(`Custom view setup failed: ${manifest.setup_error}`);
+                    } else if (video && video.last_error && !video.fps) {
+                        showError(`Camera: ${video.last_error}`);
+                    } else {
+                        showError('');
+                    }
+                    if (!manifest.active || !video) {
+                        if (streamId !== null) img.removeAttribute('src');
+                        streamId = null;
+                        img.hidden = true;
+                        placeholder.hidden = false;
+                        stats.textContent = 'Camera stopped.';
+                        return;
+                    }
+                    if (video.stream_id !== streamId) {
+                        streamId = video.stream_id;
+                        img.src = `${video.url}?s=${streamId}`;
+                    }
+                    img.hidden = false;
+                    placeholder.hidden = true;
+                    const parts = [];
+                    if (video.width) parts.push(`${video.width} × ${video.height}`);
+                    if (video.fps !== null) parts.push(`${video.fps} fps`);
+                    if (video.frame_kb !== null) parts.push(`${video.frame_kb} kB/frame (JPEG q${video.quality})`);
+                    if (video.paused) parts.push('paused: camera released');
+                    stats.textContent = parts.join(' · ') || 'Waiting for the first frame…';
+                })
+                .catch(() => { stats.textContent = 'Controller unreachable.'; })
+                .finally(() => setTimeout(refresh, 1000));
+        }
+
+        refresh();
+    </script>
+</body>
+</html>

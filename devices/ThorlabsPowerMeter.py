@@ -86,6 +86,8 @@ class ThorlabsPowerMeter(Device):
     >>> pm.api.wavelength = 532      # every driver setting is on .api
     """
 
+    supports_reconnect = True
+
     def __init__(
         self,
         resource: str | None = None,
@@ -143,6 +145,16 @@ class ThorlabsPowerMeter(Device):
     @property
     def faulted(self) -> bool:
         return self._fault is not None
+
+    def telemetry(self) -> dict:
+        # One SCPI reading, serialised with the task's by the session lock.
+        if not self.connected:
+            return {}
+        return {
+            "power": self._api.read_power(),
+            "unit": self._api.power_unit,
+            "wavelength_nm": self._api.wavelength,
+        }
 
     # ------------------------------------------------------------------
     # Lifecycle

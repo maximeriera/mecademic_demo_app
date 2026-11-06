@@ -30,31 +30,83 @@ function switchTab(name, btn) {
     document.querySelector('.main-content').scrollTop = 0;
     btn.classList.add('active');
     btn.setAttribute('aria-selected', 'true');
-    if (name === 'logs') populateLogFileList();
     if (name === 'production') {
         refreshProdMetrics();
     }
     if (name === 'variables') {
         refreshContext();
     }
-    if (name === 'backup-restore') {
-        loadBackupRestoreRobots();
-    }
     if (name === 'manual') {
         loadManualActions();
     }
+    if (name === 'settings') {
+        switchSettingsSection(activeSettingsSection);
+    }
+}
+
+/* ---- Settings tab sections (Workspace, Devices, Backup / Restore, Logs) ---- */
+const SETTINGS_SECTIONS = ['workspace', 'devices', 'backup-restore', 'logs'];
+const SETTINGS_SECTION_KEY = 'mecademic.settingsSection';
+let activeSettingsSection = 'workspace';
+try {
+    const saved = window.localStorage.getItem(SETTINGS_SECTION_KEY);
+    if (SETTINGS_SECTIONS.includes(saved)) activeSettingsSection = saved;
+} catch (err) {
+    // Storage blocked (private window...): start on the first section.
+}
+
+function switchSettingsSection(name) {
+    if (!SETTINGS_SECTIONS.includes(name)) name = SETTINGS_SECTIONS[0];
+    activeSettingsSection = name;
+    try {
+        window.localStorage.setItem(SETTINGS_SECTION_KEY, name);
+    } catch (err) {
+        // Only a convenience: the section is simply not remembered.
+    }
+    SETTINGS_SECTIONS.forEach((section) => {
+        const panel = document.getElementById('settings-' + section);
+        const button = document.getElementById('settings-btn-' + section);
+        const active = section === name;
+        if (panel) {
+            panel.hidden = !active;
+            panel.classList.toggle('active', active);
+        }
+        if (button) {
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', String(active));
+        }
+    });
+    if (!isTabActive('settings')) return;
+    if (name === 'workspace') loadWorkspaces();
+    if (name === 'devices') loadRobotInfo();
+    if (name === 'backup-restore') loadBackupRestoreRobots();
+    if (name === 'logs') populateLogFileList();
+}
+
+// True when the Settings tab is open on *name*: what the per-section pollers check.
+function isSettingsSectionActive(name) {
+    return isTabActive('settings') && activeSettingsSection === name;
 }
 
 /* ---- Status polling ---- */
+// From the SSE `status` event, or the /api/status poll when the stream is down.
+function applyStatus(data) {
+    latestControllerStatus = data.status;
+    patchLiveStep(data.step || null);
+    stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
+    updateManualActionAvailability(data.status);
+    updateWorkspaceButtons(data.status);
+    // Another page switched the workspace: everything here is stale.
+    if (data.workspace) {
+        if (currentWorkspace === null) currentWorkspace = data.workspace;
+        else if (data.workspace !== currentWorkspace && !workspaceSwitching) window.location.reload();
+    }
+}
+
 function updateRobotStatus() {
     fetch('/api/status')
         .then(r => r.json())
-        .then(data => {
-            latestControllerStatus = data.status;
-            patchLiveStep(data.step || null);
-            stateDisplays().forEach((el) => renderStatusBox(el, data.status, data.task || null));
-            updateManualActionAvailability(data.status);
-        })
+        .then(applyStatus)
         .catch(() => {
             latestControllerStatus = 'FAULTED';
             // Without this the indicator freezes on a stale step while the
@@ -167,7 +219,134 @@ function sendAbort() {
 function sendInitialize() {
     fetch('/api/initialize', { method: 'POST' })
         .then(r => r.json()).then(d => setMessage(d.message))
-        .catch(() => setMessage('Error sending initialization command.'));
+        .catch(() => setMessage('Error sending initialization command.'))
+        .finally(loadSystemInfo);
+}
+
+/* ---- Workspace picker ---- */
+let currentWorkspace = null;
+let workspaceSwitching = false;
+
+function loadWorkspaces() {
+    fetch('/api/workspaces')
+        .then(r => r.json())
+        .then(renderWorkspaces)
+        .catch(() => {
+            const hint = document.getElementById('workspace-hint');
+            if (hint) hint.textContent = 'Could not list workspaces.';
+        });
+}
+
+function renderWorkspaces(data) {
+    const select = document.getElementById('workspace-select');
+    const nameEl = document.getElementById('workspace-current-name');
+    const hint = document.getElementById('workspace-hint');
+    const items = Array.isArray(data.workspaces) ? data.workspaces : [];
+    const current = items.find((w) => w.current);
+    if (nameEl) nameEl.textContent = current ? (current.title || current.name) : (data.current || '—');
+    if (select) {
+        select.innerHTML = items.map((w) => {
+            const label = w.title ? `${w.title} (${w.name})` : w.name;
+            const suffix = w.valid ? '' : ' — invalid config.yaml';
+            return `<option value="${escapeHtml(w.name)}"${w.current ? ' selected' : ''}${w.valid ? '' : ' disabled'}>`
+                + `${escapeHtml(label + suffix)}</option>`;
+        }).join('');
+    }
+    if (hint) {
+        hint.textContent = data.root
+            ? `Folders of ${data.root} holding a config.yaml.`
+            : 'Set MECADEMIC_WORKSPACES_ROOT (or --workspaces-root) to list other workspaces.';
+    }
+    updateWorkspaceButtons(latestControllerStatus);
+}
+
+function updateWorkspaceButtons(status) {
+    const normalized = normalizeStatus(status);
+    const locked = workspaceSwitching || normalized === 'BUSY' || normalized === 'INITIALIZING';
+    ['workspace-load-btn', 'workspace-reload-btn', 'workspace-select'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = locked;
+            el.title = locked && !workspaceSwitching ? `Not available while the controller is ${status}.` : '';
+        }
+    });
+}
+
+function switchWorkspaceTo(name, title, message) {
+    showConfirmModal(title, message, () => {
+        workspaceSwitching = true;
+        updateWorkspaceButtons(latestControllerStatus);
+        setMessage(`Loading workspace '${name}'…`);
+        fetch('/api/workspaces/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        })
+            .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                setMessage(data.message);
+                // Reload whatever the outcome once a switch happened: tabs,
+                // manual actions and the custom view all belong to the workspace.
+                if (ok) window.location.reload();
+            })
+            .catch(() => setMessage('Error switching workspace.'))
+            .finally(() => {
+                workspaceSwitching = false;
+                updateWorkspaceButtons(latestControllerStatus);
+            });
+    });
+}
+
+function loadSelectedWorkspace() {
+    const select = document.getElementById('workspace-select');
+    const name = select ? select.value : '';
+    if (!name) return;
+    if (name === currentWorkspace) {
+        reloadCurrentWorkspace();
+        return;
+    }
+    switchWorkspaceTo(name, 'Load workspace',
+        `Load workspace '${name}'?\n\nEvery device is disconnected and this workspace's code is unloaded. `
+        + 'The new workspace starts OFF: press INITIALIZE to connect its devices.');
+}
+
+function reloadCurrentWorkspace() {
+    if (!currentWorkspace) return;
+    switchWorkspaceTo(currentWorkspace, 'Reload workspace code',
+        `Reload the code and config.yaml of '${currentWorkspace}'?\n\n`
+        + 'Every device is disconnected; press INITIALIZE afterwards.');
+}
+
+/* ---- Workspace / config problems ---- */
+function loadSystemInfo() {
+    fetch('/api/system')
+        .then(r => r.json())
+        .then(renderConfigBanner)
+        .catch(() => {});
+}
+
+function renderConfigBanner(info) {
+    const banner = document.getElementById('config-banner');
+    if (!banner) return;
+    const issues = Array.isArray(info?.config_issues) ? info.config_issues : [];
+    const lines = [];
+    if (info?.controller_error) {
+        lines.push({ level: 'error', text: `Controller failed to start: ${info.controller_error}` });
+    }
+    issues.forEach((item) => {
+        lines.push({ level: item.level, text: `${item.device ? item.device + ': ' : ''}${item.message}` });
+    });
+    if (lines.length === 0) {
+        banner.hidden = true;
+        banner.innerHTML = '';
+        return;
+    }
+    const hasError = lines.some((l) => l.level === 'error');
+    banner.className = 'config-banner ' + (hasError ? 'config-banner-error' : 'config-banner-warning');
+    banner.innerHTML = `<strong>config.yaml ${hasError ? 'errors' : 'warnings'}</strong>`
+        + (hasError ? ' &mdash; INITIALIZE is blocked until they are fixed.' : '')
+        + '<ul>' + lines.map((l) => `<li class="config-issue-${escapeHtml(l.level)}">${escapeHtml(l.text)}</li>`).join('') + '</ul>';
+    banner.hidden = false;
 }
 function sendClearFaults() {
     fetch('/api/clear_faults', { method: 'POST' })
@@ -341,6 +520,14 @@ function updateManualActionAvailability(status) {
             btn.title = '';
         }
     });
+
+    // Clearing faults aborts a running task server-side: never offer it mid-task.
+    const clearBtn = document.getElementById('manual-clear-faults-btn');
+    if (clearBtn) {
+        const locked = normalizedStatus === 'BUSY' || normalizedStatus === 'INITIALIZING';
+        clearBtn.disabled = locked;
+        clearBtn.title = locked ? `Not available while the controller is ${status}.` : '';
+    }
 }
 
 function runManualAction(buttonEl) {
@@ -366,7 +553,7 @@ function runManualAction(buttonEl) {
         ? `/api/task/${encodeURIComponent(task)}`
         : `/api/manual/actions/${encodeURIComponent(actionKey)}/run`;
 
-    showConfirmModal(confirmTitle, confirmMessage, () => {
+    showConfirmModal(confirmTitle, confirmMessage + detachedDevicesWarning(), () => {
         fetch(url, { method: 'POST' })
             .then(r => r.json().then((data) => ({ ok: r.ok, data })))
             .then(({ ok, data }) => {
@@ -383,6 +570,27 @@ function runManualAction(buttonEl) {
                 setManualActionMessage(msg, true);
             });
     });
+}
+
+// Same request as the Control tab's CLEAR FAULTS, reported in the Manual log
+// with the server's detail (which devices are still faulted, which errored).
+function sendManualClearFaults() {
+    showConfirmModal(
+        'Confirm Clear Faults',
+        'Clear the faults on every connected device? No hardware moves; released devices are left alone.',
+        () => {
+            fetch('/api/clear_faults', { method: 'POST' })
+                .then(r => r.json())
+                .then((d) => {
+                    setMessage(d.message);
+                    setManualActionMessage(d.message, d.success === false);
+                })
+                .catch(() => {
+                    setMessage('Error sending clear faults command.');
+                    setManualActionMessage('Error sending clear faults command.', true);
+                });
+        }
+    );
 }
 
 function sendManualAbort() {
@@ -877,6 +1085,231 @@ function renderProdSnapshot(data) {
     renderProdMetrics(data);
     renderProdSteps(data);
     restoreScrollState('tab-production', scrollState);
+    refreshProdTimelines(data.steps ? data.steps.timeline_rev : undefined);
+    // A run was archived (or this is the first load): the disk history changed.
+    // Keyed on the last run's end, since the in-memory list is capped.
+    const runs = (data.metrics || {}).run_history || [];
+    const runKey = runs.length ? `${runs.length}|${runs[runs.length - 1].run_end}` : '0';
+    if (runKey !== prodHistoryRunKey) {
+        prodHistoryRunKey = runKey;
+        refreshProdHistory();
+    }
+}
+
+/* ---- Cycle timeline (Gantt) ----
+ * One row per top-level step, in declared order (steps a cycle skipped keep
+ * an empty row, so a conditional branch shows as such); nested steps are thin
+ * bars inside their parent's row, and a dashed box marks each step's average.
+ * Hand-drawn SVG: no chart library on a show floor. Fetched only when a cycle
+ * finished (timeline_rev changed).
+ */
+let prodTimelines = { rev: -1, order: [], timelines: [], avg_s: {} };
+let prodTimelineSelected = null;   // "run_id:cycle", or null to follow the latest
+let prodTimelineFetching = false;
+const TIMELINE_SLOTS = 30;
+
+function refreshProdTimelines(rev) {
+    if (rev === undefined || rev === prodTimelines.rev || prodTimelineFetching) return;
+    prodTimelineFetching = true;
+    fetch(`/api/prod/timelines?after_rev=${prodTimelines.rev}`)
+        .then(r => r.json())
+        .then((data) => {
+            if (data.unchanged) return;
+            prodTimelines = data;
+            renderProdTimelines();
+        })
+        .catch(() => {})
+        .finally(() => { prodTimelineFetching = false; });
+}
+
+function timelineKey(t) {
+    return `${t.run_id}:${t.cycle}`;
+}
+
+function selectTimeline(key) {
+    prodTimelineSelected = key;
+    renderProdTimelines();
+}
+
+function niceTimelineStep(span, target = 6) {
+    const steps = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    return steps.find((s) => span / s <= target) || steps[steps.length - 1];
+}
+
+function renderProdTimelines() {
+    const strip = document.getElementById('prod-timeline-strip');
+    const chart = document.getElementById('prod-timeline-chart');
+    const caption = document.getElementById('prod-timeline-caption');
+    if (!strip || !chart || !caption) return;
+
+    const timelines = Array.isArray(prodTimelines.timelines) ? prodTimelines.timelines : [];
+    if (timelines.length === 0) {
+        strip.innerHTML = '';
+        chart.innerHTML = '';
+        caption.textContent = 'No finished cycle yet. Start production to fill the timeline.';
+        return;
+    }
+    let selected = timelines.find((t) => timelineKey(t) === prodTimelineSelected);
+    if (!selected) {
+        prodTimelineSelected = null;
+        selected = timelines[timelines.length - 1];
+    }
+
+    // --- Strip: one bar per finished cycle, height = duration ---
+    const stripW = Math.max(strip.clientWidth || 600, 200);
+    const stripH = 44;
+    const slotW = stripW / Math.max(TIMELINE_SLOTS, timelines.length);
+    const maxDuration = Math.max(...timelines.map((t) => t.duration_s || 0), 0.001);
+    const bars = timelines.map((t, i) => {
+        const h = Math.max(3, (t.duration_s / maxDuration) * (stripH - 4));
+        const key = timelineKey(t);
+        const cls = `timeline-strip-bar gantt-${escapeHtml(t.status)}${t === selected ? ' selected' : ''}`;
+        return `<rect class="${cls}" data-key="${escapeHtml(key)}" x="${(i * slotW + 1).toFixed(1)}" y="${(stripH - h).toFixed(1)}"`
+            + ` width="${Math.max(2, slotW - 2).toFixed(1)}" height="${h.toFixed(1)}">`
+            + `<title>Cycle ${escapeHtml(t.cycle)} · ${formatDurationSeconds(t.duration_s)} · ${escapeHtml(t.status)}</title></rect>`;
+    }).join('');
+    strip.innerHTML = `<svg width="${stripW}" height="${stripH}" role="img" aria-label="Duration of the last ${timelines.length} cycles">${bars}</svg>`;
+
+    // --- Chart: the selected cycle ---
+    const frames = Array.isArray(selected.frames) ? selected.frames : [];
+    const order = (Array.isArray(prodTimelines.order) ? prodTimelines.order : []).slice();
+    frames.forEach((f) => { if (f.depth === 0 && !order.includes(f.name)) order.push(f.name); });
+    const rowOf = new Map(order.map((name, i) => [name, i]));
+
+    const width = Math.max(chart.clientWidth || 600, 320);
+    const labelW = Math.min(190, Math.round(width * 0.34));
+    const plotW = width - labelW - 14;
+    const rowH = 26;
+    const top = 22;
+    const height = top + order.length * rowH + 4;
+    const span = Math.max(selected.duration_s || 0, 0.001);
+    const x = (seconds) => labelW + (Math.max(0, seconds) / span) * plotW;
+
+    const parts = [];
+    const tickStep = niceTimelineStep(span);
+    for (let t = 0; t <= span + 1e-9; t += tickStep) {
+        const tx = x(t).toFixed(1);
+        parts.push(`<line class="gantt-grid" x1="${tx}" y1="${top - 4}" x2="${tx}" y2="${height}"></line>`);
+        parts.push(`<text class="gantt-tick" x="${tx}" y="${top - 8}" text-anchor="middle">${+t.toFixed(2)} s</text>`);
+    }
+    order.forEach((name, i) => {
+        const y = top + i * rowH;
+        if (i % 2 === 1) parts.push(`<rect class="gantt-row-alt" x="0" y="${y}" width="${width}" height="${rowH}"></rect>`);
+        const label = name.length > 26 ? name.slice(0, 25) + '…' : name;
+        parts.push(`<text class="gantt-label" x="${labelW - 8}" y="${y + rowH / 2 + 4}" text-anchor="end">`
+            + `${escapeHtml(label)}<title>${escapeHtml(name)}</title></text>`);
+    });
+
+    let busy = 0;
+    frames.forEach((f) => {
+        const rootName = f.depth === 0 ? f.name : String(f.path || '').split(' / ')[0];
+        const row = rowOf.get(rootName);
+        if (row === undefined) return;
+        const y = top + row * rowH;
+        const bx = x(f.offset_s);
+        const bw = Math.max(1.5, x(f.offset_s + f.duration_s) - bx);
+        const tip = `<title>${escapeHtml(f.path || f.name)}: ${formatDurationSeconds(f.duration_s)} (${escapeHtml(f.status)}), from +${(+f.offset_s).toFixed(2)} s</title>`;
+        if (f.depth === 0) {
+            busy += f.duration_s;
+            parts.push(`<rect class="gantt-bar gantt-${escapeHtml(f.status)}" x="${bx.toFixed(1)}" y="${y + 5}" width="${bw.toFixed(1)}" height="${rowH - 12}">${tip}</rect>`);
+            const avg = prodTimelines.avg_s ? prodTimelines.avg_s[f.name] : null;
+            if (avg) {
+                const aw = Math.max(1.5, x(f.offset_s + avg) - bx);
+                parts.push(`<rect class="gantt-avg" x="${bx.toFixed(1)}" y="${y + 3}" width="${aw.toFixed(1)}" height="${rowH - 8}"><title>${escapeHtml(f.name)} average: ${formatDurationSeconds(avg)}</title></rect>`);
+            }
+        } else {
+            parts.push(`<rect class="gantt-sub gantt-${escapeHtml(f.status)}" x="${bx.toFixed(1)}" y="${y + rowH - 8}" width="${bw.toFixed(1)}" height="4">${tip}</rect>`);
+        }
+    });
+    chart.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="Steps of cycle ${escapeHtml(selected.cycle)}">${parts.join('')}</svg>`;
+
+    const idle = Math.max(0, (selected.duration_s || 0) - busy);
+    const follow = prodTimelineSelected
+        ? ' <button type="button" class="link-btn" onclick="selectTimeline(null)">Follow latest &rarr;</button>'
+        : '';
+    caption.innerHTML = `<strong>Cycle ${escapeHtml(selected.cycle)}</strong> · ${escapeHtml(formatDurationSeconds(selected.duration_s))}`
+        + ` · <span class="timeline-status gantt-text-${escapeHtml(selected.status)}">${escapeHtml(selected.status)}</span>`
+        + ` · steps ${escapeHtml(formatDurationSeconds(busy))}, idle ${escapeHtml(formatDurationSeconds(idle))}`
+        + ` · ${escapeHtml(formatTimestamp(selected.started_at))}${follow}`;
+}
+
+/* ---- Production history (on disk) ---- */
+let prodHistoryRunKey = null;
+
+function refreshProdHistory() {
+    Promise.all([
+        fetch('/api/history/days').then(r => r.json()),
+        fetch('/api/history/runs?limit=10').then(r => r.json()),
+    ])
+        .then(([days, runs]) => renderProdHistory(days, runs))
+        .catch(() => {
+            const container = document.getElementById('prod-history-container');
+            if (container) container.innerHTML = '<p class="empty-state empty-state-error">Could not load the history.</p>';
+        });
+}
+
+function renderProdHistory(daysData, runsData) {
+    const container = document.getElementById('prod-history-container');
+    if (!container) return;
+    if (daysData.enabled === false) {
+        container.innerHTML = '<p class="empty-state">Production history is disabled (<code>history: {enabled: false}</code> in config.yaml).</p>';
+        return;
+    }
+    const days = Array.isArray(daysData.days) ? daysData.days : [];
+    const runs = Array.isArray(runsData.runs) ? runsData.runs.slice().reverse() : [];
+    const dash = (v) => (v === null || v === undefined ? '—' : v);
+
+    const dayRows = days.map((d) => `
+        <tr>
+            <td>${escapeHtml(d.date)}</td>
+            <td>${escapeHtml(d.cycles)}</td>
+            <td>${escapeHtml(d.ok)}</td>
+            <td>${escapeHtml(d.failed)}</td>
+            <td>${escapeHtml(d.interrupted)}</td>
+            <td>${escapeHtml(formatDurationSeconds(d.average_ok_cycle_s))}</td>
+            <td>${escapeHtml(formatDurationSeconds(d.cycle_time_s))}</td>
+            <td><a class="link-btn" href="/api/history/cycles.csv?date=${encodeURIComponent(d.date)}" download>CSV &darr;</a></td>
+        </tr>`).join('');
+    const runRows = runs.map((r) => `
+        <tr>
+            <td>${escapeHtml(formatTimestamp(r.run_start))}</td>
+            <td>${escapeHtml(dash(r.end_event))}</td>
+            <td>${escapeHtml(dash(r.cycle_count))}</td>
+            <td>${escapeHtml(dash(r.failed_cycles))}</td>
+            <td>${escapeHtml(formatDurationSeconds(r.average_cycle_duration_s))}</td>
+            <td>${escapeHtml(formatDurationSeconds(r.elapsed_production_s))}</td>
+        </tr>`).join('');
+
+    container.innerHTML = `
+        <div class="history-block">
+            <div class="prod-metric-history-title">Per day</div>
+            ${days.length ? `<div class="history-table-wrap"><table class="history-table">
+                <thead><tr><th>Date</th><th>Cycles</th><th>OK</th><th>Failed</th><th>Interrupted</th><th>Avg OK cycle</th><th>Cycle time</th><th></th></tr></thead>
+                <tbody>${dayRows}</tbody></table></div>`
+                : '<p class="prod-metric-empty">No cycle recorded yet.</p>'}
+        </div>
+        <div class="history-block">
+            <div class="prod-metric-history-title">Last runs</div>
+            ${runs.length ? `<div class="history-table-wrap"><table class="history-table">
+                <thead><tr><th>Started</th><th>Ended by</th><th>Cycles</th><th>Failed</th><th>Avg cycle</th><th>Duration</th></tr></thead>
+                <tbody>${runRows}</tbody></table></div>`
+                : '<p class="prod-metric-empty">No archived run yet.</p>'}
+        </div>`;
+}
+
+function initProdTimeline() {
+    const strip = document.getElementById('prod-timeline-strip');
+    if (strip) {
+        strip.addEventListener('click', (event) => {
+            const bar = event.target.closest('[data-key]');
+            if (bar) selectTimeline(bar.dataset.key);
+        });
+    }
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(renderProdTimelines, 150);
+    });
 }
 
 function refreshProdMetrics() {
@@ -1181,79 +1614,345 @@ function executeContextReset(namespace, key) {
         });
 }
 
+/* ---- Devices: health strip (Control tab) and cards (Devices tab) ---- */
+let latestDevices = [];
+const devicePending = new Set();   // device ids with a link request in flight
+
+// Live/status fields the cards show as badges or buttons, not as table rows.
+const DEVICE_STATUS_KEYS = new Set([
+    'connected', 'ready', 'faulted', 'device_id', 'link', 'detached',
+    'in_transition', 'supports_reconnect', 'supports_monitoring', 'has_live_data',
+]);
+
+function setDevicesMessage(text, isError = false) {
+    const log = document.getElementById('devices-action-log');
+    if (!log) return;
+    log.textContent = text || 'No recent device action.';
+    log.className = 'message-log ' + (isError ? 'prod-locked' : 'prod-unlocked');
+}
+
 function loadRobotInfo() {
     fetch('/api/info')
         .then(r => r.json())
-        .then(data => {
-            const container = document.getElementById('robot-info-container');
-            container.innerHTML = '';
-            if (!Array.isArray(data) || data.length === 0) {
-                container.innerHTML = '<p class="empty-state">No devices configured.</p>';
-                return;
-            }
-            const statusKeys = new Set(['connected', 'ready', 'faulted', 'device_id']);
-            data.forEach(device => {
-                const card = document.createElement('div');
-                card.className = 'device-card';
-
-                const header = document.createElement('div');
-                header.className = 'device-card-header';
-                const title = document.createElement('span');
-                title.textContent = device.device_id || 'Unknown Device';
-                header.appendChild(title);
-
-                const badges = document.createElement('span');
-                if ('faulted' in device) {
-                    const b = document.createElement('span');
-                    b.className = 'badge ' + (device.faulted ? 'badge-error' : 'badge-ok');
-                    b.textContent = device.faulted ? 'FAULTED' : 'OK';
-                    badges.appendChild(b);
-                }
-                if ('connected' in device) {
-                    const b = document.createElement('span');
-                    b.className = 'badge ' + (device.connected ? 'badge-ok' : 'badge-off');
-                    b.textContent = device.connected ? 'Connected' : 'Disconnected';
-                    badges.appendChild(b);
-                }
-                if ('ready' in device) {
-                    const b = document.createElement('span');
-                    b.className = 'badge ' + (device.ready ? 'badge-ok' : 'badge-warn');
-                    b.textContent = device.ready ? 'Ready' : 'Not Ready';
-                    badges.appendChild(b);
-                }
-                header.appendChild(badges);
-                card.appendChild(header);
-
-                const body = document.createElement('div');
-                body.className = 'device-card-body';
-                const table = document.createElement('table');
-                for (const key in device) {
-                    if (statusKeys.has(key)) continue;
-                    const row = table.insertRow();
-                    const label = row.insertCell(0);
-                    const value = row.insertCell(1);
-                    label.textContent = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                    const raw = device[key];
-                    if (key === 'ip_address' && raw) {
-                        const link = document.createElement('a');
-                        link.href = `http://${raw}`;
-                        link.target = '_blank';
-                        link.rel = 'noopener noreferrer';
-                        link.textContent = raw;
-                        value.appendChild(link);
-                    } else {
-                        value.textContent = (raw !== null && raw !== undefined) ? raw : '—';
-                    }
-                }
-                body.appendChild(table);
-                card.appendChild(body);
-                container.appendChild(card);
-            });
-        })
+        .then(data => renderDevices(Array.isArray(data) ? data : []))
         .catch(() => {
-            document.getElementById('robot-info-container').innerHTML =
-            '<p class="empty-state empty-state-error">Error loading device info.</p>';
+            const msg = '<p class="empty-state empty-state-error">Error loading device info.</p>';
+            document.getElementById('robot-info-container').innerHTML = msg;
+            document.getElementById('control-devices-container').innerHTML = msg;
         });
+}
+
+function renderDevices(devices) {
+    latestDevices = devices;
+    renderControlDeviceCards(devices);
+    renderDeviceCards(devices);
+}
+
+// Control tab: the same badges and info as Settings > Devices, read-only.
+// Rebuilt only when the content changes; it holds no controls.
+function renderControlDeviceCards(devices) {
+    const container = document.getElementById('control-devices-container');
+    if (!container) return;
+    const html = devices.length === 0
+        ? '<p class="empty-state">No devices configured.</p>'
+        : devices.map((device) => `
+            <div class="device-card${device.detached ? ' device-detached' : ''}">
+                <div class="device-card-header">
+                    <span>${escapeHtml(device.device_id || 'device')}</span>
+                    <span>${deviceBadgesHtml(device)}</span>
+                </div>
+                <div class="device-card-body">${deviceTableHtml(device)}</div>
+            </div>`).join('');
+    if (container.dataset.html !== html) {
+        container.innerHTML = html;
+        container.dataset.html = html;
+    }
+}
+
+function deviceBadgesHtml(device) {
+    const badges = [];
+    if (device.detached) {
+        badges.push('<span class="badge badge-info">RELEASED</span>');
+    } else if ('faulted' in device) {
+        badges.push(device.faulted
+            ? '<span class="badge badge-error">FAULTED</span>'
+            : '<span class="badge badge-ok">OK</span>');
+    }
+    const link = device.link || (device.connected ? 'control' : 'disconnected');
+    if (link === 'control') badges.push('<span class="badge badge-ok">Connected</span>');
+    else if (link === 'monitoring') badges.push('<span class="badge badge-info">Monitoring</span>');
+    else badges.push('<span class="badge badge-off">Disconnected</span>');
+    if (!device.detached && 'ready' in device) {
+        badges.push(device.ready
+            ? '<span class="badge badge-ok">Ready</span>'
+            : '<span class="badge badge-warn">Not Ready</span>');
+    }
+    return badges.join('');
+}
+
+function deviceTableHtml(device) {
+    const rows = [];
+    for (const key in device) {
+        if (DEVICE_STATUS_KEYS.has(key)) continue;
+        const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const raw = device[key];
+        let value;
+        if (key === 'ip_address' && raw) {
+            value = `<a href="http://${escapeHtml(raw)}" target="_blank" rel="noopener noreferrer">${escapeHtml(raw)}</a>`;
+        } else {
+            value = (raw !== null && raw !== undefined) ? escapeHtml(raw) : '—';
+        }
+        rows.push(`<tr><td>${escapeHtml(label)}</td><td>${value}</td></tr>`);
+    }
+    return `<table>${rows.join('')}</table>`;
+}
+
+function createDeviceCard(deviceId) {
+    const card = document.createElement('div');
+    card.className = 'device-card';
+    card.dataset.deviceId = deviceId;
+    card.innerHTML = `
+        <div class="device-card-header">
+            <span class="device-card-title"></span>
+            <span class="device-card-badges"></span>
+        </div>
+        <div class="device-card-actions">
+            <button type="button" class="btn-task" data-link-action="disconnect"></button>
+            <button type="button" class="btn-init" data-link-action="connect">Connect</button>
+            <button type="button" class="btn-clear" data-link-action="clear_fault">Clear fault</button>
+        </div>
+        <div class="device-card-body"></div>
+        <div class="device-live-toggle-row" hidden>
+            <button type="button" class="link-btn device-live-toggle" aria-expanded="false">Show live data</button>
+        </div>
+        <div class="device-live" hidden>
+            <div class="device-live-error" hidden></div>
+            <div class="device-live-telemetry"></div>
+            <div class="device-live-io"></div>
+        </div>`;
+    card.querySelector('.device-card-title').textContent = deviceId;
+    card.querySelectorAll('[data-link-action]').forEach((btn) => {
+        btn.addEventListener('click', () => deviceLinkAction(deviceId, btn.dataset.linkAction));
+    });
+    card.querySelector('.device-live-toggle').addEventListener('click', () => toggleDeviceLive(deviceId));
+    return card;
+}
+
+/* ---- Devices: live data and I/O panel ---- */
+// Polled only for open panels while the Devices tab is visible, so no device
+// I/O happens for nobody.
+const deviceLiveOpen = new Set();
+const deviceLiveInFlight = new Set();
+
+function toggleDeviceLive(deviceId) {
+    const card = document.querySelector(`.device-card[data-device-id="${CSS.escape(deviceId)}"]`);
+    if (!card) return;
+    const open = !deviceLiveOpen.has(deviceId);
+    if (open) deviceLiveOpen.add(deviceId); else deviceLiveOpen.delete(deviceId);
+    card.querySelector('.device-live').hidden = !open;
+    const toggle = card.querySelector('.device-live-toggle');
+    toggle.textContent = open ? 'Hide live data' : 'Show live data';
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) refreshDeviceLive(deviceId);
+}
+
+function formatLiveValue(value) {
+    if (value === null || value === undefined) return '—';
+    if (typeof value === 'boolean') return value ? 'yes' : 'no';
+    if (typeof value === 'number') {
+        if (Number.isInteger(value)) return String(value);
+        return (value !== 0 && Math.abs(value) < 0.01) ? value.toExponential(3) : String(+value.toFixed(4));
+    }
+    if (Array.isArray(value)) return value.map(formatLiveValue).join(', ');
+    return String(value);
+}
+
+function refreshDeviceLive(deviceId) {
+    if (deviceLiveInFlight.has(deviceId)) return;
+    deviceLiveInFlight.add(deviceId);
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/live`)
+        .then(r => r.json())
+        .then((live) => renderDeviceLive(deviceId, live))
+        .catch(() => renderDeviceLive(deviceId, { telemetry: {}, io: [], error: 'Could not reach the server.' }))
+        .finally(() => deviceLiveInFlight.delete(deviceId));
+}
+
+function renderDeviceLive(deviceId, live) {
+    const card = document.querySelector(`.device-card[data-device-id="${CSS.escape(deviceId)}"]`);
+    if (!card) return;
+    const errorEl = card.querySelector('.device-live-error');
+    errorEl.hidden = !live.error;
+    errorEl.textContent = live.error || '';
+
+    const telemetry = live.telemetry || {};
+    const rows = Object.keys(telemetry).map((key) =>
+        `<tr><td>${escapeHtml(key.replace(/_/g, ' '))}</td><td>${escapeHtml(formatLiveValue(telemetry[key]))}</td></tr>`);
+    const telemetryHtml = rows.length ? `<table>${rows.join('')}</table>` : '';
+    const telemetryEl = card.querySelector('.device-live-telemetry');
+    if (telemetryEl.dataset.html !== telemetryHtml) {
+        telemetryEl.innerHTML = telemetryHtml;
+        telemetryEl.dataset.html = telemetryHtml;
+    }
+
+    // I/O points are built once per point list and then only re-classed, so
+    // a toggle keeps focus while the values refresh.
+    const points = Array.isArray(live.io) ? live.io : [];
+    const ioEl = card.querySelector('.device-live-io');
+    const signature = points.map((p) => `${p.name}:${p.kind}:${p.writable}`).join('|');
+    if (ioEl.dataset.signature !== signature) {
+        ioEl.dataset.signature = signature;
+        ioEl.innerHTML = '';
+        points.forEach((point) => {
+            const el = document.createElement(point.writable ? 'button' : 'span');
+            el.className = 'io-point' + (point.writable ? ' io-toggle' : '');
+            el.dataset.point = point.name;
+            el.title = `${point.name} (${point.kind})` + (point.writable ? ': click to switch' : '');
+            el.innerHTML = `<span class="io-led"></span><span>${escapeHtml(point.name)}</span>`;
+            if (point.writable) {
+                el.type = 'button';
+                el.addEventListener('click', () => writeDeviceIo(deviceId, point.name, !el.classList.contains('on')));
+            }
+            ioEl.appendChild(el);
+        });
+    }
+    const status = normalizeStatus(latestControllerStatus);
+    const device = latestDevices.find((d) => d.device_id === deviceId) || {};
+    const writeLocked = status === 'BUSY' || status === 'INITIALIZING' || !!device.detached;
+    points.forEach((point) => {
+        const el = ioEl.querySelector(`[data-point="${CSS.escape(point.name)}"]`);
+        if (!el) return;
+        el.classList.toggle('on', !!point.value);
+        if (point.writable) el.disabled = writeLocked;
+    });
+}
+
+function writeDeviceIo(deviceId, name, value) {
+    fetch(`/api/devices/${encodeURIComponent(deviceId)}/io`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, value }),
+    })
+        .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => setDevicesMessage(data.message, !ok || data.success === false))
+        .catch(() => setDevicesMessage(`Error writing ${deviceId}.${name}.`, true))
+        .finally(() => refreshDeviceLive(deviceId));
+}
+
+function pollDeviceLive() {
+    if (!isSettingsSectionActive('devices') || document.hidden) return;
+    deviceLiveOpen.forEach(refreshDeviceLive);
+}
+
+// Cards are created once per device and patched in place, so their buttons
+// keep focus and hover across the 1 Hz refresh.
+function renderDeviceCards(devices) {
+    const container = document.getElementById('robot-info-container');
+    if (!container) return;
+    if (devices.length === 0) {
+        container.innerHTML = '<p class="empty-state">No devices configured.</p>';
+        return;
+    }
+    const existing = new Map();
+    container.querySelectorAll('.device-card').forEach((card) => existing.set(card.dataset.deviceId, card));
+    if (existing.size === 0) container.innerHTML = '';
+
+    const status = normalizeStatus(latestControllerStatus);
+    const controllerLocked = status === 'BUSY' || status === 'INITIALIZING';
+
+    devices.forEach((device, index) => {
+        const id = device.device_id || 'device';
+        let card = existing.get(id);
+        if (!card) card = createDeviceCard(id);
+        existing.delete(id);
+        if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
+
+        card.classList.toggle('device-detached', !!device.detached);
+
+        const badges = deviceBadgesHtml(device);
+        const badgesEl = card.querySelector('.device-card-badges');
+        if (badgesEl.dataset.html !== badges) {
+            badgesEl.innerHTML = badges;
+            badgesEl.dataset.html = badges;
+        }
+        const table = deviceTableHtml(device);
+        const bodyEl = card.querySelector('.device-card-body');
+        if (bodyEl.dataset.html !== table) {
+            bodyEl.innerHTML = table;
+            bodyEl.dataset.html = table;
+        }
+
+        const canLink = !!device.supports_reconnect;
+        const busy = controllerLocked || device.in_transition || devicePending.has(id);
+        const lockReason = controllerLocked ? `Locked while the controller is ${status}.`
+            : (device.in_transition || devicePending.has(id)) ? 'A link change is in progress.' : '';
+
+        const releaseBtn = card.querySelector('[data-link-action="disconnect"]');
+        releaseBtn.textContent = device.supports_monitoring ? 'Release control' : 'Disconnect';
+        releaseBtn.hidden = !canLink || !!device.detached;
+        releaseBtn.disabled = busy;
+        releaseBtn.title = lockReason;
+
+        const connectBtn = card.querySelector('[data-link-action="connect"]');
+        connectBtn.hidden = !canLink || !(device.detached || device.link === 'disconnected');
+        connectBtn.disabled = busy;
+        connectBtn.title = lockReason;
+
+        const clearBtn = card.querySelector('[data-link-action="clear_fault"]');
+        clearBtn.hidden = !device.faulted || !!device.detached || !device.connected;
+        clearBtn.disabled = busy;
+        clearBtn.title = lockReason;
+
+        card.querySelector('.device-card-actions').hidden =
+            releaseBtn.hidden && connectBtn.hidden && clearBtn.hidden;
+        card.querySelector('.device-live-toggle-row').hidden = !device.has_live_data;
+    });
+    existing.forEach((card) => card.remove());
+}
+
+function deviceLinkConfirm(device, action) {
+    const id = device.device_id;
+    const lockNote = 'Production, HOME, SHIPMENT and CALIBRATION stay locked until it is connected again; manual actions still run.';
+    if (action === 'disconnect' && device.supports_monitoring) {
+        return ['Release control', `Release control of ${id}?\n\n`
+            + 'This app stops commanding it and its motion pauses. Another client (web portal, script) '
+            + 'can then take control; it must resume motion before moving the robot. '
+            + `The custom view keeps receiving its position.\n\n${lockNote}`];
+    }
+    if (action === 'disconnect') {
+        return ['Disconnect device', `Disconnect ${id} so another program can use it?\n\n${lockNote}`];
+    }
+    if (action === 'connect') {
+        const extra = device.supports_monitoring
+            ? '\n\nThis app takes control back: the robot activates and homes. Close any other control connection first and make sure the cell is clear.'
+            : '';
+        return ['Connect device', `Connect ${id}?${extra}`];
+    }
+    return ['Clear device fault', `Clear the fault on ${id}?`];
+}
+
+function deviceLinkAction(deviceId, action) {
+    const device = latestDevices.find((d) => d.device_id === deviceId) || { device_id: deviceId };
+    const [title, message] = deviceLinkConfirm(device, action);
+    showConfirmModal(title, message, () => {
+        devicePending.add(deviceId);
+        renderDeviceCards(latestDevices);
+        setDevicesMessage(`${deviceId}: ${action === 'clear_fault' ? 'clearing fault' : action + 'ing'}…`);
+        fetch(`/api/devices/${encodeURIComponent(deviceId)}/${action}`, { method: 'POST' })
+            .then(r => r.json().then((data) => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => setDevicesMessage(data.message || `${deviceId}: done.`, !ok || data.success === false))
+            .catch(() => setDevicesMessage(`Error sending ${action} for ${deviceId}.`, true))
+            .finally(() => {
+                devicePending.delete(deviceId);
+                loadRobotInfo();
+            });
+    });
+}
+
+function detachedDevicesWarning() {
+    const detached = latestDevices.filter((d) => d.detached);
+    if (detached.length === 0) return '';
+    const names = detached.map((d) => d.device_id + (d.link === 'monitoring' ? ' (monitoring only)' : '')).join(', ');
+    return `\n\nReleased: ${names}. Steps that command ${detached.length > 1 ? 'these devices' : 'it'} will fail.`;
 }
 
 /* ---- Backup / restore tab ---- */
@@ -1849,21 +2548,29 @@ function loadSelectedLog() {
         .catch(() => { output.innerText = 'Error loading log file.'; });
 }
 
-// Auto-refresh log if the Logs tab is visible
+// Auto-refresh the log while Settings > Logs is visible
 setInterval(() => {
-    if (document.getElementById('tab-logs').classList.contains('active')) {
+    if (isSettingsSectionActive('logs')) {
         loadSelectedLog();
     }
 }, 3000);
 
 setInterval(() => {
-    const tab = document.getElementById('tab-backup-restore');
-    if (tab && tab.classList.contains('active')) {
+    if (isSettingsSectionActive('backup-restore')) {
         loadBackupRestoreRobots();
     }
 }, 5000);
 
+// The per-day cycle counts grow with every cycle: refresh them now and then.
 setInterval(() => {
+    if (document.getElementById('tab-production').classList.contains('active')) {
+        refreshProdHistory();
+    }
+}, 10000);
+
+// Fallback polling: skipped while the event stream (live.js) delivers the same data.
+setInterval(() => {
+    if (Live.active) return;
     if (document.getElementById('tab-production').classList.contains('active')) {
         refreshProdMetrics();
     }
@@ -1871,6 +2578,42 @@ setInterval(() => {
         refreshContext(true);
     }
 }, 1000);
+
+/* ---- Live updates (server-sent events) ---- */
+function isTabActive(name) {
+    const tab = document.getElementById('tab-' + name);
+    return !!(tab && tab.classList.contains('active'));
+}
+
+Live.on('status', applyStatus);
+Live.on('devices', (devices) => renderDevices(Array.isArray(devices) ? devices : []));
+Live.on('prod', (snapshot) => {
+    if (isTabActive('production')) renderProdSnapshot(snapshot);
+});
+Live.on('context', (snapshot) => {
+    if (isTabActive('variables') && !isContextUserInteracting()) renderContext(snapshot);
+});
+Live.on('notice', (notice) => showToast(notice.level, notice.message));
+Live.on('workspace', (info) => {
+    if (info && info.name && info.name !== currentWorkspace && !workspaceSwitching) window.location.reload();
+});
+
+/* ---- Toasts (faults, failed tasks, link changes) ---- */
+function showToast(level, message) {
+    const container = document.getElementById('toast-container');
+    if (!container || !message) return;
+    const toast = document.createElement('div');
+    const kind = ['error', 'warning', 'info'].includes(level) ? level : 'info';
+    toast.className = `toast toast-${kind}`;
+    toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    toast.textContent = message;
+    toast.title = 'Click to dismiss';
+    const dismiss = () => toast.remove();
+    toast.addEventListener('click', dismiss);
+    container.appendChild(toast);
+    while (container.children.length > 4) container.firstElementChild.remove();
+    setTimeout(dismiss, kind === 'error' ? 12000 : 6000);
+}
 
 /* ---- Custom view link ---- */
 // Shown only when the workspace ships custom_view/index.html.
@@ -1884,8 +2627,9 @@ function initCustomViewLink() {
 }
 
 /* ---- Startup ---- */
-setInterval(updateRobotStatus, 100);
-setInterval(loadRobotInfo, 1000);
+setInterval(() => { if (!Live.active) updateRobotStatus(); }, 100);
+setInterval(() => { if (!Live.active) loadRobotInfo(); }, 1000);
+setInterval(pollDeviceLive, 500);
 updateRobotStatus();
 loadRobotInfo();
 refreshProdMetrics();
@@ -1897,3 +2641,7 @@ renderBackupRestoreSelectMenu('backup-robot-picker');
 renderBackupRestoreSelectMenu('restore-robot-picker');
 loadBackupRestoreRobots();
 initCustomViewLink();
+loadSystemInfo();
+initProdTimeline();
+loadWorkspaces();
+Live.connect();

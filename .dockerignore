@@ -33,6 +33,7 @@ desktop.ini
 requirements-dev.txt
 
 # Tests and development tools (simulated cell, view replay)
+tests/
 app_logic/tests/
 app_logic/tools/
 

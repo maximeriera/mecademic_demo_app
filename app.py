@@ -16,25 +16,33 @@ parser = argparse.ArgumentParser(description="Mecademic Demo App")
 parser.add_argument('--workspace', type=str, default=BASE_DIR, help="Path to the external workspace")
 parser.add_argument('--host', type=str, default='0.0.0.0', help="Interface the server binds to")
 parser.add_argument('--port', type=int, default=5000, help="Port the server listens on")
+parser.add_argument('--workspaces-root', type=str, default=None,
+                    help="Folder whose subfolders the workspace picker lists "
+                         "(default: MECADEMIC_WORKSPACES_ROOT, else the parent of --workspace)")
 args, _ = parser.parse_known_args()
 
 workspace_path = os.path.abspath(args.workspace)
 sys.path.insert(0, workspace_path)
 
-from flask import Flask, abort, render_template, jsonify, request, send_from_directory, url_for
+from flask import Flask, Response, abort, render_template, jsonify, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
+import json
 import logging
 import math
 import time
 import uuid
 
+from core.EventBus import CLOSED, EventBus
+from core.LivePublisher import LivePublisher, LiveSource
 from core.Task import TaskType
 from core.ControllerState import ControllerState
 from core.ContextStore import ContextError
 from core.BackupRestoreService import BackupRestoreService
 from core.LogSetup import describe_logging, get_app_logger, request_id_var
+from core.Workspaces import (config_dir_of, default_root, discover as discover_workspaces,
+                             purge_modules as purge_workspace_modules, resolve as resolve_workspace)
 
 # --- Logging Setup ---
 # Format, levels, the combined log and the stdout stream all come from
@@ -44,57 +52,166 @@ logger = get_app_logger()
 # --- Flask Setup ---
 app = Flask(__name__)
 
-# --- APPLICATION Controller Instance (Singleton) ---
-# Initialize the controller once outside the routes
-# NOTE: Replace dummy config with your actual Meca 500 connection details
-app_logic_dir = os.path.join(workspace_path, "app_logic")
-workspace_config_dir = app_logic_dir if os.path.isdir(app_logic_dir) else workspace_path
-try:
-    # We must start the controller in the main thread before starting Flask's server
-    from core.ApplicationController import ApplicationController
-    config_path = os.path.join(workspace_config_dir, "config.yaml")
-    # The optional context file (context.yaml) is located by the controller,
-    # relative to config.yaml, honouring `context_file:` in it.
-    APPLICATION = ApplicationController(config_path=config_path)
-    logger.info("ApplicationController initialized successfully.")
-except Exception as e:
-    # If connection fails, set a permanent FAULT state
-    logger.critical(f"Failed to initialize ApplicationController: {e}", exc_info=True)
-    print(f"FATAL: Failed to initialize ApplicationController: {e}")
-    class MockApplicationController:
-        def get_state(self): return ControllerState.OFF
-        def start_task(self, task): print("Mocked start task.")
-        def start_manual_action(self, action_key):
-            print(f"Mocked manual action: {action_key}")
-            return False
-        def stop_current_task(self): print("Mocked stop task.")
-        def abort_current_task(self): print("Mocked abort task.")
-        def initialize(self): return True
-        def shutdown(self): pass
-        def get_devices_info(self): return {}
-        def get_manual_actions(self): return []
-        def clear_faults(self): pass
-        def get_live_step(self): return None
-        def get_current_task_label(self): return None
-        def get_prod_snapshot(self):
-            return {'state': ControllerState.OFF.value, 'metrics': {}, 'steps': {}}
-        def get_context_snapshot(self):
-            return {
-                'enabled': False,
-                'source': None,
-                'state_file': None,
-                'load_error': 'Controller failed to start; see app.log.',
-                'state': ControllerState.OFF.value,
-                'locked': False,
-                'params': {},
-                'variables': {},
-            }
-        def update_context(self, payload): return ([], ['Context unavailable: controller failed to start'])
-        def reset_context(self, namespace, key=None): raise RuntimeError('Controller failed to start')
-    APPLICATION = MockApplicationController()
+# Server-sent events (/api/events): one bus for the process, kept across
+# workspace switches. The LivePublisher feeding it is created below the routes.
+BUS = EventBus()
 
-BACKUP_DIR = os.path.join(workspace_path, "backups")
-BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+
+def _publish_notice(level, message):
+    """Operator-facing notice (a fault, a failed task, a link change), shown as a toast."""
+    BUS.publish('notice', json.dumps({'level': level, 'message': message, 'time': time.time()}))
+
+# --- APPLICATION Controller Instance (Singleton) ---
+# Built from the active workspace; rebuilt by switch_workspace() (Workspaces
+# picker, Reload code). Routes read these globals at call time, so rebinding
+# them is all a switch needs.
+
+class MockApplicationController:
+    """Stands in when the controller cannot be built, so the UI still loads and says why."""
+
+    config_issues = []
+    history = None
+    workspace_name = None
+
+    def __init__(self, load_error):
+        self.load_error = load_error
+
+    def get_state(self): return ControllerState.OFF
+    def start_task(self, task): return False
+    def start_manual_action(self, action_key): return False
+    def stop_current_task(self): pass
+    def abort_current_task(self): pass
+    def initialize(self): raise RuntimeError(f'Controller failed to start: {self.load_error}')
+    def shutdown(self): pass
+    def close(self): pass
+    def is_busy(self): return False
+    def get_devices_info(self): return {}
+    def get_manual_actions(self): return []
+    def clear_faults(self): pass
+    def get_live_step(self): return None
+    def get_current_task_label(self): return None
+    def get_prod_snapshot(self):
+        return {'state': ControllerState.OFF.value, 'metrics': {}, 'steps': {}}
+    def get_context_snapshot(self):
+        return {
+            'enabled': False,
+            'source': None,
+            'state_file': None,
+            'load_error': 'Controller failed to start; see app.log.',
+            'state': ControllerState.OFF.value,
+            'locked': False,
+            'params': {},
+            'variables': {},
+        }
+    def update_context(self, payload): return ([], ['Context unavailable: controller failed to start'])
+    def reset_context(self, namespace, key=None): raise RuntimeError('Controller failed to start')
+    def get_detached(self): return {}
+    def _unavailable(self, device_id):
+        return {'success': False, 'message': 'Controller failed to start; see app.log.'}
+    connect_device = disconnect_device = clear_device_fault = _unavailable
+
+
+def _build_controller(ws_path):
+    """Controller for the workspace at *ws_path*, or the mock with the reason it failed."""
+    config_dir = config_dir_of(ws_path) or ws_path
+    try:
+        from core.ApplicationController import ApplicationController
+        # The optional context file (context.yaml) is located by the controller,
+        # relative to config.yaml, honouring `context_file:` in it.
+        controller = ApplicationController(config_path=os.path.join(config_dir, "config.yaml"))
+        logger.info("ApplicationController initialized successfully.")
+        return controller, config_dir
+    except Exception as e:
+        logger.critical(f"Failed to initialize ApplicationController: {e}", exc_info=True)
+        print(f"FATAL: Failed to initialize ApplicationController: {e}")
+        return MockApplicationController(f"{type(e).__name__}: {e}"), config_dir
+
+
+def _activate_workspace(ws_path):
+    """Build the controller for *ws_path* and point every workspace global at it."""
+    global workspace_path, workspace_config_dir, APPLICATION, BACKUP_DIR, BACKUP_RESTORE, CUSTOM_VIEW_DIR
+    workspace_path = ws_path
+    APPLICATION, workspace_config_dir = _build_controller(ws_path)
+    if not isinstance(APPLICATION, MockApplicationController):
+        APPLICATION.on_notice = _publish_notice
+    BACKUP_DIR = os.path.join(ws_path, "backups")
+    BACKUP_RESTORE = BackupRestoreService(backup_dir=BACKUP_DIR, logger=logger)
+    # A workspace may ship custom_view/ next to its config.yaml (see below).
+    CUSTOM_VIEW_DIR = os.path.join(workspace_config_dir, "custom_view")
+
+
+_activate_workspace(workspace_path)
+
+WORKSPACES_ROOT = (os.path.abspath(args.workspaces_root) if args.workspaces_root
+                   else os.path.abspath(os.environ['MECADEMIC_WORKSPACES_ROOT'])
+                   if os.environ.get('MECADEMIC_WORKSPACES_ROOT')
+                   else default_root(workspace_path))
+
+# Serialises workspace switches against each other and against process exit.
+_switch_lock = threading.RLock()
+
+
+class WorkspaceBusyError(RuntimeError):
+    """A switch was refused because the cell is busy."""
+
+
+def switch_workspace(name):
+    """Shut the current controller down and start the workspace called *name*.
+
+    In-process: the old workspace's modules are purged from sys.modules and
+    its sys.path entry replaced, so the new (or edited) code is what runs.
+    Switching to the current workspace is "Reload code". Raises ValueError for
+    an unknown name, WorkspaceBusyError while a task runs.
+    """
+    global _last_logged_state, _last_logged_health, _step_read_failed, _task_read_failed
+    with _switch_lock:
+        target = resolve_workspace(WORKSPACES_ROOT, workspace_path, name)
+        busy = getattr(APPLICATION, 'is_busy', None)
+        if busy is not None and busy():
+            raise WorkspaceBusyError('A task is running or the cell is initializing. Stop it first.')
+
+        old_path = workspace_path
+        logger.info(f"Switching workspace: {old_path} -> {target}")
+        try:
+            APPLICATION.shutdown()
+        except Exception as e:
+            logger.warning(f"Error shutting down the old controller: {e}", exc_info=True)
+        try:
+            APPLICATION.close()
+        except Exception as e:
+            logger.warning(f"Error closing the old controller: {e}", exc_info=True)
+
+        purged = purge_workspace_modules([old_path, target])
+        logger.info(f"Purged {len(purged)} workspace module(s): {', '.join(purged) or '-'}")
+        # Replace only the entry this file inserted for the old workspace.
+        if old_path in sys.path:
+            sys.path.remove(old_path)
+        sys.path.insert(0, target)
+
+        _activate_workspace(target)
+        with _state_log_lock:
+            _last_logged_state = None
+            _last_logged_health = None
+        _step_read_failed = False
+        _task_read_failed = False
+        BUS.publish('workspace', json.dumps({'name': os.path.basename(target)}))
+        return {
+            'success': not isinstance(APPLICATION, MockApplicationController),
+            'workspace': os.path.basename(target),
+            'controller_error': getattr(APPLICATION, 'load_error', None),
+        }
+
+
+def _task_refusal_message(task_type):
+    """Why the controller refused *task_type*, for the 400 response."""
+    reason = None
+    getter = getattr(APPLICATION, 'task_refusal_reason', None)
+    if getter is not None:
+        try:
+            reason = getter(task_type)
+        except Exception:
+            reason = None
+    return reason or f'APPLICATION is {APPLICATION.get_state().value}.'
 
 
 def _parse_bool(value, default=False):
@@ -112,7 +229,8 @@ def _parse_bool(value, default=False):
 # endpoints are therefore excluded from per-request logging; what actually
 # matters about them — the controller state and device health — is logged by
 # _log_state_change() / _log_device_health_change() only when it *changes*.
-_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/metrics', '/api/context'})
+_POLL_PATHS = frozenset({'/api/status', '/api/info', '/api/prod/metrics', '/api/context',
+                         '/api/prod/timelines', '/api/system'})
 
 _last_logged_state = None
 _last_logged_health = None
@@ -122,8 +240,10 @@ _state_log_lock = threading.Lock()
 
 
 def _is_noisy_path(path):
-    return (path in _POLL_PATHS or path.startswith('/static/') or path.startswith('/api/logs/')
-            or path.startswith('/api/data') or path.startswith('/view/'))
+    return (path in _POLL_PATHS or path == '/api/events'
+            or path.startswith('/static/') or path.startswith('/api/logs/')
+            or path.startswith('/api/data') or path.startswith('/view/')
+            or (path.startswith('/api/devices/') and path.endswith('/live')))
 
 
 def _log_state_change(state):
@@ -210,6 +330,11 @@ def index():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """API endpoint to check the APPLICATION's current state."""
+    return jsonify(_status_payload())
+
+
+def _status_payload():
+    """State, running task, live step and workspace: /api/status and the SSE ``status`` event."""
     current_state = APPLICATION.get_state().value
     # Polled at 10 Hz; log only on change (see _log_state_change).
     _log_state_change(current_state)
@@ -242,7 +367,9 @@ def get_status():
         if not _task_read_failed:
             _task_read_failed = True
             logger.error("Current task read failed; task name suppressed: %s", e, exc_info=True)
-    return jsonify({'status': current_state, 'step': step, 'task': task})
+    # The workspace name lets every open page notice a switch made elsewhere and reload.
+    return {'status': current_state, 'step': step, 'task': task,
+            'workspace': os.path.basename(os.path.normpath(workspace_path))}
 
 @app.route('/api/task/<task_name>', methods=['POST'])
 def handle_task(task_name):
@@ -262,8 +389,9 @@ def handle_task(task_name):
             logger.info(f"Task started: {task_name.upper()}")
             return jsonify({'message': f'{task_name.upper()} task started.', 'success': True}), 200
         else:
-            logger.warning(f"Could not start task '{task_name}'. APPLICATION is {APPLICATION.get_state().value}.")
-            return jsonify({'message': f'Could not start task. APPLICATION is {APPLICATION.get_state().value}.', 'success': False}), 400
+            reason = _task_refusal_message(task_type)
+            logger.warning(f"Could not start task '{task_name}'. {reason}")
+            return jsonify({'message': f'Could not start task. {reason}', 'success': False}), 400
     else:
         logger.warning(f"Unknown task name requested: '{task_name}'")
         return jsonify({'message': 'Invalid task name.'}), 404
@@ -335,30 +463,47 @@ def run_manual_action(action_key):
     if action_key not in available:
         return jsonify({'message': f"Unknown manual action '{action_key}'.", 'success': False}), 404
 
-    return jsonify({'message': f'Could not start manual action. APPLICATION is {state}.', 'success': False}), 400
+    return jsonify({'message': f'Could not start manual action. {_task_refusal_message(TaskType.MANUAL_ACTION)}',
+                    'success': False, 'state': state}), 400
 
 @app.route('/api/info', methods=['GET'])
 def get_APPLICATION_info():
     """API endpoint to get device information including live status."""
     try:
-        info_list = []
-        for device_id, device_info in APPLICATION.get_devices_info().items():
-            # Enrich static info with live status fields
-            entry = {'device_id': device_id}
-            entry.update(device_info)
-            # Attach live status if devices are accessible
-            if hasattr(APPLICATION, 'devices') and device_id in APPLICATION.devices:
-                dev = APPLICATION.devices[device_id]
-                entry['connected'] = dev.connected
-                entry['ready'] = dev.ready
-                entry['faulted'] = dev.faulted
-            info_list.append(entry)
-        # Polled at 1 Hz; log only when device health actually changes.
-        _log_device_health_change(info_list)
-        return jsonify(info_list), 200
+        return jsonify(_jsonable(_device_info_list())), 200
     except Exception as e:
         logger.error(f"Failed to retrieve device info: {e}", exc_info=True)
         return jsonify({'message': f'Failed to retrieve device info: {e}'}), 500
+
+
+def _device_info_list():
+    """Static info plus live status of every device: /api/info and the SSE ``devices`` event."""
+    info_list = []
+    detached = APPLICATION.get_detached()
+    for device_id, device_info in APPLICATION.get_devices_info().items():
+        # Enrich static info with live status fields
+        entry = {'device_id': device_id}
+        entry.update(device_info)
+        # Attach live status if devices are accessible
+        if hasattr(APPLICATION, 'devices') and device_id in APPLICATION.devices:
+            dev = APPLICATION.devices[device_id]
+            entry['connected'] = dev.connected
+            entry['ready'] = dev.ready
+            entry['faulted'] = dev.faulted
+            try:
+                entry['link'] = dev.link
+            except Exception:
+                entry['link'] = 'disconnected'
+            entry['detached'] = device_id in detached
+            entry['in_transition'] = APPLICATION.is_in_transition(device_id)
+            entry['supports_reconnect'] = bool(getattr(dev, 'supports_reconnect', False))
+            entry['supports_monitoring'] = bool(getattr(dev, 'supports_monitoring', False))
+            entry['has_live_data'] = bool(getattr(dev, 'has_live_data', False))
+        info_list.append(entry)
+    # Produced at 1 Hz; log only when device health actually changes.
+    _log_device_health_change(info_list)
+    return info_list
+
 
 @app.route('/api/clear_faults', methods=['POST'])
 def clear_faults():
@@ -395,6 +540,122 @@ def clear_faults():
     except Exception as e:
         logger.error(f"Failed to clear faults: {e}", exc_info=True)
         return jsonify({'message': f'Failed to clear faults: {e}', 'success': False}), 500
+
+def _device_link_response(result):
+    """Map a controller link-action result to an HTTP response.
+
+    Refusals (task running, unknown device...) are 409/404; a device error
+    after the action ran is still 200 with ``success: false``, so the UI shows
+    the message rather than a transport error.
+    """
+    if result.get('success'):
+        return jsonify(result), 200
+    if 'link' in result:
+        return jsonify(result), 200
+    status = 404 if str(result.get('message', '')).startswith('Unknown device') else 409
+    return jsonify(result), status
+
+
+@app.route('/api/devices/<device_id>/connect', methods=['POST'])
+def connect_device(device_id):
+    """Bring one device (back) under this app's control."""
+    return _device_link_response(APPLICATION.connect_device(device_id))
+
+
+@app.route('/api/devices/<device_id>/disconnect', methods=['POST'])
+def disconnect_device(device_id):
+    """Release one device (a robot keeps a monitoring link)."""
+    return _device_link_response(APPLICATION.disconnect_device(device_id))
+
+
+@app.route('/api/devices/<device_id>/clear_fault', methods=['POST'])
+def clear_device_fault(device_id):
+    """Clear the fault of one device."""
+    result = APPLICATION.clear_device_fault(device_id)
+    if result.get('success'):
+        return jsonify(result), 200
+    status = 404 if str(result.get('message', '')).startswith('Unknown device') else 409
+    return jsonify(result), status
+
+
+@app.route('/api/devices/<device_id>/live', methods=['GET'])
+def get_device_live(device_id):
+    """Telemetry and I/O points of one device (Devices tab, polled only while its panel is open)."""
+    getter = getattr(APPLICATION, 'get_device_live', None)
+    live = getter(device_id) if getter else None
+    if live is None:
+        return jsonify({'message': f"Unknown device '{device_id}'."}), 404
+    return jsonify(_jsonable(live)), 200
+
+
+@app.route('/api/devices/<device_id>/io', methods=['POST'])
+def write_device_io(device_id):
+    """Set one writable I/O point: ``{"name": "do3", "value": true}``."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    if not name or 'value' not in payload:
+        return jsonify({'message': "Payload needs 'name' and 'value'.", 'success': False}), 400
+    writer = getattr(APPLICATION, 'write_device_io', None)
+    if writer is None:
+        return jsonify({'message': 'Controller failed to start; see app.log.', 'success': False}), 409
+    result = writer(device_id, name, payload['value'])
+    if result.get('success'):
+        return jsonify(result), 200
+    if str(result.get('message', '')).startswith('Unknown device'):
+        return jsonify(result), 404
+    status = 400 if result.pop('bad_request', False) else 409
+    return jsonify(result), status
+
+
+@app.route('/api/system', methods=['GET'])
+def get_system():
+    """The workspace in use and the problems found in its config.yaml."""
+    return jsonify({
+        'workspace': os.path.basename(os.path.normpath(workspace_path)),
+        'workspace_path': workspace_path,
+        'config_issues': list(getattr(APPLICATION, 'config_issues', None) or []),
+        'controller_error': getattr(APPLICATION, 'load_error', None),
+    }), 200
+
+
+@app.route('/api/workspaces', methods=['GET'])
+def list_workspaces():
+    """Workspaces the picker offers: subfolders of the workspaces root holding a config.yaml."""
+    return jsonify({
+        'current': os.path.basename(os.path.normpath(workspace_path)),
+        'root': WORKSPACES_ROOT,
+        'workspaces': discover_workspaces(WORKSPACES_ROOT, workspace_path),
+    }), 200
+
+
+@app.route('/api/workspaces/switch', methods=['POST'])
+def switch_workspace_route():
+    """Load another workspace (or reload the current one): ``{"name": "<folder name>"}``.
+
+    Disconnects every device; the new workspace starts OFF and needs INITIALIZE.
+    """
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    try:
+        result = switch_workspace(name)
+    except WorkspaceBusyError as e:
+        return jsonify({'message': str(e), 'success': False}), 409
+    except ValueError as e:
+        return jsonify({'message': str(e), 'success': False}), 400
+    if result['success']:
+        result['message'] = f"Workspace '{result['workspace']}' loaded. Initialize to connect its devices."
+    else:
+        result['message'] = (f"Workspace '{result['workspace']}' failed to start: "
+                             f"{result['controller_error']}")
+    return jsonify(result), 200
+
+
+@app.route('/api/devices/types', methods=['GET'])
+def get_device_types():
+    """Every device type config.yaml accepts, with its keys (from devices.registry)."""
+    from devices.registry import describe_types
+    return jsonify({'types': describe_types()}), 200
+
 
 @app.route('/api/state_values', methods=['GET'])
 def get_state_values():
@@ -516,6 +777,80 @@ def get_prod_metrics():
         return jsonify({'message': f'Failed to get production metrics: {e}'}), 500
 
 
+@app.route('/api/prod/timelines', methods=['GET'])
+def get_prod_timelines():
+    """Last finished PROD cycles with their step offsets, for the Gantt chart.
+
+    ``?after_rev=N`` answers ``{"rev": N, "unchanged": true}`` when nothing
+    finished since revision N, so the 1 Hz Production tab poll stays cheap.
+    """
+    getter = getattr(APPLICATION, 'get_prod_timelines', None)
+    if getter is None:
+        return jsonify({'rev': 0, 'order': [], 'timelines': [], 'avg_s': {}}), 200
+    try:
+        data = getter()
+    except Exception as e:
+        logger.error(f"Failed to get cycle timelines: {e}", exc_info=True)
+        return jsonify({'message': f'Failed to get cycle timelines: {e}'}), 500
+    after = request.args.get('after_rev', type=int)
+    if after is not None and after == data.get('rev'):
+        return jsonify({'rev': after, 'unchanged': True}), 200
+    return jsonify(_jsonable(data)), 200
+
+
+def _history_store():
+    return getattr(APPLICATION, 'history', None)
+
+
+def _csv_response(text, filename):
+    return Response(text, mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.route('/api/history/days', methods=['GET'])
+def get_history_days():
+    """Per-day cycle summary from the production history on disk."""
+    store = _history_store()
+    if store is None:
+        return jsonify({'enabled': False, 'days': []}), 200
+    return jsonify({'enabled': True, 'workspace': getattr(APPLICATION, 'workspace_name', None),
+                    'days': store.days()}), 200
+
+
+@app.route('/api/history/runs', methods=['GET'])
+def get_history_runs():
+    """Archived runs from disk, newest last: ``?limit=50``."""
+    store = _history_store()
+    if store is None:
+        return jsonify({'enabled': False, 'runs': []}), 200
+    limit = max(1, min(request.args.get('limit', default=50, type=int) or 50, 1000))
+    return jsonify({'enabled': True, 'runs': _jsonable(store.runs(limit=limit))}), 200
+
+
+@app.route('/api/history/runs.csv', methods=['GET'])
+def get_history_runs_csv():
+    store = _history_store()
+    if store is None:
+        return jsonify({'message': 'Production history is disabled.'}), 404
+    name = getattr(APPLICATION, 'workspace_name', 'workspace')
+    return _csv_response(store.runs_csv(), f'{secure_filename(name)}_runs.csv')
+
+
+@app.route('/api/history/cycles.csv', methods=['GET'])
+def get_history_cycles_csv():
+    """Every cycle of one day: ``?date=YYYY-MM-DD``."""
+    store = _history_store()
+    if store is None:
+        return jsonify({'message': 'Production history is disabled.'}), 404
+    day = request.args.get('date', '')
+    try:
+        text = store.cycles_csv(day)
+    except ValueError as e:
+        return jsonify({'message': str(e)}), 400
+    name = getattr(APPLICATION, 'workspace_name', 'workspace')
+    return _csv_response(text, f'{secure_filename(name)}_cycles_{day}.csv')
+
+
 @app.route('/api/prod/runs', methods=['GET'])
 def get_prod_runs():
     """Return archived production run summaries for export or reporting."""
@@ -579,7 +914,6 @@ def reset_context():
 # A workspace may ship custom_view/ next to its config.yaml: a Python module
 # (data sources + analysis, loaded by the controller) and a web page served
 # here. The standard UI only links to it.
-CUSTOM_VIEW_DIR = os.path.join(workspace_config_dir, "custom_view")
 
 
 def _data_hub():
@@ -627,6 +961,55 @@ def read_data():
         return jsonify({'now': None, 'cursor': after, 'data': {ch: [] for ch in channels}}), 200
     cursor, data = hub.read(channels, after)
     return jsonify({'now': hub.now(), 'cursor': cursor, 'data': _jsonable(data)}), 200
+
+
+def _hub_video(name):
+    hub = _data_hub()
+    video = hub.video(name) if hub is not None and hasattr(hub, 'video') else None
+    if video is None:
+        abort(404)
+    return video
+
+
+@app.route('/api/data/video/<name>.mjpg', methods=['GET'])
+def stream_video(name):
+    """Live MJPEG feed of a video registered with ``hub.add_video()``: ``<img src=...>``.
+
+    Each frame is JPEG-compressed once on the server and the same bytes go to
+    every viewer. The response ends when the hub stops (Initialize, shutdown);
+    the page reopens it when the manifest's ``stream_id`` changes.
+    """
+    video = _hub_video(name)
+
+    def generate():
+        with video.viewer():
+            seq = None
+            while True:
+                frame = video.wait_frame(seq, timeout=5.0)
+                if video.closed:
+                    return
+                if frame is None:
+                    continue
+                seq = frame.seq
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '
+                       + str(len(frame.jpeg)).encode() + b'\r\n\r\n' + frame.jpeg + b'\r\n')
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame',
+                    headers={'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/data/video/<name>.jpg', methods=['GET'])
+def video_snapshot(name):
+    """One JPEG frame of a video (waits up to 5 s for the camera if nobody is watching)."""
+    video = _hub_video(name)
+    with video.viewer():
+        frame = video.wait_frame(None, timeout=5.0)
+    if frame is None:
+        return jsonify({'message': f"No frame from video '{name}'.", 'last_error': video.last_error}), 503
+    return Response(frame.jpeg, mimetype='image/jpeg', headers={
+        'Cache-Control': 'no-cache, no-store',
+        'Content-Disposition': f'inline; filename="{secure_filename(name)}.jpg"',
+    })
 
 
 @app.route('/view/')
@@ -695,6 +1078,57 @@ def get_log(category, filename):
         return jsonify({'message': f'Failed to read log: {e}'}), 500
 
 
+# --- Server-sent events ---------------------------------------------------
+# Every page holds one /api/events stream instead of polling /api/status at
+# 10 Hz and /api/info, /api/prod/metrics, /api/context at 1 Hz. The pages fall
+# back to that polling whenever the stream is down. /api/status stays: it is
+# also the Docker healthcheck.
+
+PUBLISHER = LivePublisher(BUS, [
+    LiveSource('status', _status_payload, 0.1),
+    LiveSource('devices', lambda: _jsonable(_device_info_list()), 1.0),
+    LiveSource('prod', lambda: _jsonable(APPLICATION.get_prod_snapshot()), 1.0),
+    LiveSource('context', lambda: _jsonable(APPLICATION.get_context_snapshot()), 1.0),
+], logger)
+PUBLISHER.start()
+
+#: Comment line sent when nothing else was, so dead clients are found within seconds.
+_SSE_HEARTBEAT_S = 5.0
+
+
+@app.route('/api/events', methods=['GET'])
+def stream_events():
+    """Server-sent events: status, devices, prod, context, notice, workspace.
+
+    Starts with a full snapshot of every source, then sends changes only.
+    ``X-Accel-Buffering: no`` lets it through an nginx reverse proxy unbuffered.
+    """
+    sub = BUS.subscribe()
+    if sub is None:
+        return jsonify({'message': 'Server is shutting down.'}), 503
+    snapshot = PUBLISHER.current()
+
+    def generate():
+        try:
+            yield 'retry: 2000\n\n'
+            for name, payload in snapshot.items():
+                yield f'event: {name}\ndata: {payload}\n\n'
+            while True:
+                item = sub.get(timeout=_SSE_HEARTBEAT_S)
+                if item is CLOSED:
+                    return
+                if item is None:
+                    yield ': ping\n\n'
+                    continue
+                name, payload = item
+                yield f'event: {name}\ndata: {payload}\n\n'
+        finally:
+            BUS.unsubscribe(sub)
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
 # --- Cleanup on Process Exit ---
 # NOTE: this must NOT be a Flask `teardown_appcontext` hook — that hook runs at the
 # end of *every request*, which would shut the controller down on the first page load.
@@ -709,13 +1143,29 @@ def shutdown_APPLICATION_controller():
         if _shutdown_called:
             return
         _shutdown_called = True
+    # Never in the middle of a workspace switch: wait for it, then shut the
+    # controller it installed down.
+    with _switch_lock:
+        _shutdown_active_controller()
 
+
+def _shutdown_active_controller():
     print("Process exit: Shutting down APPLICATION controller.")
     logger.info("Process exit: Shutting down APPLICATION controller.")
+    # Streams first: the publisher must not probe devices being disconnected,
+    # and closing the bus ends every open /api/events response.
+    PUBLISHER.stop()
+    BUS.close()
     try:
         APPLICATION.shutdown()
     except Exception as e:
         logger.warning(f"Error during controller shutdown at exit: {e}", exc_info=True)
+    closer = getattr(APPLICATION, 'close', None)
+    if closer is not None:
+        try:
+            closer()
+        except Exception as e:
+            logger.warning(f"Error closing the controller at exit: {e}", exc_info=True)
 
 
 atexit.register(shutdown_APPLICATION_controller)
