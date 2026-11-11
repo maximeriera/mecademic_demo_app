@@ -89,7 +89,7 @@ services:
     # Talking to real hardware
     # ---------------------------------------------------------------------
     # The default bridge network above reaches routable device IPs (Mecademic,
-    # Asyril, ioLogik, Brainboxes, LMI, SmarAct MCS2) just fine, and works on
+    # Asyril, ioLogik, Brainboxes, LMI, SmarAct MCS2, Tulip gripper) just fine, and works on
     # Docker Desktop for macOS and Windows.
     #
     # It does NOT pass UDP broadcast/multicast, which GigE Vision discovery
@@ -102,7 +102,7 @@ services:
     # (`ports:` and `network_mode: host` are mutually exclusive, and host mode
     # is Linux-only — on Docker Desktop it does not behave the same way.)
     #
-    # For serial devices (Arduino via Firmata, Zaber), pass the TTY through:
+    # For serial devices (Arduino via Firmata, Zaber, Tulip gripper over USB), pass the TTY through:
     #
     #   devices:
     #     - "/dev/ttyUSB0:/dev/ttyUSB0"

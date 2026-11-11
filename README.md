@@ -71,7 +71,7 @@ Users can build their own application logic in `app_logic/` and trigger it via t
 |---|---|
 | **Multi-device architecture** | Abstract `Device` base class with per-device rotating log files |
 | **Mecademic robot support** | Wraps [mecademicpy](https://github.com/Mecademic/mecademicpy) — connection, homing, motion, fault detection, and clearing |
-| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 and Brainboxes ED remote I/O, LMI Gocator 3D sensor, GigE Vision cameras, Thorlabs PM-series power meters, SmarAct MCS2 linear stages, Zaber axes, and a hardware-free simulated device |
+| **Additional devices** | Asyril Eye+ feeder, planar motor, Arduino I/O (Firmata), Moxa ioLogik E1212 and Brainboxes ED remote I/O, LMI Gocator 3D sensor, GigE Vision cameras, Thorlabs PM-series power meters, SmarAct MCS2 linear stages, Percipio Tulip grippers, Zaber axes, and a hardware-free simulated device |
 | **Device registry & config validation** | Every `type` and its keys are declared in `devices/registry.py`; typos and bad values in `config.yaml` are listed in a UI banner instead of failing silently |
 | **Per-device link control** | Release one device to another program and connect it again; a released Mecademic robot keeps a read-only link so the live view keeps its position |
 | **Live data & I/O** | Device telemetry (robot joints/pose, stage positions, power...) and digital I/O with output toggles in Settings > Devices |
@@ -154,6 +154,7 @@ All devices are declared in **`config.yaml`**. Each entry needs a unique name an
 | `lmi` | `LMISensor` | LMI Gocator 3D sensor (Ethernet ASCII) |
 | `thorlabs_pm` | `ThorlabsPowerMeter` | Thorlabs PM-series power meter (SCPI via PyVISA, USB or TCPIP) |
 | `smaract_mcs2` | `SmarActMCS2` | SmarAct MCS2 positioner controller and its linear stages (Ethernet ASCII) |
+| `percipio_tulip` | `TulipGripper` | Percipio Robotics Tulip gripper driver (text protocol v2.0, Ethernet or USB serial) |
 | `brainboxes_ed_digital` | `BrainboxesEDDigital` | Brainboxes ED digital I/O module |
 | `gige_camera` | `GigEVisionDevice` | GigE Vision camera (harvesters / GenTL) |
 | `simulated_camera` | `SimulatedCamera` | Hardware-free camera serving a moving test pattern |
@@ -245,6 +246,7 @@ One card per device with its badges (OK/FAULTED, Connected/Monitoring/Disconnect
 | `iologik` | DI 0–7 and DO 0–7 (writable) |
 | `brainboxes_ed_digital` | DI/DO over `channels` (writable outputs) |
 | `smaract_mcs2` | Position, moving and referenced state per channel |
+| `percipio_tulip` | Opening, speed, travel time and driver error; an `open` toggle (writable: release / grip) |
 | `thorlabs_pm` | Power, unit and wavelength |
 | `simulated` | Fake telemetry, 4 DI and 4 writable DO (`di2` loops `do1` back) |
 
@@ -284,7 +286,7 @@ A device whose driver supports reconnecting can be released from its card in **S
   - If another client still holds the robot's control port, the attempt fails with a clear message and the monitoring link stays up.
   - SHUTDOWN reconnects nothing and forgets every release.
 
-Release and connect are refused while a task runs or the cell initializes. They are offered for: `mecademic` (with monitoring), `iologik`, `brainboxes_ed_digital`, `asyril`, `smaract_mcs2`, `thorlabs_pm` and `simulated`. Set `supports_monitoring: true` on a simulated device to rehearse the robot flow without hardware.
+Release and connect are refused while a task runs or the cell initializes. They are offered for: `mecademic` (with monitoring), `iologik`, `brainboxes_ed_digital`, `asyril`, `smaract_mcs2`, `percipio_tulip`, `thorlabs_pm` and `simulated`. Set `supports_monitoring: true` on a simulated device to rehearse the robot flow without hardware.
 
 In workspace code, read a robot's real-time data through the link that is up:
 
@@ -884,7 +886,7 @@ python -m pytest -q tests
 │  Devices  (devices/)                                        │
 │  MecaRobot · AsyrilEyePlus · PlanarMotor · ArduinoBoard     │
 │  IoLogikE1212 · BrainboxesED · LMISensor · GigE · Thorlabs  │
-│  SmarActMCS2 · Zaber · SimulatedDevice                      │
+│  SmarActMCS2 · TulipGripper · Zaber · SimulatedDevice       │
 │  ─ types and config keys declared in devices/registry.py    │
 │  ─ each extends abstract Device base class                  │
 │  ─ each has a dedicated rotating log under logs/devices/    │
@@ -932,6 +934,7 @@ devices/
     LMISensor.py              # LMI Gocator 3D sensor (Ethernet ASCII)
     ThorlabsPowerMeter.py     # Thorlabs PM-series power meter (SCPI via PyVISA)
     SmarActMCS2.py            # SmarAct MCS2 linear stages (Ethernet ASCII)
+    TulipGripper.py           # Percipio Tulip gripper (text protocol, Ethernet or USB serial)
     api/                      # Low-level device protocol implementations
 
 app_logic/
