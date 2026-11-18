@@ -212,10 +212,11 @@ class TulipDriver:
             self._buf = b""
             if self.serial_port is None:
                 try:
-                    sock = socket.create_connection((self.host, self.port), self.timeout)
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(self.timeout)
+                    sock.connect((self.host, self.port))
                 except OSError as exc:
                     raise TulipError(f"Cannot connect to {self.address}: {exc}") from exc
-                sock.settimeout(self.timeout)
                 self._sock = sock
             else:
                 import serial  # pyserial; imported here so TCP use does not need it
@@ -268,7 +269,7 @@ class TulipDriver:
         """Send a command that gets no reply (the SET* commands)."""
         with self._lock:
             self._check_open()
-            data = cmd.encode("ascii") + b"\n"
+            data = cmd.encode("ascii") + b"\n\n"
             try:
                 if self._sock is not None:
                     self._sock.sendall(data)

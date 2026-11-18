@@ -272,7 +272,10 @@ class TulipGripper(Device):
         api = self._api
         try:
             api.open()
-            version = api.version()
+            try:
+                version = api.version()
+            except:
+                version = ""
             code, text = api.error()
             if code and clear_errors:
                 self.logger.info(f"[{self.device_id}] Driver reports error {code} ({text}): sending CLEARERROR.")
