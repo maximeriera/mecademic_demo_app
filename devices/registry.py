@@ -573,6 +573,22 @@ register_device(DeviceSpec(
     doc="SmarAct MCS2 positioner controller (Ethernet ASCII).",
 ))
 register_device(DeviceSpec(
+    "percipio_tulip", "devices.TulipGripper:TulipGripper",
+    {
+        "ip_address": _p("str", None, "driver IP address (factory 200.0.0.100); or give serial_port"),
+        "port": _p("int", 2000, "TCP port"),
+        "serial_port": _p("str", None, "USB serial port (COM4, /dev/ttyACM0) instead of ip_address"),
+        "baudrate": _p("int", 115200, "serial baud rate"),
+        "timeout": _p("float", 2.0, "seconds per reply"),
+        "travel_time_s": _p("float", None, "full open/close duration set at Initialize (saved to flash)"),
+        "open_position": _p("float", 100.0, "% opening used by release()"),
+        "close_position": _p("float", 0.0, "% opening used by grip()"),
+    },
+    aliases=("tulip_gripper", "tulip"),
+    exclusive=(("ip_address", "serial_port"),),
+    doc="Percipio Robotics Tulip gripper driver (text protocol v2.0, Ethernet or USB serial).",
+))
+register_device(DeviceSpec(
     "zaber", "devices.OLD_ZaberAxis:ZaberAxis",
     {
         "port": _p("str", "COM3", "serial port"),

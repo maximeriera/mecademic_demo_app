@@ -136,6 +136,22 @@
 #   velocity_mm_s: 5.0           # optional — set at every Initialize
 #   acceleration_mm_s2: 50.0     # optional — set at every Initialize
 #
+# --- Percipio Robotics Tulip Gripper (TulipGripper) ---
+#   The Tulip driver box, over its text protocol v2.0 on Ethernet or USB serial.
+#   Openings in % (0 closed, 100 open). Task code: gripper.grip() / gripper.release()
+#   (wait until settled), or gripper.api.move_to(55.5). One client at a time:
+#   close AP2M first. Give ip_address OR serial_port.
+#   type: "percipio_tulip"       # aliases: "tulip_gripper", "tulip"
+#   ip_address: "200.0.0.100"    # factory default; the PC must be on 200.0.0.x
+#   port: 2000                   # optional, default: 2000
+#   serial_port: "COM4"          # instead of ip_address — USB-C virtual COM port
+#   baudrate: 115200             # optional, default: 115200 (serial only)
+#   timeout: 2.0                 # optional, seconds — per reply
+#   travel_time_s: 0.05          # optional — full open/close duration, set at
+#                                #   Initialize when different (saved to the driver's flash)
+#   open_position: 100           # optional, default: 100 — % used by release()
+#   close_position: 0            # optional, default: 0 — % used by grip()
+#
 # --- Simulated Device (SimulatedDevice) — no hardware required ---
 #   Stands in for ANY device type above so the app can be developed/tested
 #   with no robot, feeder, or I/O hardware in the loop. Its `.api` accepts

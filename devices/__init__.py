@@ -14,6 +14,7 @@ __all__ = [
 	"LMISensor",
 	"ThorlabsPowerMeter",
 	"SmarActMCS2",
+	"TulipGripper",
 	"ZaberAxis",
 	"SimulatedDevice",
 	"SimulatedCamera",
@@ -63,6 +64,10 @@ def __getattr__(name):
 		from .SmarActMCS2 import SmarActMCS2
 
 		return SmarActMCS2
+	if name == "TulipGripper":
+		from .TulipGripper import TulipGripper
+
+		return TulipGripper
 	if name == "ZaberAxis":
 		from .OLD_ZaberAxis import ZaberAxis
 
