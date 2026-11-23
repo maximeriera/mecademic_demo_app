@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: asyril-predelivery-audit
+expected_outcome: |
+  A full checklist audit of devices/Asyril.py + devices/api/AsyrilAPI.py: clear_fault only resets a flag (stale session,
+  Major), print() in shutdown and unprefixed logs (Minor), registry recipe default 0 vs required constructor arg (Minor),
+  plus an honest look at status properties (driver reads api._connected/_faulted attributes; the API's connected property
+  peeks the socket), comm-error latching and abort. Creates a hardware-free tests/test_asyril*.py using a fake TCP Eye+,
+  with strict xfail on violations; suite green; driver untouched; report in the prescribed structure with fixes offered.

@@ -1,0 +1,755 @@
+diff --git a/devices/IoLogikE1212.py b/devices/IoLogikE1212.py
+index f8d835c..db9726d 100644
+--- a/devices/IoLogikE1212.py
++++ b/devices/IoLogikE1212.py
+@@ -1,5 +1,5 @@
+ from .Device import Device
+-from .api.IoLogikE1212Api import IoLogikE1212Api
++from .api.IoLogikE1212Api import IoLogikCommandError, IoLogikE1212Api
+ 
+ 
+ class IoLogikE1212(Device):
+@@ -11,6 +11,15 @@ class IoLogikE1212(Device):
+     :attr:`api` attribute, which is an :class:`~devices.api.IoLogikE1212Api`
+     instance.
+ 
++    Status is never read from the unit (the fault monitor polls it every
++    200 ms, and a Modbus request can take timeout x retries to fail). A link
++    error on any request (no reply, connection closed) latches :attr:`faulted`
++    until :meth:`clear_fault`, which opens a fresh session. A request the unit
++    refuses (Modbus exception response) raises
++    :class:`~devices.api.IoLogikE1212Api.IoLogikCommandError` to the task but
++    doesn't fault the device. Outputs keep their state on abort, shutdown and
++    clear_fault.
++
+     Parameters
+     ----------
+     ip_address : str
+@@ -32,6 +41,8 @@ class IoLogikE1212(Device):
+ 
+     supports_reconnect = True
+ 
++    _NO_IDENTITY = {"model_name": None, "firmware_version": None, "lan_ip": None}
++
+     def __init__(self, ip_address: str, port: int = 502, slave_id: int = 1, name=None):
+         if name is None:
+             name = f"IoLogikE1212_{ip_address}"
+@@ -39,14 +50,19 @@ class IoLogikE1212(Device):
+ 
+         self._ip_address = ip_address
+         self._port = port
++        self._open = False
++        # Why the device is faulted, or None. A plain attribute so the monitor
++        # thread can read it without touching the unit or its lock.
++        self._fault: str | None = None
+         self._api = IoLogikE1212Api(
+             ip_address=ip_address,
+             port=port,
+             slave_id=slave_id,
+             logger=self.logger,
++            on_comm_error=self._on_comm_error,
+         )
+         # Read once per connection: /api/info polls this every second.
+-        self._identity = {"model_name": None, "firmware_version": None, "lan_ip": None}
++        self._identity = dict(self._NO_IDENTITY)
+ 
+     # ------------------------------------------------------------------
+     # Device interface
+@@ -63,37 +79,35 @@ class IoLogikE1212(Device):
+ 
+     @property
+     def connected(self) -> bool:
+-        return self._api.is_connected
++        return self._open and self._fault is None
+ 
+     @property
+     def ready(self) -> bool:
+-        return not self.api._faulted and self.api.is_connected
++        return self.connected
+ 
+     @property
+     def faulted(self) -> bool:
+-        return self._api._faulted or not self._api.is_connected
++        return self._fault is not None
+ 
+     # ------------------------------------------------------------------
+     # Lifecycle
+     # ------------------------------------------------------------------
+ 
+     def initialize(self):
+-        self._api.connect()
+-        try:
+-            self._identity = {
+-                "model_name": self._api.get_model_name(),
+-                "firmware_version": self._api.get_firmware_version(),
+-                "lan_ip": self._api.get_lan_ip(),
+-            }
+-        except Exception as e:
+-            self.logger.warning(f"[{self.device_id}] Could not read the unit identity: {e}")
++        self._close()
++        self._connect()
+ 
+     def shutdown(self):
+-        self._api.disconnect()
++        self._close()
+ 
+     def clear_fault(self):
+-        self._api._faulted = False
+-        self.logger.info("Fault flag cleared on ioLogik E1212.")
++        if self._fault is None:
++            return
++        # Reopen rather than just drop the flag: after a timeout the old
++        # socket may still look open. Nothing is written to the outputs.
++        self.logger.info(f"[{self.device_id}] Clearing fault ({self._fault}): reopening the session.")
++        self._close()
++        self._connect()
+ 
+     def abort(self):
+         self.logger.warning(f"[{self.device_id}] Abort requested (no motion to clear).")
+@@ -103,7 +117,7 @@ class IoLogikE1212(Device):
+     # ------------------------------------------------------------------
+ 
+     def io_points(self) -> list:
+-        if not self._api.is_connected:
++        if not self.connected:
+             return []
+         inputs = self._api.read_all_di()
+         outputs = self._api.read_all_do()
+@@ -116,3 +130,53 @@ class IoLogikE1212(Device):
+         if not name.startswith("do") or not name[2:].isdigit():
+             raise ValueError(f"Unknown or read-only point '{name}'.")
+         self._api.write_do(int(name[2:]), bool(value))
++
++    # ------------------------------------------------------------------
++    # Internals
++    # ------------------------------------------------------------------
++
++    def _connect(self):
++        """Open the session and read the identity. Raises, and leaves the
++        device faulted, if the unit can't be reached or doesn't answer."""
++        try:
++            self._api.connect()
++            identity = self._read_identity()
++        except Exception as exc:
++            self._fault = f"Connection failed: {exc}" if str(exc) else type(exc).__name__
++            self._api.disconnect()
++            self.logger.error(f"[{self.device_id}] {self._fault}")
++            raise
++        self._identity = identity
++        # Open first: in between, the monitor sees "still faulted", not
++        # "healthy but disconnected".
++        self._open = True
++        self._fault = None
++        self.logger.info(f"[{self.device_id}] Connected: {identity}")
++
++    def _read_identity(self) -> dict:
++        # A register the unit refuses (older firmware...) is not a reason to
++        # fail the connection. A link error is, and propagates.
++        identity = dict(self._NO_IDENTITY)
++        for key, read in (("model_name", self._api.get_model_name),
++                          ("firmware_version", self._api.get_firmware_version),
++                          ("lan_ip", self._api.get_lan_ip)):
++            try:
++                identity[key] = read()
++            except IoLogikCommandError as exc:
++                self.logger.warning(f"[{self.device_id}] Could not read {key}: {exc}")
++        return identity
++
++    def _close(self):
++        self._open = False
++        self._identity = dict(self._NO_IDENTITY)
++        try:
++            self._api.disconnect()
++        except Exception as exc:
++            self.logger.warning(f"[{self.device_id}] Error closing the session: {exc}")
++
++    def _on_comm_error(self, exc: Exception):
++        # Runs on whichever thread hit the error: the task or the Live panel.
++        # While connecting (_open is False), _connect reports the failure.
++        if self._open and self._fault is None:
++            self._fault = f"Communication error: {exc}"
++            self.logger.error(f"[{self.device_id}] {self._fault}")
+diff --git a/devices/api/IoLogikE1212Api.py b/devices/api/IoLogikE1212Api.py
+index d3391a6..d71fb83 100644
+--- a/devices/api/IoLogikE1212Api.py
++++ b/devices/api/IoLogikE1212Api.py
+@@ -1,8 +1,25 @@
+ import logging
+ import threading
++from typing import Callable, Optional
+ 
+ from pymodbus.client import ModbusTcpClient
+-from pymodbus.exceptions import ModbusException
++from pymodbus.exceptions import ConnectionException, ModbusException, ModbusIOException
++
++__all__ = ["IoLogikE1212Api", "IoLogikCommandError", "LINK_ERRORS"]
++
++# What a lost or silent link looks like through pymodbus: the peer closed the
++# socket (ConnectionException), no reply within timeout x retries
++# (ModbusIOException), or a raw socket error.
++LINK_ERRORS = (ConnectionException, ModbusIOException, OSError)
++
++
++class IoLogikCommandError(ModbusException):
++    """The unit answered with a Modbus exception response (illegal address,
++    illegal value...): a usage error, the link itself is fine.
++
++    Subclasses :class:`~pymodbus.exceptions.ModbusException`, so task code
++    that catches ``ModbusException`` keeps working.
++    """
+ 
+ 
+ class _SerializedClient:
+@@ -11,11 +28,22 @@ class _SerializedClient:
+     The task thread, the Devices tab's I/O panel and the info route can all
+     use the unit at once, and the client is not safe for concurrent
+     transactions on one connection.
++
++    On a link error (see :data:`LINK_ERRORS`) it closes the socket before
++    re-raising, so a late reply is never read as the answer to the next
++    request, and reports the error through *on_error*.
+     """
+ 
+-    def __init__(self, client: ModbusTcpClient):
++    def __init__(self, client: ModbusTcpClient,
++                 on_error: Optional[Callable[[Exception], None]] = None):
+         self._client = client
+         self._lock = threading.RLock()
++        self._on_error = on_error
++
++    def is_socket_open(self) -> bool:
++        # A plain attribute check in pymodbus: no need to queue behind a
++        # request that may take timeout x retries to fail.
++        return self._client.is_socket_open()
+ 
+     def __getattr__(self, name):
+         attr = getattr(self._client, name)
+@@ -24,7 +52,16 @@ class _SerializedClient:
+ 
+         def call(*args, **kwargs):
+             with self._lock:
+-                return attr(*args, **kwargs)
++                try:
++                    return attr(*args, **kwargs)
++                except LINK_ERRORS as exc:
++                    try:
++                        self._client.close()
++                    except Exception:
++                        pass
++                    if self._on_error is not None:
++                        self._on_error(exc)
++                    raise
+         return call
+ 
+ 
+@@ -50,6 +87,17 @@ class IoLogikE1212Api:
+     logger : logging.Logger
+         Logger instance supplied by the parent :class:`~devices.IoLogikE1212`
+         device so that all messages appear under the same logger hierarchy.
++    on_comm_error : callable, optional
++        Called with the exception when a request fails on the link (see
++        :data:`LINK_ERRORS`). The session is already closed by then.
++
++    Errors
++    ------
++    A refused request (Modbus exception response) raises
++    :class:`IoLogikCommandError`. A link failure raises pymodbus'
++    ``ConnectionException`` / ``ModbusIOException`` unchanged, after closing
++    the session. Both are ``ModbusException`` subclasses. Note that pymodbus
++    reconnects by itself on the next request after a close.
+     """
+ 
+     # Channel counts
+@@ -108,13 +156,18 @@ class IoLogikE1212Api:
+         port: int = 502,
+         slave_id: int = 1,
+         logger: logging.Logger = None,
++        on_comm_error: Optional[Callable[[Exception], None]] = None,
+     ):
+         self.logger = logger or logging.getLogger(__name__)
+         self._ip_address = ip_address
+         self._port = port
+         self._slave_id = slave_id
+         self._connected = False
++        # True until connected, and after a link error (not after a refused
++        # request). last_error keeps the reason.
+         self._faulted = True
++        self.last_error: Optional[Exception] = None
++        self._on_comm_error = on_comm_error
+         self._client: _SerializedClient | None = None
+ 
+     # ------------------------------------------------------------------
+@@ -127,13 +180,18 @@ class IoLogikE1212Api:
+         if self._client is not None:
+             # A second connect() without disconnect() used to leak this socket.
+             self._client.close()
+-        self._client = _SerializedClient(ModbusTcpClient(host=self._ip_address, port=self._port))
++        self._client = _SerializedClient(
++            ModbusTcpClient(host=self._ip_address, port=self._port),
++            on_error=self._on_link_error,
++        )
+         if not self._client.connect():
+             msg = f"Could not reach ioLogik E1212 at {self._ip_address}:{self._port}"
+             self.logger.error(msg)
++            self._faulted = True
+             raise ConnectionError(msg)
+         self._connected = True
+         self._faulted = False
++        self.last_error = None
+         self.logger.info("ioLogik E1212 connected successfully.")
+ 
+     def disconnect(self) -> None:
+@@ -146,13 +204,24 @@ class IoLogikE1212Api:
+ 
+     @property
+     def is_connected(self) -> bool:
+-        """True if the socket is currently open."""
+-        if self._client:
+-            self._connected = self._client.is_socket_open()
+-        else:
+-            self._connected = False
++        """True if the socket is currently open (no request, no lock).
++
++        A pulled cable leaves the socket open until a request times out, so
++        this is not a link-health check.
++        """
++        client = self._client   # disconnect() may clear it from another thread
++        self._connected = bool(client and client.is_socket_open())
+         return self._connected
+ 
++    def _on_link_error(self, exc: Exception) -> None:
++        # Runs under the client lock, on whichever thread made the request.
++        self._faulted = True
++        self._connected = False
++        self.last_error = exc
++        self.logger.warning(f"ioLogik E1212 link error, session closed: {exc}")
++        if self._on_comm_error is not None:
++            self._on_comm_error(exc)
++
+     # ------------------------------------------------------------------
+     # Digital Inputs (DI)  – FC02 / FC04 / FC01
+     # ------------------------------------------------------------------
+@@ -446,10 +515,11 @@ class IoLogikE1212Api:
+ 
+     def _check_response(self, response, context: str) -> None:
+         if response.isError():
++            # The unit refused the request: the link works, so this is the
++            # caller's error, not a device fault.
+             msg = f"Modbus error in '{context}': {response}"
+             self.logger.error(msg)
+-            self._faulted = True
+-            raise ModbusException(msg)
++            raise IoLogikCommandError(msg)
+ 
+     def _read_ascii_registers(self, address: int, count: int) -> str:
+         """Read *count* input registers and decode each word as two ASCII bytes."""
+diff --git a/tests/test_iologik_e1212.py b/tests/test_iologik_e1212.py
+new file mode 100644
+index 0000000..a219fd4
+--- /dev/null
++++ b/tests/test_iologik_e1212.py
+@@ -0,0 +1,404 @@
++"""IoLogikE1212 driver and its Modbus API module, against a fake pymodbus client.
++
++No hardware and no socket: ``devices.api.IoLogikE1212Api.ModbusTcpClient`` is
++replaced by :class:`FakeModbusClient`, which behaves like pymodbus 3.12's sync
++client: ``connect()`` returns a bool, ``is_socket_open()`` is ``socket is not
++None``, link failures raise ``ConnectionException`` (peer closed the socket,
++which pymodbus then drops) or ``ModbusIOException`` (no reply in time, socket
++left open), and a refused request returns an ``ExceptionResponse``.
++"""
++
++import json
++import threading
++import time
++
++import pytest
++from pymodbus.exceptions import ConnectionException, ModbusException, ModbusIOException
++from pymodbus.pdu import ExceptionResponse
++
++import devices.api.IoLogikE1212Api as io_api
++from devices.IoLogikE1212 import IoLogikE1212
++from devices.registry import create_device, validate_devices_config
++
++# Calls that change an output, a counter or a pulse on the unit.
++WRITES = {"write_coil", "write_coils", "write_register", "write_registers"}
++IO_CALLS = WRITES | {"read_coils", "read_discrete_inputs", "read_input_registers",
++                     "read_holding_registers"}
++
++
++class _Result:
++    def __init__(self, bits=None, registers=None):
++        self.bits = list(bits or [])
++        self.registers = list(registers or [])
++
++    def isError(self):
++        return False
++
++
++def _ascii_words(text, words):
++    raw = text.encode("ascii").ljust(words * 2, b"\x00")
++    return [(raw[i] << 8) | raw[i + 1] for i in range(0, words * 2, 2)]
++
++
++class FakeModbusClient:
++    """Stands in for pymodbus.client.ModbusTcpClient (sync). Logs every call."""
++
++    def __init__(self, host, port=502, **kwargs):
++        self.host, self.port, self.kwargs = host, port, kwargs
++        self.calls = []                 # (name, args, kwargs)
++        self.socket = None
++        self.connect_ok = True
++        self.fail_with = None           # exception raised by the next I/O call
++        self.refuse = set()             # addresses answered with an ExceptionResponse
++        self.di = [False] * 16
++        self.coils = [False] * 8
++        self.input_registers = {}
++        self.input_registers.update(enumerate(_ascii_words("ioLogik E1212", 10), start=5000))
++        self.input_registers.update({5027: (192 << 8) | 168, 5028: (127 << 8) | 254,
++                                     5029: (3 << 8) | 2, 5030: (1 << 8)})
++
++    # --- connection ---
++    def connect(self):
++        self.calls.append(("connect", (), {}))
++        if self.socket is None and self.connect_ok:
++            self.socket = object()
++        return self.socket is not None
++
++    def close(self):
++        self.calls.append(("close", (), {}))
++        self.socket = None
++
++    def is_socket_open(self):
++        return self.socket is not None
++
++    # --- I/O ---
++    def _io(self, name, address, *args, **kwargs):
++        self.calls.append((name, (address,) + args, kwargs))
++        # pymodbus' execute() reconnects on its own when the socket is closed.
++        if self.socket is None and not self.connect():
++            raise ConnectionException("Failed to connect")
++        if self.fail_with is not None:
++            exc, self.fail_with = self.fail_with, None
++            if isinstance(exc, ConnectionException):
++                self.socket = None      # pymodbus drops a socket the peer closed
++            raise exc
++        if address in self.refuse:
++            return ExceptionResponse(0x02, 2)      # illegal data address
++        return None
++
++    def read_discrete_inputs(self, address, *, count=1, device_id=1, **kw):
++        return self._io("read_discrete_inputs", address, count=count, device_id=device_id) \
++            or _Result(bits=self.di[address:address + count] + [False] * 8)
++
++    def read_coils(self, address, *, count=1, device_id=1, **kw):
++        return self._io("read_coils", address, count=count, device_id=device_id) \
++            or _Result(bits=self.coils[address:address + count] + [False] * 8)
++
++    def read_input_registers(self, address, *, count=1, device_id=1, **kw):
++        return self._io("read_input_registers", address, count=count, device_id=device_id) \
++            or _Result(registers=[self.input_registers.get(a, 0) for a in range(address, address + count)])
++
++    def write_coil(self, address, value, *, device_id=1, **kw):
++        rsp = self._io("write_coil", address, value, device_id=device_id)
++        if rsp is None and address < len(self.coils):
++            self.coils[address] = bool(value)
++        return rsp or _Result()
++
++    def write_coils(self, address, values, *, device_id=1, **kw):
++        rsp = self._io("write_coils", address, list(values), device_id=device_id)
++        if rsp is None:
++            self.coils[address:address + len(values)] = [bool(v) for v in values]
++        return rsp or _Result()
++
++    def write_register(self, address, value, *, device_id=1, **kw):
++        return self._io("write_register", address, value, device_id=device_id) or _Result()
++
++    # helpers for assertions
++    def names(self):
++        return [c[0] for c in self.calls]
++
++
++@pytest.fixture
++def made(monkeypatch):
++    """Every FakeModbusClient the API created; ``made[-1]`` is the live one."""
++    clients = []
++
++    def factory(*args, **kwargs):
++        clients.append(FakeModbusClient(*args, **kwargs))
++        return clients[-1]
++
++    monkeypatch.setattr(io_api, "ModbusTcpClient", factory)
++    return clients
++
++
++@pytest.fixture
++def io(made):
++    dev = IoLogikE1212("127.0.0.1", name="io_test")
++    yield dev
++    dev.shutdown()
++
++
++def _io_calls(client):
++    return [c for c in client.calls if c[0] in IO_CALLS]
++
++
++# --- Registry and construction ------------------------------------------------
++
++def test_registry_validates_and_creates_without_connecting(made):
++    entries, issues = validate_devices_config(
++        {"io": {"type": "iologik", "ip_address": "10.0.0.2", "port": "5020"}})
++    assert issues == []
++    assert entries[0].kwargs == {"ip_address": "10.0.0.2", "port": 5020, "slave_id": 1}
++    dev = create_device(entries[0])
++    assert dev.device_id == "io"
++    assert not dev.connected and not dev.ready
++    assert all(name != "connect" for c in made for name in c.names())
++
++    entries, issues = validate_devices_config({"io": {"type": "iologik"}})
++    assert entries == [] and "missing required 'ip_address'" in issues[0]["message"]
++
++
++# --- Initialize and identity --------------------------------------------------
++
++def test_initialize_reads_identity(io, made):
++    io.initialize()
++    assert io.connected and io.ready and not io.faulted
++    info = io.info
++    assert info["model_name"] == "ioLogik E1212"
++    assert info["firmware_version"] == "V3.2.1"
++    assert info["lan_ip"] == "192.168.127.254"
++    json.dumps(info)
++    # The identity reads are the only traffic: nothing written at startup.
++    assert not [c for c in made[-1].calls if c[0] in WRITES]
++
++
++def test_initialize_failure_raises_and_faults(made, monkeypatch):
++    dev = IoLogikE1212("127.0.0.1", name="io_dead")
++    original = io_api.ModbusTcpClient
++
++    def unreachable(*args, **kwargs):
++        client = original(*args, **kwargs)
++        client.connect_ok = False
++        return client
++
++    monkeypatch.setattr(io_api, "ModbusTcpClient", unreachable)
++    with pytest.raises(Exception):
++        dev.initialize()
++    assert dev.faulted and not dev.connected and not dev.ready
++
++
++# --- Public surface task code relies on ---------------------------------------
++
++def test_task_api_write_do_and_read_all_di_unchanged(made):
++    dev = IoLogikE1212("127.0.0.1", slave_id=3, name="io_api")
++    dev.initialize()
++    client = made[-1]
++    client.di[2] = True
++
++    dev.api.write_do(5, True)
++    assert ("write_coil", (5, True), {"device_id": 3}) in client.calls
++    assert dev.api.read_do(5) is True
++
++    states = dev.api.read_all_di()
++    assert states == [False, False, True, False, False, False, False, False]
++    assert all(type(s) is bool for s in states)
++    with pytest.raises(ValueError):
++        dev.api.write_do(8, True)
++    dev.shutdown()
++
++
++# --- Live I/O panel ------------------------------------------------------------
++
++def test_io_points_and_write_io(io, made):
++    assert io.io_points() == []
++    io.initialize()
++    points = io.io_points()
++    json.dumps(points)
++    assert [p["name"] for p in points] == [f"di{i}" for i in range(8)] + [f"do{i}" for i in range(8)]
++    assert all(set(p) == {"name", "kind", "value", "writable"} for p in points)
++    assert all(p["writable"] is (p["kind"] == "do") for p in points)
++
++    io.write_io("do3", 1)
++    assert made[-1].coils[3] is True
++    for bad in ("di0", "do8", "ao0", "do", "x"):
++        with pytest.raises(ValueError):
++            io.write_io(bad, True)
++
++
++# --- Lifecycle -----------------------------------------------------------------
++
++def test_shutdown_is_safe_when_never_connected_and_twice(made):
++    dev = IoLogikE1212("127.0.0.1", name="io_never")
++    dev.shutdown()
++    dev.shutdown()
++    assert not dev.connected
++
++
++def test_disconnect_then_connect(io, made):
++    io.initialize()
++    io.disconnect()
++    assert not io.connected
++    io.connect()
++    assert io.ready and len(made) == 2
++    assert io.api.read_all_di() == [False] * 8
++
++
++def test_abort_shutdown_and_clear_fault_never_switch_outputs(io, made):
++    io.abort()                              # never connected: must not raise
++    io.initialize()
++    io.abort()
++    io.clear_fault()
++    io.shutdown()
++    assert not [c for client in made for c in client.calls if c[0] in WRITES]
++
++
++# --- Added by validate-device ---------------------------------------------------
++
++def test_status_properties_never_touch_the_device(io, made):
++    io.initialize()
++    before = len(_io_calls(made[-1]))
++    for _ in range(20):
++        io.faulted, io.ready, io.connected, io.info, io.link
++    assert len(_io_calls(made[-1])) == before
++
++
++def test_status_properties_dont_wait_for_a_task_exchange(io, made):
++    """A1: a Modbus call can block for timeout x (retries + 1) = 12 s by default.
++    The fault monitor must not queue behind it."""
++    io.initialize()
++    lock = io.api._client._lock         # the lock _SerializedClient takes per call
++    held, release = threading.Event(), threading.Event()
++
++    def long_exchange():
++        with lock:
++            held.set()
++            release.wait(2)
++
++    worker = threading.Thread(target=long_exchange)
++    worker.start()
++    assert held.wait(1)
++    try:
++        started = time.monotonic()
++        result = {}
++        reader = threading.Thread(
++            target=lambda: result.update(v=(io.faulted, io.ready, io.connected, io.info)))
++        reader.start()
++        reader.join(0.5)
++        assert not reader.is_alive(), "status read blocked behind the session lock"
++        assert time.monotonic() - started < 0.1
++    finally:
++        release.set()
++        worker.join()
++        reader.join()
++
++
++def test_no_reply_latches_fault_with_reason(io, made):
++    """B1/B3: cable pulled. pymodbus times out (ModbusIOException) and keeps
++    the socket open, so 'socket open' says nothing about the link."""
++    io.initialize()
++    made[-1].fail_with = ModbusIOException("No response received after 3 retries")
++    with pytest.raises(ModbusException):
++        io.api.write_do(0, True)
++    assert io.faulted and not io.ready and not io.connected
++    assert "No response" in (getattr(io, "_fault", None) or "")
++
++
++def test_link_drop_fault_stays_latched_until_cleared(io, made):
++    """B1: after the peer closes the socket, pymodbus reconnects on the next
++    call by itself. The fault must stay latched until Clear faults."""
++    io.initialize()
++    made[-1].fail_with = ConnectionException("Connection unexpectedly closed")
++    with pytest.raises(ModbusException):
++        io.api.read_all_di()
++    assert io.faulted
++    io.api.read_all_di()                    # silently reconnects in pymodbus
++    assert io.faulted and not io.ready
++
++
++def test_clear_fault_reopens_the_session_without_writing(io, made):
++    """B4: Clear faults must give a fresh session, not only drop the flag."""
++    io.initialize()
++    made[-1].fail_with = ModbusIOException("No response received after 3 retries")
++    with pytest.raises(ModbusException):
++        io.api.read_all_di()
++    sessions = len(made)
++
++    io.clear_fault()
++    assert not io.faulted and io.ready
++    assert len(made) == sessions + 1
++    assert made[-2].socket is None          # the stale session was closed
++    assert io.api.read_all_di() == [False] * 8
++    assert not [c for client in made for c in client.calls if c[0] in WRITES]
++
++    # Not faulted: clear_fault is a no-op, no new session.
++    io.clear_fault()
++    assert len(made) == sessions + 1
++
++
++def test_clear_fault_after_socket_closed_recovers(io, made):
++    """B4: the peer closed the socket. Clear faults must bring the device
++    back without needing a task call first."""
++    io.initialize()
++    made[-1].fail_with = ConnectionException("Connection unexpectedly closed")
++    with pytest.raises(ModbusException):
++        io.api.read_all_di()
++    io.clear_fault()
++    assert not io.faulted and io.ready
++
++
++def test_refused_command_is_not_a_fault(io, made):
++    """B2: the unit answering with a Modbus exception (bad address, ...) is
++    the task's error, not a dead device."""
++    io.initialize()
++    made[-1].refuse.add(io.api._ADDR_DO_STATUS + 2)
++    with pytest.raises(ModbusException):
++        io.api.write_do(2, True)
++    assert not io.faulted and io.ready
++    assert io.api.read_all_di() == [False] * 8
++
++
++def test_unsupported_identity_register_does_not_fault(made, monkeypatch):
++    """C1/B2: a unit refusing an identity register still initializes, healthy."""
++    original = io_api.ModbusTcpClient
++
++    def no_firmware_register(*args, **kwargs):
++        client = original(*args, **kwargs)
++        client.refuse.add(io_api.IoLogikE1212Api._ADDR_FIRMWARE_VERSION)
++        return client
++
++    monkeypatch.setattr(io_api, "ModbusTcpClient", no_firmware_register)
++    dev = IoLogikE1212("127.0.0.1", name="io_old_fw")
++    dev.initialize()
++    assert dev.ready and not dev.faulted
++    assert dev.info["model_name"] == "ioLogik E1212"
++    assert dev.info["firmware_version"] is None
++    dev.shutdown()
++
++
++def test_initialize_fails_when_the_unit_never_answers(made, monkeypatch):
++    """C1: the TCP connect succeeds (something listens on 502) but no Modbus
++    reply comes: initialize must raise and leave the device faulted."""
++    original = io_api.ModbusTcpClient
++
++    def silent(*args, **kwargs):
++        client = original(*args, **kwargs)
++        client.fail_with = ModbusIOException("No response received after 3 retries")
++        return client
++
++    monkeypatch.setattr(io_api, "ModbusTcpClient", silent)
++    dev = IoLogikE1212("127.0.0.1", name="io_silent")
++    with pytest.raises(ModbusException):
++        dev.initialize()
++    assert dev.faulted and not dev.connected
++    dev.shutdown()
++
++
++def test_api_closes_the_session_on_a_link_error(io, made):
++    """E3: after a timeout the late reply must not be read as the next answer,
++    so the API drops the session before re-raising."""
++    io.initialize()
++    client = made[-1]
++    client.fail_with = ModbusIOException("No response received after 3 retries")
++    with pytest.raises(ModbusException):
++        io.api.read_all_do()
++    assert "close" in client.names()

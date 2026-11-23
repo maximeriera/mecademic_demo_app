@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: workspace-custom-ring-light
+expected_outcome: |
+  A workspace-only driver in examples/gige_cv_analysis declared with type "custom" and a
+  correct driver "module:Class" path in that workspace's config.yaml, with devices/registry.py
+  and devices/__init__.py untouched. The constructor converts and checks its own arguments,
+  status properties never touch the hardware, comm errors and ERR overtemp are handled, the
+  60 s idle disconnect is dealt with, and a hardware-free test passes.
+context:
+  scaffold_script: place-files.sh

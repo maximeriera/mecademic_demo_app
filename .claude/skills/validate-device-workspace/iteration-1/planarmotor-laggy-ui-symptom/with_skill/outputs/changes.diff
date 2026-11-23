@@ -1,0 +1,350 @@
+diff --git a/tests/test_planar_motor.py b/tests/test_planar_motor.py
+new file mode 100644
+index 0000000..4647002
+--- /dev/null
++++ b/tests/test_planar_motor.py
+@@ -0,0 +1,344 @@
++"""PlanarMotor driver and PlanarMotorApi, against a fake pmclib (no PMC, no movers).
++
++``devices.api.PlanarMotorApi`` talks to the controller through two pmclib
++modules it imports as ``sys`` (``pmclib.system_commands``, not Python's sys)
++and ``bot`` (``pmclib.xbot_commands``). The fixture replaces both module
++aliases with one :class:`FakePmc` that records every call, so the tests run
++the real driver and API code and can count what reaches the controller.
++``pmc_types`` stays the real one (enums only, no I/O).
++
++Tests marked ``xfail(strict=True)`` document a contract violation found by
++validate-device. They turn into failures once the driver is fixed: remove the
++marker then, and the test guards the fix.
++"""
++
++import threading
++import time
++from types import SimpleNamespace
++
++import pytest
++
++import devices.api.PlanarMotorApi as pm_api
++from devices.PlanarMotor import PlanarMotor
++from devices.registry import create_device, validate_devices_config
++from pmclib import pmc_types
++
++PMCSTATUS = pmc_types.PMCSTATUS
++XBOTSTATE = pmc_types.XBOTSTATE
++
++# Calls that make a mover levitate, land or move.
++MOTION_CALLS = {"activate_xbots", "deactivate_xbots", "linear_motion_si",
++                "auto_driving_motion_si", "rotary_motion_timed_spin", "run_motion_macro"}
++
++
++class FakePmc:
++    """Stands in for both ``pmclib.system_commands`` and ``pmclib.xbot_commands``.
++
++    ``link_up = False`` makes every call raise ``PmcError`` the way pmclib
++    reports a failed command (the real library's behaviour on a dropped link
++    is not verified). ``status_delay`` makes ``get_pmc_status`` slow, like a
++    round trip on a busy or degraded link. ``fail_next`` raises a given
++    exception from the next named call.
++    """
++
++    def __init__(self):
++        self.calls = []
++        self.lock = threading.Lock()
++        self.link_up = True
++        self.connect_ok = True
++        self.status = PMCSTATUS.PMC_INACTIVE
++        self.xbot_state = XBOTSTATE.XBOT_IDLE
++        self.status_delay = 0.0
++        self.fail_next = {}          # call name -> exception instance
++
++    def _call(self, name, *args):
++        with self.lock:
++            self.calls.append((name, args))
++            exc = self.fail_next.pop(name, None)
++        if exc is not None:
++            raise exc
++        if not self.link_up:
++            raise pmc_types.PmcError(f"{name} command failed with code 2(COMMUNICATION_TIMEOUT)")
++
++    def names(self):
++        with self.lock:
++            return [c[0] for c in self.calls]
++
++    # --- system_commands ---
++    def connect_to_specific_pmc(self, ip_address):
++        with self.lock:
++            self.calls.append(("connect_to_specific_pmc", (ip_address,)))
++        return self.connect_ok and self.link_up
++
++    def auto_search_and_connect_to_pmc(self):
++        with self.lock:
++            self.calls.append(("auto_search_and_connect_to_pmc", ()))
++        return self.connect_ok and self.link_up
++
++    def disconnect_from_pmc(self):
++        with self.lock:
++            self.calls.append(("disconnect_from_pmc", ()))
++
++    def is_master(self):
++        self._call("is_master")
++        return True
++
++    def gain_mastership(self):
++        self._call("gain_mastership")
++
++    def get_pmc_status(self):
++        self._call("get_pmc_status")
++        if self.status_delay:
++            time.sleep(self.status_delay)
++        return self.status
++
++    # --- xbot_commands ---
++    def activate_xbots(self):
++        self._call("activate_xbots")
++        self.status = PMCSTATUS.PMC_FULLCTRL
++
++    def deactivate_xbots(self):
++        self._call("deactivate_xbots")
++        self.status = PMCSTATUS.PMC_INACTIVE
++
++    def get_xbot_status(self, xbot_id=None, feedback_type=None):
++        self._call("get_xbot_status", xbot_id)
++        return SimpleNamespace(xbot_id=xbot_id, xbot_state=self.xbot_state)
++
++    def get_all_xbot_info(self, option):
++        self._call("get_all_xbot_info", option)
++        return [SimpleNamespace(xbot_id=1, xbot_state=self.xbot_state, x_pos=0.06, y_pos=0.06)]
++
++    def linear_motion_si(self, *args):
++        self._call("linear_motion_si", *args)
++
++    def stop_motion(self, xbot_id):
++        self._call("stop_motion", xbot_id)
++
++
++@pytest.fixture
++def pmc(monkeypatch):
++    fake = FakePmc()
++    monkeypatch.setattr(pm_api, "sys", fake)
++    monkeypatch.setattr(pm_api, "bot", fake)
++    return fake
++
++
++@pytest.fixture
++def motor(pmc):
++    dev = PlanarMotor("127.0.0.1", name="pm_test")
++    yield dev
++    dev.shutdown()
++
++
++def _status_reads(dev, n=1):
++    for _ in range(n):
++        dev.faulted, dev.ready, dev.connected, dev.info
++
++
++# --- Wiring and lifecycle --------------------------------------------------
++
++def test_registry_validates_and_creates_without_connecting(pmc):
++    entries, issues = validate_devices_config({"pm": {"type": "planarmotor"}})
++    assert issues == []
++    assert entries[0].kwargs == {"ip_address": "192.168.10.200"}
++    dev = create_device(entries[0])
++    assert dev.device_id == "pm" and not dev.connected
++    assert pmc.calls == []
++
++
++def test_initialize_connects_and_activates(motor, pmc):
++    motor.initialize()
++    assert motor.connected and motor.ready and not motor.faulted
++    assert pmc.names()[:3] == ["connect_to_specific_pmc", "is_master", "activate_xbots"]
++    assert motor.info["ip_address"] == "127.0.0.1"
++
++
++def test_initialize_against_unreachable_pmc_raises_and_faults(motor, pmc):
++    pmc.connect_ok = False
++    with pytest.raises(Exception):
++        motor.initialize()
++    assert motor.faulted and not motor.connected and not motor.ready
++
++
++def test_shutdown_is_safe_when_never_connected_and_twice(pmc):
++    dev = PlanarMotor("127.0.0.1", name="never")
++    dev.shutdown()
++    dev.shutdown()
++    assert not dev.connected
++    assert pmc.calls == []
++
++
++def test_shutdown_lands_movers_then_disconnects(motor, pmc):
++    motor.initialize()
++    motor.shutdown()
++    names = pmc.names()
++    assert names.index("deactivate_xbots") < names.index("disconnect_from_pmc")
++
++
++# --- Added by validate-device ---
++
++# A1: the fault monitor reads faulted then ready every 200 ms, and /api/info
++# reads connected, ready and faulted every second per open page.
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device A1: PlanarMotor.faulted -> PlanarMotorApi.faulted -> "
++    "get_pmc_status(), a PMC round trip on every read; ready reads faulted again"))
++def test_status_properties_never_touch_the_device(motor, pmc):
++    motor.initialize()
++    before = len(pmc.calls)
++    _status_reads(motor, 20)
++    assert pmc.names()[before:] == []
++
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device A1: a slow PMC reply stalls every status read, so one "
++    "monitor cycle waits on the PMC twice before it checks the next device"))
++def test_status_reads_dont_wait_on_a_slow_pmc(motor, pmc):
++    motor.initialize()
++    pmc.status_delay = 0.3            # a degraded link / busy controller
++    started = time.monotonic()
++    motor.faulted, motor.ready        # what the fault monitor reads per cycle
++    assert time.monotonic() - started < 0.1
++
++
++# A2 / B1: a dead link must fault the device, and reading status must not raise.
++
++def test_link_drop_during_a_task_call_latches_fault(motor, pmc):
++    motor.initialize()
++    pmc.link_up = False
++    with pytest.raises(pmc_types.PmcError):
++        motor.api.send_single_linear_command(1, 0.12, 0.06)
++    # Must hold with or without a status poll: today it comes from the poll
++    # (A1), after the fix it must come from the failed call itself.
++    assert motor.faulted and not motor.ready
++
++
++# B2: a refused command is the task's problem, not a cell fault.
++
++def test_refused_command_is_not_a_fault(motor, pmc):
++    motor.initialize()
++    pmc.fail_next["linear_motion_si"] = pmc_types.PmcError(
++        "linear_motion_si command failed with code 6(INVALIDPARAMS)")
++    with pytest.raises(pmc_types.PmcError):
++        motor.api.send_single_linear_command(1, 9.0, 9.0)
++    assert not motor.faulted and motor.ready
++
++
++# C1: a failed initialize must never look healthy.
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device C1: initialize() sets self._faulted on failure, but faulted "
++    "ignores it and re-derives the state from the PMC, which says INACTIVE (not "
++    "ERROR), so a failed activation reports connected, ready and not faulted"))
++def test_failed_activation_is_reported_as_faulted(motor, pmc):
++    pmc.fail_next["activate_xbots"] = pmc_types.PmcError(
++        "activate_xbots command failed with code 24(WRONGPMCSTATE)")
++    with pytest.raises(pmc_types.PmcError):
++        motor.initialize()
++    assert motor.faulted and not motor.ready
++
++
++# B4: Clear faults reopens the session, moves nothing, and is a no-op when healthy.
++
++def test_clear_fault_never_moves_hardware(motor, pmc):
++    motor.initialize()
++    pmc.link_up = False
++    with pytest.raises(pmc_types.PmcError):
++        motor.api.send_single_linear_command(1, 0.12, 0.06)
++    assert motor.faulted
++    pmc.link_up = True
++    before = len(pmc.calls)
++    motor.clear_fault()
++    assert not set(pmc.names()[before:]) & MOTION_CALLS
++
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device B4: clear_fault() never reconnects: it tries "
++    "sys.reset_fault/clear_fault/reset_error (none exist in pmclib) and re-reads "
++    "the status, so a dropped PMC session is never reopened"))
++def test_clear_fault_reopens_the_session(motor, pmc):
++    motor.initialize()
++    pmc.link_up = False
++    with pytest.raises(pmc_types.PmcError):
++        motor.api.send_single_linear_command(1, 0.12, 0.06)
++    assert motor.faulted
++    pmc.link_up = True
++    connects = pmc.names().count("connect_to_specific_pmc")
++    motor.clear_fault()
++    assert pmc.names().count("connect_to_specific_pmc") == connects + 1
++    assert not motor.faulted and motor.ready
++    motor.api.send_single_linear_command(1, 0.12, 0.06)
++
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device B4: clear_fault() runs even when the device is not faulted "
++    "(it queries the PMC instead of returning early)"))
++def test_clear_fault_is_a_no_op_when_healthy(motor, pmc):
++    motor.initialize()
++    before = len(pmc.calls)
++    motor.clear_fault()
++    assert pmc.names()[before:] == []
++
++
++# C5: ABORT stops the movers and unblocks the task, then gets out of the way.
++
++def test_abort_unblocks_a_move_wait(motor, pmc):
++    motor.initialize()
++    pmc.xbot_state = XBOTSTATE.XBOT_MOTION      # moving forever
++    raised = []
++
++    def task():
++        try:
++            motor.api.wait_move_done(1, timeout=30)
++        except InterruptedError as exc:
++            raised.append(exc)
++
++    worker = threading.Thread(target=task)
++    worker.start()
++    time.sleep(0.2)
++    started = time.monotonic()
++    motor.abort()
++    worker.join(timeout=2)
++    assert not worker.is_alive() and raised
++    assert time.monotonic() - started < 1.0
++
++
++def test_abort_never_raises_when_the_link_is_down(motor, pmc):
++    motor.initialize()
++    pmc.link_up = False
++    motor.abort()
++
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device C5: abort() only sets a Python flag; it never sends "
++    "stop_motion, so the movers finish their trajectories after ABORT"))
++def test_abort_stops_the_movers(motor, pmc):
++    motor.initialize()
++    motor.api.send_single_linear_command(1, 0.12, 0.06)
++    motor.abort()
++    assert "stop_motion" in pmc.names()
++
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device C5: the abort flag is sticky (cleared only by initialize() or "
++    "clear_fault()), so after an ABORT the next task's first wait raises "
++    "InterruptedError on an idle mover"))
++def test_a_new_wait_after_an_abort_works(motor, pmc):
++    motor.initialize()
++    motor.abort()                     # ABORT of the previous task
++    pmc.xbot_state = XBOTSTATE.XBOT_IDLE
++    assert motor.api.wait_move_done(1, timeout=1) == XBOTSTATE.XBOT_IDLE
++
++
++# C2: shutdown after an ABORT must still land the movers.
++
++@pytest.mark.xfail(strict=True, reason=(
++    "validate-device C2: after abort(), deactivate_bots() raises InterruptedError "
++    "on the sticky flag, shutdown() logs it and disconnects with the movers "
++    "still levitating"))
++def test_shutdown_after_abort_still_lands_movers(motor, pmc):
++    motor.initialize()
++    motor.abort()
++    motor.shutdown()
++    assert "deactivate_xbots" in pmc.names()

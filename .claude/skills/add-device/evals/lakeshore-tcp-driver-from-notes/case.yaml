@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: lakeshore-tcp-driver-from-notes
+expected_outcome: |
+  A built-in lakeshore_336 device type: a socket-based protocol module in devices/api/
+  that follows the user's notes (setters get no reply), a Device driver whose status
+  properties never touch the hardware and whose comm errors latch a fault, the registry
+  entry, the devices/__init__.py export, config.yaml and README updates, telemetry with
+  the A and B temperatures, and a hardware-free pytest that passes with the full suite.
+context:
+  scaffold_script: place-files.sh

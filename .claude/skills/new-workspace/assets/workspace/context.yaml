@@ -1,0 +1,52 @@
+# context.yaml — params and variables of <<TITLE>>
+#
+# Read by task code through `context`, shown and edited in the Variables tab
+# while no task runs. This file is only read, never rewritten, so comments
+# are safe. Entries with `persist: true` are saved to context.state.json next
+# to it (git-ignored); delete that file to start again from the defaults.
+#
+# Entry format (params and variables alike):
+#   <name>:
+#     type: int | float | bool | str
+#     default: <typed value>        # starting value, and what a reset restores
+#     editable_when_idle: true      # false = read-only in the UI (code can still write it)
+#     reset_on: [event, ...]        # initialize, prod_start, prod_stop, abort, fault, or none
+#     persist: false                # true = keep the value across restarts
+#     description: <free text>      # shown in the Variables tab
+#
+# Task code that writes an entry not declared here raises ContextError, and
+# reading one returns the default passed in code, silently. Declare every
+# name the code uses.
+
+settings:
+  default_reset_events: none
+
+params:
+  program_timeout_s:
+    type: float
+    default: 60
+    editable_when_idle: true
+    description: Longest a robot program may take before the cycle faults, seconds.
+
+  feeder_retries:
+    type: int
+    default: 3
+    editable_when_idle: true
+    description: Times to ask the feeder for a part before rejecting the cycle.
+
+variables:
+  part_count:
+    type: int
+    default: 0
+    editable_when_idle: false
+    reset_on: prod_start
+    persist: true
+    description: Parts placed since production start.
+
+  reject_count:
+    type: int
+    default: 0
+    editable_when_idle: false
+    reset_on: prod_start
+    persist: true
+    description: Cycles that found no pickable part since production start.

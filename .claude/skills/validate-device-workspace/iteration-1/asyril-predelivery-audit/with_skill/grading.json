@@ -1,0 +1,55 @@
+{
+  "expectations": [
+    {
+      "text": "The report flags that AsyrilEyePlus.clear_fault() only resets the _faulted flag without reopening the connection, rated Major (or higher)",
+      "passed": true,
+      "evidence": "Finding 3 (Major, B4): clear_fault() only sets api._faulted = False, no reopen, no early return."
+    },
+    {
+      "text": "The report flags the print() call in shutdown() and/or log messages missing the [device_id] prefix as a logging finding",
+      "passed": true,
+      "evidence": "Finding 9 (G1): print() in shutdown(), unprefixed log in initialize() and the API."
+    },
+    {
+      "text": "The report notes the 'recipe' mismatch: registry default 0 while the constructor requires recipe",
+      "passed": true,
+      "evidence": "Finding 8 (F1): registry recipe default 0 vs required constructor argument."
+    },
+    {
+      "text": "The report gives a verdict on status-property I/O that reflects following the chain into AsyrilAPI (e.g. distinguishes the driver reading api._connected / api._faulted attributes from the API's connected property that peeks the socket)",
+      "passed": true,
+      "evidence": "A1 passed with reasoning: driver reads api._connected/_faulted; notes the API connected property peeks (MSG_PEEK) but is unused by the driver."
+    },
+    {
+      "text": "A new tests/test_asyril*.py exercises AsyrilEyePlus against a fake TCP Eye+ (FakeTcpInstrument or similar), with no hardware",
+      "passed": true,
+      "evidence": "tests/test_asyril_eye_plus.py against FakeTcpInstrument (tests/fake_instrument.py created)."
+    },
+    {
+      "text": "Tests that fail because of driver contract violations are marked pytest.mark.xfail(strict=True) with a reason naming the finding",
+      "passed": true,
+      "evidence": "12 xfail(strict=True) tests, reasons name findings."
+    },
+    {
+      "text": "The new test file and the full tests/ suite pass in the final pytest run",
+      "passed": true,
+      "evidence": "pytest.txt: 148 passed, 12 xfailed."
+    },
+    {
+      "text": "devices/Asyril.py, devices/api/AsyrilAPI.py and devices/registry.py are not modified",
+      "passed": true,
+      "evidence": "changes.diff only touches tests/."
+    },
+    {
+      "text": "The final response has a findings table with severity, check, evidence (file:line) and how each finding was proven, a passed list, a not-verified section, and offers fixes",
+      "passed": true,
+      "evidence": "Findings table with Sev/Check/Finding/Evidence/Proven by, Passed list, Not verified, Tests, Proposed fixes + question."
+    }
+  ],
+  "summary": {
+    "passed": 9,
+    "failed": 0,
+    "total": 9,
+    "pass_rate": 1.0
+  }
+}

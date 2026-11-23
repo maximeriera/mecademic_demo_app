@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: serial-motion-without-manual
+expected_outcome: |
+  A built-in Newport SMC100 device type over pyserial with port and controller-address keys,
+  homing at initialize but never in clear_fault, an abort() that stops the axis and interrupts
+  a blocking wait, status properties that never touch the hardware, a hardware-free test with a
+  fake serial port, docs updates, and a final report that clearly flags the protocol commands
+  written from memory as unverified and says how to check them at the machine.

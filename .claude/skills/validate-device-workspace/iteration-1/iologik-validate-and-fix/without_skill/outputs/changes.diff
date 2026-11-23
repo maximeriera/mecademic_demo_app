@@ -1,0 +1,938 @@
+diff --git a/app_logic/config.yaml b/app_logic/config.yaml
+index 567c136..86ecc25 100644
+--- a/app_logic/config.yaml
++++ b/app_logic/config.yaml
+@@ -44,6 +44,8 @@
+ #   ip_address: "192.168.127.254"   # IP address of the ioLogik unit
+ #   port: 502                       # Modbus TCP port (optional, default: 502)
+ #   slave_id: 1                     # Modbus slave/unit ID (optional, default: 1)
++#   timeout: 1.0                    # seconds per connect/reply (optional, default: 1.0)
++#   retries: 1                      # extra attempts after a timeout (optional, default: 1)
+ #
+ # --- Brainboxes ED Digital I/O (BrainboxesEDDigital) ---
+ #   type: "brainboxes_ed_digital"
+diff --git a/devices/IoLogikE1212.py b/devices/IoLogikE1212.py
+index f8d835c..085226f 100644
+--- a/devices/IoLogikE1212.py
++++ b/devices/IoLogikE1212.py
+@@ -21,6 +21,12 @@ class IoLogikE1212(Device):
+         Modbus slave / unit ID (default: 1).
+     name : str, optional
+         Custom device identifier used for logging; auto-generated if omitted.
++    timeout : float
++        Seconds to wait for a connection or a reply (default: 1.0).
++    retries : int
++        Extra attempts per request after a timeout (default: 1). A dead unit
++        blocks the calling task for about ``timeout * (retries + 1)`` seconds
++        before the error is raised and the device faults.
+ 
+     Example
+     -------
+@@ -32,7 +38,8 @@ class IoLogikE1212(Device):
+ 
+     supports_reconnect = True
+ 
+-    def __init__(self, ip_address: str, port: int = 502, slave_id: int = 1, name=None):
++    def __init__(self, ip_address: str, port: int = 502, slave_id: int = 1, name=None,
++                 timeout: float = 1.0, retries: int = 1):
+         if name is None:
+             name = f"IoLogikE1212_{ip_address}"
+         super().__init__(device_id=name)
+@@ -44,6 +51,8 @@ class IoLogikE1212(Device):
+             port=port,
+             slave_id=slave_id,
+             logger=self.logger,
++            timeout=timeout,
++            retries=retries,
+         )
+         # Read once per connection: /api/info polls this every second.
+         self._identity = {"model_name": None, "firmware_version": None, "lan_ip": None}
+@@ -79,6 +88,9 @@ class IoLogikE1212(Device):
+ 
+     def initialize(self):
+         self._api.connect()
++        # A TCP connect alone does not prove the unit answers Modbus: probe it,
++        # so INITIALIZE fails instead of reporting a silent unit as ready.
++        self._api.read_all_do()
+         try:
+             self._identity = {
+                 "model_name": self._api.get_model_name(),
+@@ -87,12 +99,18 @@ class IoLogikE1212(Device):
+             }
+         except Exception as e:
+             self.logger.warning(f"[{self.device_id}] Could not read the unit identity: {e}")
++            if self._api.is_connected:
++                # The probe answered and the link is still up: an identity
++                # register this firmware refuses is not a device fault.
++                self._api._faulted = False
+ 
+     def shutdown(self):
+         self._api.disconnect()
+ 
+     def clear_fault(self):
+-        self._api._faulted = False
++        # Reconnect if the socket was dropped, and only clear once the unit
++        # answers: clearing a flag on an unreachable unit made it look healthy.
++        self._api.recover()
+         self.logger.info("Fault flag cleared on ioLogik E1212.")
+ 
+     def abort(self):
+diff --git a/devices/api/IoLogikE1212Api.py b/devices/api/IoLogikE1212Api.py
+index d3391a6..4b2c463 100644
+--- a/devices/api/IoLogikE1212Api.py
++++ b/devices/api/IoLogikE1212Api.py
+@@ -1,8 +1,9 @@
+ import logging
++import operator
+ import threading
+ 
+ from pymodbus.client import ModbusTcpClient
+-from pymodbus.exceptions import ModbusException
++from pymodbus.exceptions import ConnectionException, ModbusException
+ 
+ 
+ class _SerializedClient:
+@@ -17,6 +18,12 @@ class _SerializedClient:
+         self._client = client
+         self._lock = threading.RLock()
+ 
++    def is_socket_open(self) -> bool:
++        # Lock-free on purpose: the 200 ms health monitor reads this, and it
++        # must not wait for a request stuck on a dead unit (up to
++        # timeout x (retries + 1) seconds).
++        return self._client.is_socket_open()
++
+     def __getattr__(self, name):
+         attr = getattr(self._client, name)
+         if not callable(attr):
+@@ -35,9 +42,15 @@ class IoLogikE1212Api:
+     Wraps :class:`pymodbus.client.ModbusTcpClient` and exposes every register
+     in the E1212 datasheet as a named method.
+ 
+-    The E1212 provides:
+-      - 16 digital input  (DI) channels, each with a 32-bit hardware counter
+-      - 8  digital output (DO) channels with pulse-output capability
++    This driver exposes:
++      - 8 digital input  (DI) channels (``DI_COUNT``), each with a 32-bit
++        hardware counter
++      - 8 digital output (DO) channels with pulse-output capability
++
++    Every request goes through :meth:`_call`: transport failures (timeout,
++    dropped socket) and Modbus exception responses latch the fault flag and
++    raise a :class:`pymodbus.exceptions.ModbusException` subclass. A call made
++    before :meth:`connect` raises :class:`~pymodbus.exceptions.ConnectionException`.
+ 
+     Parameters
+     ----------
+@@ -47,6 +60,11 @@ class IoLogikE1212Api:
+         Modbus TCP port (default: 502).
+     slave_id : int
+         Modbus slave / unit ID (default: 1).
++    timeout : float
++        Seconds to wait for a connection or a reply (default: 1.0).
++    retries : int
++        Extra attempts per request after a timeout (default: 1). A dead unit
++        blocks a call for about ``timeout * (retries + 1)`` seconds.
+     logger : logging.Logger
+         Logger instance supplied by the parent :class:`~devices.IoLogikE1212`
+         device so that all messages appear under the same logger hierarchy.
+@@ -108,11 +126,15 @@ class IoLogikE1212Api:
+         port: int = 502,
+         slave_id: int = 1,
+         logger: logging.Logger = None,
++        timeout: float = 1.0,
++        retries: int = 1,
+     ):
+         self.logger = logger or logging.getLogger(__name__)
+         self._ip_address = ip_address
+         self._port = port
+         self._slave_id = slave_id
++        self._timeout = float(timeout)
++        self._retries = int(retries)
+         self._connected = False
+         self._faulted = True
+         self._client: _SerializedClient | None = None
+@@ -122,37 +144,62 @@ class IoLogikE1212Api:
+     # ------------------------------------------------------------------
+ 
+     def connect(self) -> None:
+-        """Open the Modbus TCP connection to the device."""
++        """Open the Modbus TCP connection to the device.
++
++        Raises :class:`ConnectionError` (and leaves no client behind) when the
++        unit cannot be reached.
++        """
+         self.logger.info(f"Connecting to ioLogik E1212 at {self._ip_address}:{self._port}")
+         if self._client is not None:
+             # A second connect() without disconnect() used to leak this socket.
+             self._client.close()
+-        self._client = _SerializedClient(ModbusTcpClient(host=self._ip_address, port=self._port))
+-        if not self._client.connect():
++            self._client = None
++        client = _SerializedClient(ModbusTcpClient(
++            host=self._ip_address, port=self._port,
++            timeout=self._timeout, retries=self._retries,
++        ))
++        if not client.connect():
++            client.close()
++            self._connected = False
++            self._faulted = True
+             msg = f"Could not reach ioLogik E1212 at {self._ip_address}:{self._port}"
+             self.logger.error(msg)
+             raise ConnectionError(msg)
++        self._client = client
+         self._connected = True
+         self._faulted = False
+         self.logger.info("ioLogik E1212 connected successfully.")
+ 
+     def disconnect(self) -> None:
+-        """Close the Modbus TCP connection."""
++        """Close the Modbus TCP connection. Safe to call when not connected."""
+         self.logger.info("Disconnecting from ioLogik E1212.")
+-        if self._client:
+-            self._client.close()
+-            self._client = None
++        client, self._client = self._client, None
++        if client is not None:
++            client.close()
+         self._connected = False
+ 
+     @property
+     def is_connected(self) -> bool:
+-        """True if the socket is currently open."""
+-        if self._client:
+-            self._connected = self._client.is_socket_open()
+-        else:
+-            self._connected = False
++        """True if the socket is currently open. Never waits for an in-flight request."""
++        client = self._client
++        self._connected = bool(client is not None and client.is_socket_open())
+         return self._connected
+ 
++    def recover(self) -> None:
++        """Reopen the socket if needed, check the unit answers, then clear the fault flag.
++
++        Raises, and leaves the fault latched, when the unit does not answer.
++        """
++        client = self._client
++        if client is None:
++            raise ConnectionException("ioLogik E1212 is not connected; initialize it first.")
++        if not client.is_socket_open() and not client.connect():
++            msg = f"Could not reach ioLogik E1212 at {self._ip_address}:{self._port}"
++            self.logger.error(msg)
++            raise ConnectionError(msg)
++        self.read_all_do()                  # probe: raises on any failure
++        self._faulted = False
++
+     # ------------------------------------------------------------------
+     # Digital Inputs (DI)  – FC02 / FC04 / FC01
+     # ------------------------------------------------------------------
+@@ -163,32 +210,28 @@ class IoLogikE1212Api:
+         Parameters
+         ----------
+         channel : int
+-            Channel index 0–15.
++            Channel index 0–7.
+ 
+         Returns
+         -------
+         bool
+             True = ON, False = OFF.
+         """
+-        self._validate_channel(channel, self.DI_COUNT, "DI")
+-        rsp = self._client.read_discrete_inputs(
+-            self._ADDR_DI_STATUS + channel, count=1, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, f"read_di({channel})")
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI")
++        rsp = self._call(f"read_di({channel})", "read_discrete_inputs",
++                         self._ADDR_DI_STATUS + channel, count=1)
+         return bool(rsp.bits[0])
+ 
+     def read_all_di(self) -> list:
+-        """Read all 16 DI channels.
++        """Read all ``DI_COUNT`` (8) DI channels.
+ 
+         Returns
+         -------
+         list of bool
+-            Index 0 = channel 0, …, index 15 = channel 15.
++            Index 0 = channel 0, …, index 7 = channel 7.
+         """
+-        rsp = self._client.read_discrete_inputs(
+-            self._ADDR_DI_STATUS, count=self.DI_COUNT, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "read_all_di")
++        rsp = self._call("read_all_di", "read_discrete_inputs",
++                         self._ADDR_DI_STATUS, count=self.DI_COUNT)
+         return [bool(b) for b in rsp.bits[: self.DI_COUNT]]
+ 
+     def get_di_counter(self, channel: int) -> int:
+@@ -197,57 +240,50 @@ class IoLogikE1212Api:
+         Parameters
+         ----------
+         channel : int
+-            Channel index 0–15.
++            Channel index 0–7.
+ 
+         Returns
+         -------
+         int
+             Counter value (0 – 4 294 967 295).
+         """
+-        self._validate_channel(channel, self.DI_COUNT, "DI counter")
+-        addr = self._ADDR_DI_COUNTER_VALUE + channel * 2
+-        rsp = self._client.read_input_registers(addr, count=2, device_id=self._slave_id)
+-        self._check_response(rsp, f"get_di_counter({channel})")
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI counter")
++        rsp = self._call(f"get_di_counter({channel})", "read_input_registers",
++                         self._ADDR_DI_COUNTER_VALUE + channel * 2, count=2)
+         high, low = rsp.registers
+         return (high << 16) | low
+ 
+     def start_di_counter(self, channel: int) -> None:
+         """Start the hardware counter on a DI channel."""
+-        self._validate_channel(channel, self.DI_COUNT, "DI counter start")
+-        self._client.write_coil(
+-            self._ADDR_DI_COUNTER_STATUS + channel, True, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI counter start")
++        self._call(f"start_di_counter({channel})", "write_coil",
++                   self._ADDR_DI_COUNTER_STATUS + channel, True)
+ 
+     def stop_di_counter(self, channel: int) -> None:
+         """Stop the hardware counter on a DI channel."""
+-        self._validate_channel(channel, self.DI_COUNT, "DI counter stop")
+-        self._client.write_coil(
+-            self._ADDR_DI_COUNTER_STATUS + channel, False, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI counter stop")
++        self._call(f"stop_di_counter({channel})", "write_coil",
++                   self._ADDR_DI_COUNTER_STATUS + channel, False)
+ 
+     def reset_di_counter(self, channel: int) -> None:
+         """Reset the hardware counter for a DI channel to zero."""
+-        self._validate_channel(channel, self.DI_COUNT, "DI counter reset")
+-        self._client.write_coil(
+-            self._ADDR_DI_COUNTER_RESET + channel, True, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI counter reset")
++        self._call(f"reset_di_counter({channel})", "write_coil",
++                   self._ADDR_DI_COUNTER_RESET + channel, True)
+         self.logger.debug(f"DI counter channel {channel} reset.")
+ 
+     def is_di_counter_overflow(self, channel: int) -> bool:
+         """Return True if the counter overflow flag is set for a DI channel."""
+-        self._validate_channel(channel, self.DI_COUNT, "DI overflow")
+-        rsp = self._client.read_discrete_inputs(
+-            self._ADDR_DI_COUNTER_OVERFLOW + channel, count=1, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, f"is_di_counter_overflow({channel})")
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI overflow")
++        rsp = self._call(f"is_di_counter_overflow({channel})", "read_discrete_inputs",
++                         self._ADDR_DI_COUNTER_OVERFLOW + channel, count=1)
+         return bool(rsp.bits[0])
+ 
+     def clear_di_counter_overflow(self, channel: int) -> None:
+         """Clear the counter overflow flag for a DI channel."""
+-        self._validate_channel(channel, self.DI_COUNT, "DI overflow clear")
+-        self._client.write_coil(
+-            self._ADDR_DI_COUNTER_OVF_CLR + channel, True, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DI_COUNT, "DI overflow clear")
++        self._call(f"clear_di_counter_overflow({channel})", "write_coil",
++                   self._ADDR_DI_COUNTER_OVF_CLR + channel, True)
+ 
+     # ------------------------------------------------------------------
+     # Digital Outputs (DO)  – FC01 / FC03
+@@ -261,11 +297,9 @@ class IoLogikE1212Api:
+         channel : int
+             Channel index 0–7.
+         """
+-        self._validate_channel(channel, self.DO_COUNT, "DO")
+-        rsp = self._client.read_coils(
+-            self._ADDR_DO_STATUS + channel, count=1, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, f"read_do({channel})")
++        channel = self._validate_channel(channel, self.DO_COUNT, "DO")
++        rsp = self._call(f"read_do({channel})", "read_coils",
++                         self._ADDR_DO_STATUS + channel, count=1)
+         return bool(rsp.bits[0])
+ 
+     def read_all_do(self) -> list:
+@@ -276,10 +310,8 @@ class IoLogikE1212Api:
+         list of bool
+             Index 0 = channel 0, …, index 7 = channel 7.
+         """
+-        rsp = self._client.read_coils(
+-            self._ADDR_DO_STATUS, count=self.DO_COUNT, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "read_all_do")
++        rsp = self._call("read_all_do", "read_coils",
++                         self._ADDR_DO_STATUS, count=self.DO_COUNT)
+         return [bool(b) for b in rsp.bits[: self.DO_COUNT]]
+ 
+     def write_do(self, channel: int, value: bool) -> None:
+@@ -292,11 +324,9 @@ class IoLogikE1212Api:
+         value : bool
+             True = ON, False = OFF.
+         """
+-        self._validate_channel(channel, self.DO_COUNT, "DO")
+-        rsp = self._client.write_coil(
+-            self._ADDR_DO_STATUS + channel, bool(value), device_id=self._slave_id
+-        )
+-        self._check_response(rsp, f"write_do({channel}, {value})")
++        channel = self._validate_channel(channel, self.DO_COUNT, "DO")
++        self._call(f"write_do({channel}, {value})", "write_coil",
++                   self._ADDR_DO_STATUS + channel, bool(value))
+         self.logger.debug(f"DO[{channel}] set to {value}.")
+ 
+     def write_all_do(self, values: list) -> None:
+@@ -309,10 +339,8 @@ class IoLogikE1212Api:
+         """
+         if len(values) != self.DO_COUNT:
+             raise ValueError(f"Expected {self.DO_COUNT} values, got {len(values)}.")
+-        rsp = self._client.write_coils(
+-            self._ADDR_DO_STATUS, [bool(v) for v in values], device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "write_all_do")
++        self._call("write_all_do", "write_coils",
++                   self._ADDR_DO_STATUS, [bool(v) for v in values])
+ 
+     # ------------------------------------------------------------------
+     # DO Pulse output  – FC01 + FC03
+@@ -338,30 +366,25 @@ class IoLogikE1212Api:
+         count : int
+             Number of pulses to generate; 0 = continuous until stopped.
+         """
+-        self._validate_channel(channel, self.DO_COUNT, "DO pulse")
+-        self._client.write_register(
+-            self._ADDR_DO_PULSE_ON_WIDTH + channel, on_width_ms, device_id=self._slave_id
+-        )
+-        self._client.write_register(
+-            self._ADDR_DO_PULSE_OFF_WIDTH + channel, off_width_ms, device_id=self._slave_id
+-        )
+-        self._client.write_register(
+-            self._ADDR_DO_PULSE_COUNT + channel, count, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DO_COUNT, "DO pulse")
++        self._call(f"configure_do_pulse({channel}) on width", "write_register",
++                   self._ADDR_DO_PULSE_ON_WIDTH + channel, on_width_ms)
++        self._call(f"configure_do_pulse({channel}) off width", "write_register",
++                   self._ADDR_DO_PULSE_OFF_WIDTH + channel, off_width_ms)
++        self._call(f"configure_do_pulse({channel}) count", "write_register",
++                   self._ADDR_DO_PULSE_COUNT + channel, count)
+ 
+     def start_do_pulse(self, channel: int) -> None:
+         """Start pulse output on a DO channel (must be pre-configured first)."""
+-        self._validate_channel(channel, self.DO_COUNT, "DO pulse start")
+-        self._client.write_coil(
+-            self._ADDR_DO_PULSE_STATUS + channel, True, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DO_COUNT, "DO pulse start")
++        self._call(f"start_do_pulse({channel})", "write_coil",
++                   self._ADDR_DO_PULSE_STATUS + channel, True)
+ 
+     def stop_do_pulse(self, channel: int) -> None:
+         """Stop pulse output on a DO channel."""
+-        self._validate_channel(channel, self.DO_COUNT, "DO pulse stop")
+-        self._client.write_coil(
+-            self._ADDR_DO_PULSE_STATUS + channel, False, device_id=self._slave_id
+-        )
++        channel = self._validate_channel(channel, self.DO_COUNT, "DO pulse stop")
++        self._call(f"stop_do_pulse({channel})", "write_coil",
++                   self._ADDR_DO_PULSE_STATUS + channel, False)
+ 
+     # ------------------------------------------------------------------
+     # System information
+@@ -377,10 +400,8 @@ class IoLogikE1212Api:
+ 
+     def get_firmware_version(self) -> str:
+         """Read firmware version and return as 'Vmajor.minor.patch' string."""
+-        rsp = self._client.read_input_registers(
+-            self._ADDR_FIRMWARE_VERSION, count=2, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "get_firmware_version")
++        rsp = self._call("get_firmware_version", "read_input_registers",
++                         self._ADDR_FIRMWARE_VERSION, count=2)
+         r0, r1 = rsp.registers
+         major = (r0 >> 8) & 0xFF
+         minor =  r0       & 0xFF
+@@ -389,19 +410,13 @@ class IoLogikE1212Api:
+ 
+     def get_lan_ip(self) -> str:
+         """Read LAN IP address and return as dotted-decimal string."""
+-        rsp = self._client.read_input_registers(
+-            self._ADDR_LAN_IP, count=2, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "get_lan_ip")
++        rsp = self._call("get_lan_ip", "read_input_registers", self._ADDR_LAN_IP, count=2)
+         r0, r1 = rsp.registers
+         return f"{(r0 >> 8)}.{r0 & 0xFF}.{(r1 >> 8)}.{r1 & 0xFF}"
+ 
+     def get_lan_mac(self) -> str:
+         """Read LAN MAC address and return as colon-separated hex string."""
+-        rsp = self._client.read_input_registers(
+-            self._ADDR_LAN_MAC, count=3, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "get_lan_mac")
++        rsp = self._call("get_lan_mac", "read_input_registers", self._ADDR_LAN_MAC, count=3)
+         r0, r1, r2 = rsp.registers
+         octets = [
+             (r0 >> 8) & 0xFF, r0 & 0xFF,
+@@ -412,40 +427,70 @@ class IoLogikE1212Api:
+ 
+     def get_uptime(self) -> int:
+         """Return device uptime in seconds (32-bit value)."""
+-        rsp = self._client.read_input_registers(
+-            self._ADDR_DEVICE_UP_TIME, count=2, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "get_uptime")
++        rsp = self._call("get_uptime", "read_input_registers", self._ADDR_DEVICE_UP_TIME, count=2)
+         high, low = rsp.registers
+         return (high << 16) | low
+ 
+     def get_watchdog_alarm(self) -> bool:
+         """Return True if the watchdog alarm flag is currently set."""
+-        rsp = self._client.read_coils(
+-            self._ADDR_WATCHDOG_ALARM_FLAG, count=1, device_id=self._slave_id
+-        )
+-        self._check_response(rsp, "get_watchdog_alarm")
++        rsp = self._call("get_watchdog_alarm", "read_coils", self._ADDR_WATCHDOG_ALARM_FLAG, count=1)
+         return bool(rsp.bits[0])
+ 
+     def clear_watchdog_alarm(self) -> None:
+         """Clear the watchdog alarm flag on the device."""
+-        self._client.write_coil(
+-            self._ADDR_WATCHDOG_ALARM_FLAG, True, device_id=self._slave_id
+-        )
++        self._call("clear_watchdog_alarm", "write_coil", self._ADDR_WATCHDOG_ALARM_FLAG, True)
+         self.logger.info("Watchdog alarm flag cleared.")
+ 
+     # ------------------------------------------------------------------
+     # Private helpers
+     # ------------------------------------------------------------------
+ 
+-    def _validate_channel(self, channel: int, max_channels: int, label: str) -> None:
+-        if not (0 <= channel < max_channels):
++    def _call(self, context: str, method: str, *args, **kwargs):
++        """Run one Modbus request and return its checked response.
++
++        - No client (never connected, or disconnected): ConnectionException.
++        - Transport failure raised by pymodbus (no reply after the retries,
++          socket closed by the unit, refused reconnect) or by the socket: the
++          fault is latched, the socket is dropped so the next exchange starts
++          clean, and the original exception propagates.
++        - Modbus exception response: the fault is latched and a
++          ModbusException is raised (as before).
++        """
++        client = self._client       # local ref: disconnect() may run concurrently
++        if client is None:
++            raise ConnectionException(
++                f"ioLogik E1212 at {self._ip_address}:{self._port} is not connected ('{context}')."
++            )
++        try:
++            response = getattr(client, method)(*args, device_id=self._slave_id, **kwargs)
++        except (ModbusException, OSError) as e:
++            self._faulted = True
++            self.logger.error(f"Modbus transport error in '{context}': {e}")
++            try:
++                client.close()
++            except Exception:
++                pass
++            raise
++        self._check_response(response, context)
++        return response
++
++    @staticmethod
++    def _validate_channel(channel, max_channels: int, label: str) -> int:
++        """Return *channel* as an int; ValueError if it is not an integer in range."""
++        try:
++            index = operator.index(channel)
++        except TypeError:
++            raise ValueError(
++                f"{label} channel must be an integer 0–{max_channels - 1}, got {channel!r}."
++            ) from None
++        if not (0 <= index < max_channels):
+             raise ValueError(
+                 f"{label} channel must be 0–{max_channels - 1}, got {channel}."
+             )
++        return index
+ 
+     def _check_response(self, response, context: str) -> None:
+-        if response.isError():
++        if response is None or response.isError():
+             msg = f"Modbus error in '{context}': {response}"
+             self.logger.error(msg)
+             self._faulted = True
+@@ -453,8 +498,8 @@ class IoLogikE1212Api:
+ 
+     def _read_ascii_registers(self, address: int, count: int) -> str:
+         """Read *count* input registers and decode each word as two ASCII bytes."""
+-        rsp = self._client.read_input_registers(address, count=count, device_id=self._slave_id)
+-        self._check_response(rsp, f"_read_ascii_registers(addr={address})")
++        rsp = self._call(f"_read_ascii_registers(addr={address})", "read_input_registers",
++                         address, count=count)
+         chars = []
+         for reg in rsp.registers:
+             high = (reg >> 8) & 0xFF
+diff --git a/devices/registry.py b/devices/registry.py
+index 62dafa1..df0b72b 100644
+--- a/devices/registry.py
++++ b/devices/registry.py
+@@ -464,6 +464,8 @@ register_device(DeviceSpec(
+         "ip_address": _p("str", doc="ioLogik IP address"),
+         "port": _p("int", 502, "Modbus TCP port"),
+         "slave_id": _p("int", 1, "Modbus unit ID"),
++        "timeout": _p("float", 1.0, "seconds per connection attempt or reply"),
++        "retries": _p("int", 1, "extra attempts per request after a timeout"),
+     },
+     doc="Moxa ioLogik E1212 remote I/O (Modbus TCP).",
+ ))
+diff --git a/tests/test_iologik.py b/tests/test_iologik.py
+new file mode 100644
+index 0000000..9a89ceb
+--- /dev/null
++++ b/tests/test_iologik.py
+@@ -0,0 +1,327 @@
++"""Moxa ioLogik E1212 driver, hardware-free: a fake ModbusTcpClient stands in for the unit."""
++
++import threading
++from types import SimpleNamespace
++
++import pytest
++from pymodbus.exceptions import ConnectionException, ModbusException, ModbusIOException
++
++import devices.api.IoLogikE1212Api as api_module
++from devices.IoLogikE1212 import IoLogikE1212
++from devices.api.IoLogikE1212Api import IoLogikE1212Api
++from devices.registry import create_device, validate_devices_config
++
++
++class FakeModbusClient:
++    """Mimics the parts of pymodbus' sync ModbusTcpClient the driver uses.
++
++    Like the real client, every request first (re)connects when the socket is
++    closed, transport failures are *raised* (ModbusIOException /
++    ConnectionException), and Modbus exception codes come back as a response
++    whose ``isError()`` is True.
++    """
++
++    instances = []
++
++    def __init__(self, host, port=502, timeout=3, retries=3, **_):
++        self.host, self.port, self.timeout, self.retries = host, port, timeout, retries
++        self.reachable = True
++        self.socket_open = False
++        self.raise_on_request = None      # exception raised by every request
++        self.error_response = False       # requests return an exception response
++        self.coils, self.discrete, self.input_regs, self.holding = {}, {}, {}, {}
++        self.calls = []
++        FakeModbusClient.instances.append(self)
++
++    # --- connection ---------------------------------------------------
++    def connect(self):
++        if not self.socket_open:
++            self.socket_open = self.reachable
++        return self.socket_open
++
++    def close(self):
++        self.socket_open = False
++
++    def is_socket_open(self):
++        return self.socket_open
++
++    # --- requests -----------------------------------------------------
++    def _request(self, name, address, device_id, **kw):
++        self.calls.append((name, address, device_id, kw))
++        if not self.connect():
++            raise ConnectionException("Failed to connect")
++        if self.raise_on_request is not None:
++            raise self.raise_on_request
++        return SimpleNamespace(isError=lambda: self.error_response)
++
++    @staticmethod
++    def _bits(table, address, count):
++        bits = [bool(table.get(address + i, False)) for i in range(count)]
++        return bits + [False] * (-len(bits) % 8)      # pymodbus pads to a byte
++
++    def read_discrete_inputs(self, address, *, count=1, device_id=1):
++        rsp = self._request("read_discrete_inputs", address, device_id, count=count)
++        rsp.bits = self._bits(self.discrete, address, count)
++        return rsp
++
++    def read_coils(self, address, *, count=1, device_id=1):
++        rsp = self._request("read_coils", address, device_id, count=count)
++        rsp.bits = self._bits(self.coils, address, count)
++        return rsp
++
++    def read_input_registers(self, address, *, count=1, device_id=1):
++        rsp = self._request("read_input_registers", address, device_id, count=count)
++        rsp.registers = [self.input_regs.get(address + i, 0) for i in range(count)]
++        return rsp
++
++    def write_coil(self, address, value, *, device_id=1):
++        rsp = self._request("write_coil", address, device_id, value=value)
++        if not self.error_response:
++            self.coils[address] = bool(value)
++        return rsp
++
++    def write_coils(self, address, values, *, device_id=1):
++        rsp = self._request("write_coils", address, device_id, values=list(values))
++        if not self.error_response:
++            for i, v in enumerate(values):
++                self.coils[address + i] = bool(v)
++        return rsp
++
++    def write_register(self, address, value, *, device_id=1):
++        rsp = self._request("write_register", address, device_id, value=value)
++        if not self.error_response:
++            self.holding[address] = value
++        return rsp
++
++
++@pytest.fixture(autouse=True)
++def fake_modbus(monkeypatch):
++    FakeModbusClient.instances = []
++    monkeypatch.setattr(api_module, "ModbusTcpClient", FakeModbusClient)
++    yield
++
++
++def _connected_io(**kwargs):
++    io = IoLogikE1212("10.0.0.2", name="test_iologik", **kwargs)
++    io.initialize()
++    return io, FakeModbusClient.instances[-1]
++
++
++# --- Task API used by workspaces: must keep working unchanged -------------
++
++def test_task_api_write_do_and_read_all_di_unchanged():
++    io, fake = _connected_io(slave_id=3)
++    fake.discrete.update({0: True, 5: True})
++
++    io.api.write_do(2, True)
++    assert fake.coils[2] is True
++    assert fake.calls[-1][:3] == ("write_coil", 2, 3)
++    assert io.api.read_do(2) is True
++
++    states = io.api.read_all_di()
++    assert isinstance(states, list) and len(states) == IoLogikE1212Api.DI_COUNT == 8
++    assert states == [True, False, False, False, False, True, False, False]
++    assert io.api.read_di(5) is True
++
++    io.api.write_all_do([True] * 8)
++    assert io.api.read_all_do() == [True] * 8
++    assert io.ready and not io.faulted
++
++
++def test_io_points_and_write_io():
++    io, fake = _connected_io()
++    fake.discrete[1] = True
++    io.write_io("do4", True)
++    points = {p["name"]: p for p in io.io_points()}
++    assert points["di1"]["value"] is True and not points["di1"]["writable"]
++    assert points["do4"]["value"] is True and points["do4"]["writable"]
++    with pytest.raises(ValueError):
++        io.write_io("di0", True)
++    with pytest.raises(ValueError):
++        io.write_io("do8", True)
++
++
++def test_channel_validation():
++    io, _ = _connected_io()
++    for bad in (8, -1, 1.5, "1"):
++        with pytest.raises(ValueError):
++            io.api.write_do(bad, True)
++    with pytest.raises(ValueError):
++        io.api.read_di(8)
++    with pytest.raises(ValueError):
++        io.api.write_all_do([True] * 7)
++
++
++# --- Fault detection -------------------------------------------------------
++
++def test_transport_failure_faults_the_device():
++    """A cable pull makes pymodbus *raise* ModbusIOException; it must not look healthy."""
++    io, fake = _connected_io()
++    fake.raise_on_request = ModbusIOException("No response received after 3 retries")
++    with pytest.raises(ModbusException):
++        io.api.read_all_di()
++    assert io.faulted
++    assert not io.ready
++
++
++def test_dropped_socket_faults_the_device():
++    io, fake = _connected_io()
++    fake.raise_on_request = ConnectionException("Connection unexpectedly closed")
++    with pytest.raises(ModbusException):
++        io.api.write_do(0, True)
++    assert io.faulted
++
++
++@pytest.mark.parametrize("call", [
++    lambda a: a.start_di_counter(0),
++    lambda a: a.stop_di_counter(0),
++    lambda a: a.reset_di_counter(0),
++    lambda a: a.clear_di_counter_overflow(0),
++    lambda a: a.configure_do_pulse(0, 100, 100, 3),
++    lambda a: a.start_do_pulse(0),
++    lambda a: a.stop_do_pulse(0),
++    lambda a: a.clear_watchdog_alarm(),
++])
++def test_write_commands_check_the_response(call):
++    io, fake = _connected_io()
++    fake.error_response = True
++    with pytest.raises(ModbusException):
++        call(io.api)
++    assert io.faulted
++
++
++def test_health_never_waits_for_an_in_flight_request():
++    """The 200 ms monitor reads ``faulted``; a hung request must not block it."""
++    io, _ = _connected_io()
++    client = io.api._client
++    holding = threading.Event()
++    release = threading.Event()
++
++    def hold_lock():
++        with client._lock:
++            holding.set()
++            release.wait(5)
++
++    t = threading.Thread(target=hold_lock, daemon=True)
++    t.start()
++    holding.wait(1)
++    try:
++        result = {}
++        reader = threading.Thread(
++            target=lambda: result.update(f=io.faulted, c=io.connected, r=io.ready), daemon=True)
++        reader.start()
++        reader.join(0.5)
++        assert not reader.is_alive(), "faulted/connected/ready blocked behind the Modbus lock"
++        assert result == {"f": False, "c": True, "r": True}
++    finally:
++        release.set()
++        t.join(1)
++
++
++# --- Lifecycle -------------------------------------------------------------
++
++def test_calls_before_initialize_raise_a_connection_error():
++    io = IoLogikE1212("10.0.0.2", name="test_iologik_cold")
++    with pytest.raises(ConnectionException):
++        io.api.write_do(0, True)
++    with pytest.raises(ConnectionException):
++        io.api.read_all_di()
++    assert io.faulted and not io.connected
++    assert io.io_points() == []
++    io.shutdown()                                   # safe before initialize
++    io.shutdown()
++
++
++def test_failed_connect_raises_and_releases_the_client(monkeypatch):
++    class Unreachable(FakeModbusClient):
++        def __init__(self, *a, **kw):
++            super().__init__(*a, **kw)
++            self.reachable = False
++
++    monkeypatch.setattr(api_module, "ModbusTcpClient", Unreachable)
++    io = IoLogikE1212("10.0.0.2", name="test_iologik_down")
++    with pytest.raises(ConnectionError):
++        io.initialize()
++    assert io.faulted and not io.connected
++    assert io.api._client is None
++
++
++def test_initialize_fails_when_the_unit_does_not_answer(monkeypatch):
++    class Silent(FakeModbusClient):
++        def __init__(self, *a, **kw):
++            super().__init__(*a, **kw)
++            self.raise_on_request = ModbusIOException("No response received")
++
++    monkeypatch.setattr(api_module, "ModbusTcpClient", Silent)
++    io = IoLogikE1212("10.0.0.2", name="test_iologik_silent")
++    with pytest.raises(ModbusException):
++        io.initialize()
++    assert io.faulted and not io.ready
++
++
++def test_refused_identity_register_does_not_fault_initialize(monkeypatch):
++    class NoIdentity(FakeModbusClient):
++        def read_input_registers(self, address, *, count=1, device_id=1):
++            rsp = super().read_input_registers(address, count=count, device_id=device_id)
++            rsp.isError = lambda: True          # illegal data address
++            return rsp
++
++    monkeypatch.setattr(api_module, "ModbusTcpClient", NoIdentity)
++    io = IoLogikE1212("10.0.0.2", name="test_iologik_noid")
++    io.initialize()
++    assert io.ready and not io.faulted
++    assert io.info["model_name"] is None
++
++
++def test_clear_fault_only_clears_when_the_unit_answers():
++    io, fake = _connected_io()
++    fake.raise_on_request = ModbusIOException("No response")
++    with pytest.raises(ModbusException):
++        io.api.read_all_di()
++    assert io.faulted
++
++    # Unit still unreachable: clearing must fail and leave the fault latched.
++    fake.raise_on_request = None
++    fake.reachable = False
++    fake.socket_open = False
++    with pytest.raises(Exception):
++        io.clear_fault()
++    assert io.faulted
++
++    # Unit back: clear_fault reconnects, probes and clears.
++    fake.reachable = True
++    io.clear_fault()
++    assert not io.faulted and io.ready and io.connected
++
++
++def test_reconnect_after_disconnect():
++    io, _ = _connected_io()
++    assert io.supports_reconnect
++    io.disconnect()
++    assert not io.connected and io.faulted
++    io.connect()
++    assert io.connected and io.ready
++    io.api.write_do(0, True)
++
++
++def test_timeout_and_retries_reach_the_client_and_are_bounded_by_default():
++    _connected_io(timeout=0.5, retries=0)
++    fake = FakeModbusClient.instances[-1]
++    assert (fake.timeout, fake.retries) == (0.5, 0)
++
++    _connected_io()
++    fake = FakeModbusClient.instances[-1]
++    # Worst-case wait on a dead unit, per call, with the defaults.
++    assert fake.timeout * (fake.retries + 1) <= 5
++
++
++def test_registry_entry_builds_the_driver():
++    entries, issues = validate_devices_config({
++        "io": {"type": "iologik", "ip_address": "10.0.0.2", "timeout": "0.5", "retries": 0},
++    })
++    assert issues == []
++    io = create_device(entries[0])
++    assert isinstance(io, IoLogikE1212)
++    io.initialize()
++    fake = FakeModbusClient.instances[-1]
++    assert (fake.host, fake.port, fake.timeout, fake.retries) == ("10.0.0.2", 502, 0.5, 0)
+diff --git a/tests/test_registry.py b/tests/test_registry.py
+index ce0d519..d5b6bec 100644
+--- a/tests/test_registry.py
++++ b/tests/test_registry.py
+@@ -19,7 +19,8 @@ def test_valid_entries_get_defaults_and_coercion():
+     assert issues == []
+     by_name = {e.name: e for e in entries}
+     assert by_name["io"].type == "iologik"
+-    assert by_name["io"].kwargs == {"ip_address": "10.0.0.2", "port": 503, "slave_id": 1}
++    assert by_name["io"].kwargs == {"ip_address": "10.0.0.2", "port": 503, "slave_id": 1,
++                                    "timeout": 1.0, "retries": 1}
+     assert by_name["stage"].type == "smaract_mcs2"
+     assert by_name["stage"].kwargs["reference"] == "if_needed"
+ 

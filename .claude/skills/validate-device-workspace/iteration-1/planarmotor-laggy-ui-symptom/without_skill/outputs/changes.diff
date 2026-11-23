@@ -1,0 +1,353 @@
+diff --git a/devices/api/PlanarMotorApi.py b/devices/api/PlanarMotorApi.py
+index 14425f5..8d83cb1 100644
+--- a/devices/api/PlanarMotorApi.py
++++ b/devices/api/PlanarMotorApi.py
+@@ -2,6 +2,7 @@ from pmclib import system_commands as sys   # PMC System level commands (Connect
+ from pmclib import xbot_commands as bot     # PMC Mover level commands (Motion, State)
+ from pmclib import pmc_types                # Enums and Data Structures (Status codes, Move types)
+ 
++import threading
+ import time
+ import logging
+ 
+@@ -37,6 +38,14 @@ class PlanarMotorApi:
+     # Status poll interval for the blocking wait helpers. Kept short so that
+     # abort() interrupts a wait promptly — the cell has moving magnetic movers.
+     POLL_INTERVAL_S = 0.1
++    # Health poller: the only place get_pmc_status() runs for fault reporting.
++    # `faulted` is read at ~5 Hz by the controller's monitor thread and at 1 Hz
++    # by the LivePublisher thread (which also feeds the 10 Hz status stream),
++    # so it must answer from a cache and never wait on the PMC.
++    HEALTH_POLL_S = 0.2
++    # No answer from the PMC for this long counts as a fault, so a hung
++    # controller still stops the cell even though nobody waits on it.
++    HEALTH_STALE_S = 2.0
+ 
+     def __init__(self, ip: str, auto_connect: bool = False, logger: logging.Logger | None = None):
+         # Previously this class called bare logging.warning(), which went to the
+@@ -50,6 +59,11 @@ class PlanarMotorApi:
+         self._connected = False
+         self._faulted = False
+         self._abort_requested = False
++        self._health_lock = threading.Lock()
++        self._last_status = None
++        self._last_status_at = 0.0
++        self._health_stop = threading.Event()
++        self._health_thread: threading.Thread | None = None
+ 
+     @property
+     def is_connected(self) -> bool:
+@@ -61,13 +75,57 @@ class PlanarMotorApi:
+ 
+     @property
+     def faulted(self) -> bool:
++        """Cached fault state; never talks to the PMC (see :meth:`_health_loop`)."""
+         if not self._connected:
+             return self._faulted
++        with self._health_lock:
++            stale = time.monotonic() - self._last_status_at > self.HEALTH_STALE_S
++            return self._faulted or stale
++
++    @property
++    def last_status(self):
++        """Last PMCSTATUS read by the health poller (None before the first read)."""
++        return self._last_status
++
++    def refresh_status(self):
++        """Read the PMC status now and update the cached fault state.
++
++        Blocking (one round trip). Called by the health poller and by
++        :meth:`clear_fault`; status properties only read the cache.
++        """
+         try:
+-            self._faulted = self.get_pmc_status() == pmc_types.PMCSTATUS.PMC_ERROR
+-        except Exception:
+-            self._faulted = True
+-        return self._faulted
++            status = self.get_pmc_status()
++        except Exception as exc:
++            with self._health_lock:
++                if not self._faulted:
++                    self.logger.warning(f"Planar motor status read failed: {exc}")
++                self._faulted = True
++            return None
++        with self._health_lock:
++            self._last_status = status
++            self._last_status_at = time.monotonic()
++            self._faulted = status == pmc_types.PMCSTATUS.PMC_ERROR
++        return status
++
++    def _health_loop(self):
++        while not self._health_stop.wait(self.HEALTH_POLL_S):
++            if self._connected:
++                self.refresh_status()
++
++    def _start_health_poller(self):
++        self._stop_health_poller()
++        self._health_stop.clear()
++        self._health_thread = threading.Thread(
++            target=self._health_loop, name=f"planarmotor_health_{self.ip}", daemon=True
++        )
++        self._health_thread.start()
++
++    def _stop_health_poller(self, timeout: float = 2.0):
++        self._health_stop.set()
++        thread = self._health_thread
++        if thread and thread.is_alive() and thread is not threading.current_thread():
++            thread.join(timeout=timeout)
++        self._health_thread = None
+ 
+     def _raise_if_aborted(self):
+         if self._abort_requested:
+@@ -90,15 +148,15 @@ class PlanarMotorApi:
+         if self.auto_connect:
+             # Broadcast search on local network
+             connection_state = self.sys.auto_search_and_connect_to_pmc()
+-            self.is_connected = connection_state
+-            self._faulted = not bool(connection_state)
+-            return bool(connection_state)
+         else:
+             # Direct IP connection
+             connection_state = self.sys.connect_to_specific_pmc(self.ip)
+-            self.is_connected = connection_state
+-            self._faulted = not bool(connection_state)
+-            return bool(connection_state)
++        self.is_connected = connection_state
++        self._faulted = not bool(connection_state)
++        if self._connected:
++            self.refresh_status()        # seed the cache before anyone reads it
++            self._start_health_poller()
++        return bool(connection_state)
+     
+     def initialize(self, timeout: float = 10.0):
+         """
+@@ -361,10 +419,8 @@ class PlanarMotorApi:
+                 except Exception as exc:
+                     self.logger.warning(f"Planar motor fault reset command '{cmd_name}' failed: {exc}")
+ 
+-        try:
+-            self._faulted = self.get_pmc_status() == pmc_types.PMCSTATUS.PMC_ERROR
+-        except Exception:
+-            self._faulted = True
++        self._faulted = False   # re-judged by the fresh read below
++        self.refresh_status()
+ 
+     def abort(self) -> None:
+         """Requests cancellation for long polling waits in this API wrapper."""
+@@ -372,6 +428,7 @@ class PlanarMotorApi:
+         
+     def shutdown(self):
+         """Closes connection to the PMC hardware."""
++        self._stop_health_poller()
+         if self.is_connected:
+             try:
+                 self.deactivate_bots()
+diff --git a/tests/test_planar_motor.py b/tests/test_planar_motor.py
+new file mode 100644
+index 0000000..b17f9c1
+--- /dev/null
++++ b/tests/test_planar_motor.py
+@@ -0,0 +1,203 @@
++"""PlanarMotor driver without a PMC: a fake pmclib system/xbot layer.
++
++The status properties (``faulted`` / ``ready`` / ``connected``) are read by the
++controller's monitor thread at 5 Hz and by the LivePublisher thread that also
++feeds the 10 Hz ``status`` stream. They must answer from cached state and never
++wait on the PMC, or one slow controller stalls the UI and delays fault
++detection on every other device.
++"""
++
++import sys
++import threading
++import time
++import types
++from enum import IntEnum
++
++import pytest
++
++
++def _install_fake_pmclib():
++    """Stand-in for pmclib on machines where the .NET DLL cannot load."""
++
++    class PMCSTATUS(IntEnum):
++        PMC_UNKNOWN = -1
++        PMC_BOOTING = 0
++        PMC_INACTIVE = 1
++        PMC_ACTIVATING = 2
++        PMC_DISCOVERY = 3
++        PMC_SERVICE = 4
++        PMC_FULLCTRL = 5
++        PMC_INTELLIGENTCTRL = 6
++        PMC_DEACTIVATING = 7
++        PMC_ERRORHANDLING = 8
++        PMC_ERROR = 9
++
++    pkg = types.ModuleType("pmclib")
++    pmc_types = types.ModuleType("pmclib.pmc_types")
++    pmc_types.PMCSTATUS = PMCSTATUS
++    # Other enums only appear in annotations here: any placeholder type will do.
++    pmc_types.__getattr__ = lambda name: type(name, (), {})
++    pkg.pmc_types = pmc_types
++    pkg.system_commands = types.ModuleType("pmclib.system_commands")
++    pkg.xbot_commands = types.ModuleType("pmclib.xbot_commands")
++    sys.modules.update({
++        "pmclib": pkg,
++        "pmclib.pmc_types": pmc_types,
++        "pmclib.system_commands": pkg.system_commands,
++        "pmclib.xbot_commands": pkg.xbot_commands,
++    })
++
++
++try:
++    import pmclib  # noqa: F401  (real library, Windows + pythonnet)
++except Exception:
++    _install_fake_pmclib()
++
++from devices.api import PlanarMotorApi as api_mod  # noqa: E402
++from devices.PlanarMotor import PlanarMotor  # noqa: E402
++
++PMCSTATUS = api_mod.pmc_types.PMCSTATUS
++
++
++class FakeSys:
++    """pmclib.system_commands: one PMC whose status the test controls."""
++
++    def __init__(self):
++        self.status = PMCSTATUS.PMC_FULLCTRL
++        self.status_calls = 0
++        self.raise_on_status = None
++        self.gate = threading.Event()   # cleared = status call hangs (PMC not answering)
++        self.gate.set()
++
++    def connect_to_specific_pmc(self, ip):
++        return True
++
++    def auto_search_and_connect_to_pmc(self):
++        return True
++
++    def is_master(self):
++        return True
++
++    def gain_mastership(self):
++        pass
++
++    def get_pmc_status(self):
++        self.status_calls += 1
++        self.gate.wait(5)
++        if self.raise_on_status:
++            raise self.raise_on_status
++        return self.status
++
++    def disconnect_from_pmc(self):
++        pass
++
++
++class FakeBot:
++    def __init__(self, pmc):
++        self.pmc = pmc
++
++    def activate_xbots(self):
++        self.pmc.status = PMCSTATUS.PMC_FULLCTRL
++
++    def deactivate_xbots(self):
++        self.pmc.status = PMCSTATUS.PMC_INACTIVE
++
++
++def wait_for(predicate, timeout=3.0):
++    deadline = time.monotonic() + timeout
++    while time.monotonic() < deadline:
++        if predicate():
++            return
++        time.sleep(0.01)
++    raise AssertionError("condition not met within %.1fs" % timeout)
++
++
++@pytest.fixture
++def pmc():
++    return FakeSys()
++
++
++@pytest.fixture
++def device(pmc, monkeypatch):
++    monkeypatch.setattr(api_mod.PlanarMotorApi, "HEALTH_POLL_S", 0.02, raising=False)
++    dev = PlanarMotor(ip_address="192.0.2.10", name="planar_test")
++    dev.api.sys = pmc
++    dev.api.bot = FakeBot(pmc)
++    yield dev
++    pmc.gate.set()
++    dev.shutdown()
++
++
++def test_status_reads_do_not_wait_on_the_pmc(device, pmc):
++    device.initialize()
++    assert device.ready and not device.faulted
++
++    pmc.gate.clear()   # PMC stops answering: every status call now blocks
++    try:
++        start = time.monotonic()
++        for _ in range(20):   # 4 s of monitor loop + SSE ticks
++            device.faulted
++            device.ready
++            device.connected
++            assert time.monotonic() - start < 0.2, "a status read waited on the PMC"
++    finally:
++        pmc.gate.set()
++
++
++def test_status_reads_are_not_one_round_trip_each(device, pmc):
++    device.initialize()
++    pmc.status_calls = 0
++    for _ in range(100):
++        device.faulted
++        device.ready
++    # The background poller may run a few times meanwhile, never 200.
++    assert pmc.status_calls < 20
++
++
++def test_pmc_error_is_picked_up_and_cleared(device, pmc):
++    device.initialize()
++    pmc.status = PMCSTATUS.PMC_ERROR
++    wait_for(lambda: device.faulted)
++    assert not device.ready
++
++    pmc.status = PMCSTATUS.PMC_FULLCTRL
++    device.clear_fault()
++    assert not device.faulted
++    assert device.ready
++
++
++def test_status_exception_faults(device, pmc):
++    device.initialize()
++    pmc.raise_on_status = RuntimeError("socket closed")
++    wait_for(lambda: device.faulted)
++
++
++def test_hung_pmc_faults_after_staleness_limit(device, pmc, monkeypatch):
++    monkeypatch.setattr(device.api, "HEALTH_STALE_S", 0.2, raising=False)
++    device.initialize()
++    assert not device.faulted
++    pmc.gate.clear()
++    try:
++        wait_for(lambda: device.faulted, timeout=2.0)
++    finally:
++        pmc.gate.set()
++    # Answers again: the poller brings the fresh status back.
++    wait_for(lambda: not device.faulted)
++
++
++def test_shutdown_stops_polling(device, pmc):
++    device.initialize()
++    wait_for(lambda: pmc.status_calls > 3)
++    device.shutdown()
++    calls = pmc.status_calls
++    time.sleep(0.15)
++    assert pmc.status_calls == calls
++    assert not device.connected
++    assert not device.ready
++
++
++def test_not_connected_reads_nothing(device, pmc):
++    assert not device.connected
++    assert not device.ready
++    assert device.faulted
++    assert pmc.status_calls == 0

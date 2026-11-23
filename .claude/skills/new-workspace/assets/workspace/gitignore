@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Written by the app at runtime
+logs/
+backups/
+context.state.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini

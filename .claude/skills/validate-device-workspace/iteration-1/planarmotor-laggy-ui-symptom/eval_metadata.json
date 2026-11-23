@@ -1,0 +1,14 @@
+{
+  "eval_name": "planarmotor-laggy-ui-symptom",
+  "prompt": "when the planar motor is on the cell the whole UI gets laggy and fault detection on the other devices feels slow. can you check the planarmotor driver? i dont have the PMC with me today so no hardware",
+  "assertions": [
+    "The report identifies that PlanarMotor.faulted (and ready, which reads it) goes through PlanarMotorApi.faulted, a property that calls get_pmc_status() on the PMC, i.e. hardware I/O on every fault-monitor poll",
+    "That status-property I/O finding is rated Critical (or the top severity) and cites file:line locations in both devices/PlanarMotor.py and devices/api/PlanarMotorApi.py",
+    "A new test file for the PlanarMotor driver exists under tests/ and fakes pmclib (monkeypatch or sys.modules) so it runs without hardware",
+    "At least one test asserting the contract (e.g. status properties do no I/O) is kept with pytest.mark.xfail(strict=True, ...) whose reason names the finding, instead of being deleted or weakened",
+    "The new test file and the full tests/ suite pass (xfails count as passing) in the final pytest run",
+    "devices/PlanarMotor.py, devices/api/PlanarMotorApi.py, devices/registry.py and the docs are not modified",
+    "The final response offers specific fixes grouped by severity and asks which to apply, without applying them",
+    "The report states what was not verified because no hardware was available, and does not claim anything was tested on a real PMC"
+  ]
+}

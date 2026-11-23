@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "A tests/test_iologik*.py file exercises IoLogikE1212 with a faked pymodbus ModbusTcpClient (monkeypatched), no hardware",
+      "passed": true,
+      "evidence": "tests/test_iologik_e1212.py monkeypatches io_api.ModbusTcpClient with a fake factory."
+    },
+    {
+      "text": "The trace shows the tests were written and run (with failures or xfails exposing findings) before the driver was edited",
+      "passed": true,
+      "evidence": "Transcript: Write tests -> pytest -> mark xfails -> pytest, then the first Edit of devices/api/IoLogikE1212Api.py."
+    },
+    {
+      "text": "After the changes, IoLogikE1212.clear_fault() reopens the Modbus session (a new client/connect), and a test proves it",
+      "passed": true,
+      "evidence": "clear_fault() closes and reopens the session; test_clear_fault_reopens_the_session_without_writing and test_clear_fault_after_socket_closed_recovers."
+    },
+    {
+      "text": "No test for a fixed finding is still marked xfail; any remaining xfail names a finding the report lists as still open",
+      "passed": true,
+      "evidence": "Final diff has no xfail markers; report says the markers were removed after the fixes (18 passed)."
+    },
+    {
+      "text": "IoLogikE1212Api.write_do and read_all_di keep their names and signatures and the IoLogikE1212 constructor keeps ip_address, port, slave_id, name; the trace shows usages were searched before changing anything",
+      "passed": true,
+      "evidence": "write_do/read_all_di unchanged, guarded by test_task_api_write_do_and_read_all_di_unchanged; usages grepped in app_logic/examples before edits."
+    },
+    {
+      "text": "The full tests/ suite passes in the final pytest run",
+      "passed": true,
+      "evidence": "pytest.txt: 151 passed."
+    },
+    {
+      "text": "The final response lists each finding with what was changed for it or why it stays open, and states what was not verified on hardware",
+      "passed": true,
+      "evidence": "Findings table with a Status column per finding, a 'Not fixed' list with reasons, and a 'Not verified' section."
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: iologik-validate-and-fix
+expected_outcome: |
+  Audits devices/IoLogikE1212.py + devices/api/IoLogikE1212Api.py, writes tests/test_iologik*.py faking pymodbus
+  ModbusTcpClient first, then fixes the in-scope findings (notably clear_fault() that only drops the flag must reopen
+  the Modbus session; shutdown safety; log prefixes), removes the xfail markers of fixed findings, keeps the public
+  api (write_do, read_all_di, constructor args) unchanged after checking usages, and the full suite passes.

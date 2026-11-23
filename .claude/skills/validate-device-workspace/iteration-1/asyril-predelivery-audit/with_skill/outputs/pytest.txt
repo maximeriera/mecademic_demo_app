@@ -1,0 +1,26 @@
+.x.Failed to shutdown: 'NoneType' object has no attribute 'send'
+.Failed to shutdown: 'NoneType' object has no attribute 'send'
+.xxxx.Failed to shutdown: 'NoneType' object has no attribute 'send'
+.Failed to shutdown: 'NoneType' object has no attribute 'send'
+..Failed to shutdown: 'NoneType' object has no attribute 'send'
+.Failed to shutdown: 'NoneType' object has no attribute 'send'
+x.Failed to shutdown: 'NoneType' object has no attribute 'send'
+xx.Failed to shutdown: 'NoneType' object has no attribute 'send'
+x..Failed to shutdown: 'NoneType' object has no attribute 'send'
+xFailed to shutdown: timed out
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Failed to shutdown: [WinError 10053] An established connection was aborted by the software in your host machine
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Failed to shutdown: reset by peer
+x.Failed to shutdown: 'NoneType' object has no attribute 'send'
+.Failed to shutdown: 'NoneType' object has no attribute 'send'
+x............................................. [ 45%]
+........................................................................ [ 90%]
+................                                                         [100%]
+148 passed, 12 xfailed in 24.17s
+Failed to shutdown: 'NoneType' object has no attribute 'send'
+Process exit: Shutting down APPLICATION controller.

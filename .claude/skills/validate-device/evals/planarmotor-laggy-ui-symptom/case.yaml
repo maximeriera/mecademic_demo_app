@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: planarmotor-laggy-ui-symptom
+expected_outcome: |
+  Traces the lag to PlanarMotor.faulted/connected reading PlanarMotorApi.is_connected, a property that queries the
+  PMC (get_pmc_status) on every 200 ms fault-monitor poll, and reports it as Critical with file:line evidence in both
+  files. Writes a hardware-free tests/test_planar_motor*.py faking pmclib, keeps contract violations as strict xfail
+  tests, the full suite passes, the driver itself is not edited, no hardware is contacted, and fixes are offered.

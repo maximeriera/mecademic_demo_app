@@ -1,0 +1,50 @@
+{
+  "expectations": [
+    {
+      "text": "The report identifies that PlanarMotor.faulted (and ready, which reads it) goes through PlanarMotorApi.faulted, a property that calls get_pmc_status() on the PMC, i.e. hardware I/O on every fault-monitor poll",
+      "passed": true,
+      "evidence": "'PlanarMotorApi.faulted ... called get_pmc_status() every time anything read it'; ready reads faulted again."
+    },
+    {
+      "text": "That status-property I/O finding is rated Critical (or the top severity) and cites file:line locations in both devices/PlanarMotor.py and devices/api/PlanarMotorApi.py",
+      "passed": false,
+      "evidence": "No severity rating anywhere, and no file:line evidence (file names only)."
+    },
+    {
+      "text": "A new test file for the PlanarMotor driver exists under tests/ and fakes pmclib (monkeypatch or sys.modules) so it runs without hardware",
+      "passed": true,
+      "evidence": "tests/test_planar_motor.py fakes pmclib system_commands/xbot_commands (and the package if the DLL can't load)."
+    },
+    {
+      "text": "At least one test asserting the contract (e.g. status properties do no I/O) is kept with pytest.mark.xfail(strict=True, ...) whose reason names the finding, instead of being deleted or weakened",
+      "passed": false,
+      "evidence": "No xfail tests: the driver was fixed in the same run so all 7 tests pass; violations were not kept as xfail."
+    },
+    {
+      "text": "The new test file and the full tests/ suite pass (xfails count as passing) in the final pytest run",
+      "passed": true,
+      "evidence": "pytest.txt: 140 passed."
+    },
+    {
+      "text": "devices/PlanarMotor.py, devices/api/PlanarMotorApi.py, devices/registry.py and the docs are not modified",
+      "passed": false,
+      "evidence": "devices/api/PlanarMotorApi.py was modified (background health-poll thread added)."
+    },
+    {
+      "text": "The final response offers specific fixes grouped by severity and asks which to apply, without applying them",
+      "passed": false,
+      "evidence": "The fix was applied without asking; only a follow-up question about PMC_UNKNOWN was asked."
+    },
+    {
+      "text": "The report states what was not verified because no hardware was available, and does not claim anything was tested on a real PMC",
+      "passed": true,
+      "evidence": "'Not verified without the PMC' section; measurements only with a simulated slow PMC."
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 4,
+    "total": 8,
+    "pass_rate": 0.5
+  }
+}

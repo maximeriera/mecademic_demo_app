@@ -1,0 +1,425 @@
+{
+  "metadata": {
+    "skill_name": "validate-device",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-11-13T15:00:36Z",
+    "evals_run": [
+      "asyril-predelivery-audit",
+      "iologik-validate-and-fix",
+      "planarmotor-laggy-ui-symptom"
+    ],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": "asyril-predelivery-audit",
+      "eval_name": "asyril-predelivery-audit",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 9,
+        "failed": 0,
+        "total": 9,
+        "time_seconds": 567.1,
+        "tokens": 172598,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The report flags that AsyrilEyePlus.clear_fault() only resets the _faulted flag without reopening the connection, rated Major (or higher)",
+          "passed": true,
+          "evidence": "Finding 3 (Major, B4): clear_fault() only sets api._faulted = False, no reopen, no early return."
+        },
+        {
+          "text": "The report flags the print() call in shutdown() and/or log messages missing the [device_id] prefix as a logging finding",
+          "passed": true,
+          "evidence": "Finding 9 (G1): print() in shutdown(), unprefixed log in initialize() and the API."
+        },
+        {
+          "text": "The report notes the 'recipe' mismatch: registry default 0 while the constructor requires recipe",
+          "passed": true,
+          "evidence": "Finding 8 (F1): registry recipe default 0 vs required constructor argument."
+        },
+        {
+          "text": "The report gives a verdict on status-property I/O that reflects following the chain into AsyrilAPI (e.g. distinguishes the driver reading api._connected / api._faulted attributes from the API's connected property that peeks the socket)",
+          "passed": true,
+          "evidence": "A1 passed with reasoning: driver reads api._connected/_faulted; notes the API connected property peeks (MSG_PEEK) but is unused by the driver."
+        },
+        {
+          "text": "A new tests/test_asyril*.py exercises AsyrilEyePlus against a fake TCP Eye+ (FakeTcpInstrument or similar), with no hardware",
+          "passed": true,
+          "evidence": "tests/test_asyril_eye_plus.py against FakeTcpInstrument (tests/fake_instrument.py created)."
+        },
+        {
+          "text": "Tests that fail because of driver contract violations are marked pytest.mark.xfail(strict=True) with a reason naming the finding",
+          "passed": true,
+          "evidence": "12 xfail(strict=True) tests, reasons name findings."
+        },
+        {
+          "text": "The new test file and the full tests/ suite pass in the final pytest run",
+          "passed": true,
+          "evidence": "pytest.txt: 148 passed, 12 xfailed."
+        },
+        {
+          "text": "devices/Asyril.py, devices/api/AsyrilAPI.py and devices/registry.py are not modified",
+          "passed": true,
+          "evidence": "changes.diff only touches tests/."
+        },
+        {
+          "text": "The final response has a findings table with severity, check, evidence (file:line) and how each finding was proven, a passed list, a not-verified section, and offers fixes",
+          "passed": true,
+          "evidence": "Findings table with Sev/Check/Finding/Evidence/Proven by, Passed list, Not verified, Tests, Proposed fixes + question."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "iologik-validate-and-fix",
+      "eval_name": "iologik-validate-and-fix",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 524.7,
+        "tokens": 178943,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "A tests/test_iologik*.py file exercises IoLogikE1212 with a faked pymodbus ModbusTcpClient (monkeypatched), no hardware",
+          "passed": true,
+          "evidence": "tests/test_iologik_e1212.py monkeypatches io_api.ModbusTcpClient with a fake factory."
+        },
+        {
+          "text": "The trace shows the tests were written and run (with failures or xfails exposing findings) before the driver was edited",
+          "passed": true,
+          "evidence": "Transcript: Write tests -> pytest -> mark xfails -> pytest, then the first Edit of devices/api/IoLogikE1212Api.py."
+        },
+        {
+          "text": "After the changes, IoLogikE1212.clear_fault() reopens the Modbus session (a new client/connect), and a test proves it",
+          "passed": true,
+          "evidence": "clear_fault() closes and reopens the session; test_clear_fault_reopens_the_session_without_writing and test_clear_fault_after_socket_closed_recovers."
+        },
+        {
+          "text": "No test for a fixed finding is still marked xfail; any remaining xfail names a finding the report lists as still open",
+          "passed": true,
+          "evidence": "Final diff has no xfail markers; report says the markers were removed after the fixes (18 passed)."
+        },
+        {
+          "text": "IoLogikE1212Api.write_do and read_all_di keep their names and signatures and the IoLogikE1212 constructor keeps ip_address, port, slave_id, name; the trace shows usages were searched before changing anything",
+          "passed": true,
+          "evidence": "write_do/read_all_di unchanged, guarded by test_task_api_write_do_and_read_all_di_unchanged; usages grepped in app_logic/examples before edits."
+        },
+        {
+          "text": "The full tests/ suite passes in the final pytest run",
+          "passed": true,
+          "evidence": "pytest.txt: 151 passed."
+        },
+        {
+          "text": "The final response lists each finding with what was changed for it or why it stays open, and states what was not verified on hardware",
+          "passed": true,
+          "evidence": "Findings table with a Status column per finding, a 'Not fixed' list with reasons, and a 'Not verified' section."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "planarmotor-laggy-ui-symptom",
+      "eval_name": "planarmotor-laggy-ui-symptom",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 8,
+        "failed": 0,
+        "total": 8,
+        "time_seconds": 439.1,
+        "tokens": 160086,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The report identifies that PlanarMotor.faulted (and ready, which reads it) goes through PlanarMotorApi.faulted, a property that calls get_pmc_status() on the PMC, i.e. hardware I/O on every fault-monitor poll",
+          "passed": true,
+          "evidence": "Finding 1: faulted reads api.faulted -> get_pmc_status() -> pmclib GetPMCStatus on every read; ready reads it again (2 queries / monitor cycle)."
+        },
+        {
+          "text": "That status-property I/O finding is rated Critical (or the top severity) and cites file:line locations in both devices/PlanarMotor.py and devices/api/PlanarMotorApi.py",
+          "passed": true,
+          "evidence": "Rated Critical; evidence devices/PlanarMotor.py:26-34 and devices/api/PlanarMotorApi.py:62-70,155-157."
+        },
+        {
+          "text": "A new test file for the PlanarMotor driver exists under tests/ and fakes pmclib (monkeypatch or sys.modules) so it runs without hardware",
+          "passed": true,
+          "evidence": "tests/test_planar_motor.py monkeypatches the pmclib sys/bot aliases in devices.api.PlanarMotorApi."
+        },
+        {
+          "text": "At least one test asserting the contract (e.g. status properties do no I/O) is kept with pytest.mark.xfail(strict=True, ...) whose reason names the finding, instead of being deleted or weakened",
+          "passed": true,
+          "evidence": "8 tests kept as xfail(strict=True) with reasons naming findings (A1, C5, B4, C1, C2)."
+        },
+        {
+          "text": "The new test file and the full tests/ suite pass (xfails count as passing) in the final pytest run",
+          "passed": true,
+          "evidence": "pytest.txt: 143 passed, 8 xfailed."
+        },
+        {
+          "text": "devices/PlanarMotor.py, devices/api/PlanarMotorApi.py, devices/registry.py and the docs are not modified",
+          "passed": true,
+          "evidence": "changes.diff only touches tests/test_planar_motor.py."
+        },
+        {
+          "text": "The final response offers specific fixes grouped by severity and asks which to apply, without applying them",
+          "passed": true,
+          "evidence": "'Fixes I can apply' grouped Critical/Major/Minor, ends with 'Which of these fixes should I apply?'; nothing applied."
+        },
+        {
+          "text": "The report states what was not verified because no hardware was available, and does not claim anything was tested on a real PMC",
+          "passed": true,
+          "evidence": "'Not verified' section: no hardware, real GetPMCStatus latency, DLL thread-safety; gives a read-only timing command."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "asyril-predelivery-audit",
+      "eval_name": "asyril-predelivery-audit",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.778,
+        "passed": 7,
+        "failed": 2,
+        "total": 9,
+        "time_seconds": 602.6,
+        "tokens": 168818,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The report flags that AsyrilEyePlus.clear_fault() only resets the _faulted flag without reopening the connection, rated Major (or higher)",
+          "passed": false,
+          "evidence": "Finding 2 flags clear_fault() only resetting the flag (proven by a test), but no severity is given anywhere in the report."
+        },
+        {
+          "text": "The report flags the print() call in shutdown() and/or log messages missing the [device_id] prefix as a logging finding",
+          "passed": true,
+          "evidence": "Finding 15: print() in shutdown(), no [device_id] prefix."
+        },
+        {
+          "text": "The report notes the 'recipe' mismatch: registry default 0 while the constructor requires recipe",
+          "passed": true,
+          "evidence": "Finding 4: registry recipe default 0 while the constructor requires it."
+        },
+        {
+          "text": "The report gives a verdict on status-property I/O that reflects following the chain into AsyrilAPI (e.g. distinguishes the driver reading api._connected / api._faulted attributes from the API's connected property that peeks the socket)",
+          "passed": true,
+          "evidence": "Finding 11: API connected peeks a blocking socket; notes the driver's own connected doesn't use it."
+        },
+        {
+          "text": "A new tests/test_asyril*.py exercises AsyrilEyePlus against a fake TCP Eye+ (FakeTcpInstrument or similar), with no hardware",
+          "passed": true,
+          "evidence": "tests/test_asyril.py with FakeTcpInstrument (tests/fake_instrument.py created)."
+        },
+        {
+          "text": "Tests that fail because of driver contract violations are marked pytest.mark.xfail(strict=True) with a reason naming the finding",
+          "passed": true,
+          "evidence": "13 tests via a helper returning pytest.mark.xfail(strict=True, reason=f'Finding {n}: ...')."
+        },
+        {
+          "text": "The new test file and the full tests/ suite pass in the final pytest run",
+          "passed": true,
+          "evidence": "pytest.txt: 147 passed, 13 xfailed."
+        },
+        {
+          "text": "devices/Asyril.py, devices/api/AsyrilAPI.py and devices/registry.py are not modified",
+          "passed": true,
+          "evidence": "changes.diff only touches tests/."
+        },
+        {
+          "text": "The final response has a findings table with severity, check, evidence (file:line) and how each finding was proven, a passed list, a not-verified section, and offers fixes",
+          "passed": false,
+          "evidence": "Table has rule/problem/evidence/test but no severity; static findings in a separate list; otherwise has what's-fine, not-verified, and suggested fixes with a question."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "iologik-validate-and-fix",
+      "eval_name": "iologik-validate-and-fix",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 578.2,
+        "tokens": 164713,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "A tests/test_iologik*.py file exercises IoLogikE1212 with a faked pymodbus ModbusTcpClient (monkeypatched), no hardware",
+          "passed": true,
+          "evidence": "tests/test_iologik.py monkeypatches api_module.ModbusTcpClient with FakeModbusClient."
+        },
+        {
+          "text": "The trace shows the tests were written and run (with failures or xfails exposing findings) before the driver was edited",
+          "passed": true,
+          "evidence": "Transcript: Write tests/test_iologik.py and run it (failures shown) before the first Edit of the driver."
+        },
+        {
+          "text": "After the changes, IoLogikE1212.clear_fault() reopens the Modbus session (a new client/connect), and a test proves it",
+          "passed": true,
+          "evidence": "clear_fault() -> recover() reconnects and probes; test_clear_fault_only_clears_when_the_unit_answers."
+        },
+        {
+          "text": "No test for a fixed finding is still marked xfail; any remaining xfail names a finding the report lists as still open",
+          "passed": true,
+          "evidence": "No xfail markers used; nothing left marked."
+        },
+        {
+          "text": "IoLogikE1212Api.write_do and read_all_di keep their names and signatures and the IoLogikE1212 constructor keeps ip_address, port, slave_id, name; the trace shows usages were searched before changing anything",
+          "passed": true,
+          "evidence": "write_do/read_all_di signatures unchanged; constructor keeps ip_address, port, slave_id, name (adds timeout, retries); usages grepped first."
+        },
+        {
+          "text": "The full tests/ suite passes in the final pytest run",
+          "passed": true,
+          "evidence": "pytest.txt: 155 passed."
+        },
+        {
+          "text": "The final response lists each finding with what was changed for it or why it stays open, and states what was not verified on hardware",
+          "passed": true,
+          "evidence": "'What was broken' / 'What I changed' per bug, 'Questions', and states no hardware tests (real pymodbus server only)."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": "planarmotor-laggy-ui-symptom",
+      "eval_name": "planarmotor-laggy-ui-symptom",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.5,
+        "passed": 4,
+        "failed": 4,
+        "total": 8,
+        "time_seconds": 678.6,
+        "tokens": 130549,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The report identifies that PlanarMotor.faulted (and ready, which reads it) goes through PlanarMotorApi.faulted, a property that calls get_pmc_status() on the PMC, i.e. hardware I/O on every fault-monitor poll",
+          "passed": true,
+          "evidence": "'PlanarMotorApi.faulted ... called get_pmc_status() every time anything read it'; ready reads faulted again."
+        },
+        {
+          "text": "That status-property I/O finding is rated Critical (or the top severity) and cites file:line locations in both devices/PlanarMotor.py and devices/api/PlanarMotorApi.py",
+          "passed": false,
+          "evidence": "No severity rating anywhere, and no file:line evidence (file names only)."
+        },
+        {
+          "text": "A new test file for the PlanarMotor driver exists under tests/ and fakes pmclib (monkeypatch or sys.modules) so it runs without hardware",
+          "passed": true,
+          "evidence": "tests/test_planar_motor.py fakes pmclib system_commands/xbot_commands (and the package if the DLL can't load)."
+        },
+        {
+          "text": "At least one test asserting the contract (e.g. status properties do no I/O) is kept with pytest.mark.xfail(strict=True, ...) whose reason names the finding, instead of being deleted or weakened",
+          "passed": false,
+          "evidence": "No xfail tests: the driver was fixed in the same run so all 7 tests pass; violations were not kept as xfail."
+        },
+        {
+          "text": "The new test file and the full tests/ suite pass (xfails count as passing) in the final pytest run",
+          "passed": true,
+          "evidence": "pytest.txt: 140 passed."
+        },
+        {
+          "text": "devices/PlanarMotor.py, devices/api/PlanarMotorApi.py, devices/registry.py and the docs are not modified",
+          "passed": false,
+          "evidence": "devices/api/PlanarMotorApi.py was modified (background health-poll thread added)."
+        },
+        {
+          "text": "The final response offers specific fixes grouped by severity and asks which to apply, without applying them",
+          "passed": false,
+          "evidence": "The fix was applied without asking; only a follow-up question about PMC_UNKNOWN was asked."
+        },
+        {
+          "text": "The report states what was not verified because no hardware was available, and does not claim anything was tested on a real PMC",
+          "passed": true,
+          "evidence": "'Not verified without the PMC' section; measurements only with a simulated slow PMC."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 510.3,
+        "stddev": 65.2037,
+        "min": 439.1,
+        "max": 567.1
+      },
+      "tokens": {
+        "mean": 170542.3333,
+        "stddev": 9595.0996,
+        "min": 160086,
+        "max": 178943
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.7593,
+        "stddev": 0.2505,
+        "min": 0.5,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 619.8,
+        "stddev": 52.3633,
+        "min": 578.2,
+        "max": 678.6
+      },
+      "tokens": {
+        "mean": 154693.3333,
+        "stddev": 21010.1019,
+        "min": 130549,
+        "max": 168818
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.24",
+      "time_seconds": "-109.5",
+      "tokens": "+15849"
+    }
+  },
+  "notes": [
+    "Strong baseline: the add-device skill is installed in the user's profile, so without_skill runs still followed the add-device rules and found most of the same bugs. The delta comes from process (report before fixing, severity ratings, strict xfail evidence, not editing without approval), not from bug-finding alone.",
+    "iologik-validate-and-fix is non-discriminating (7/7 both). The baseline also changed devices/registry.py, app_logic/config.yaml defaults (timeout 1 s, retries 1) and tests/test_registry.py unasked; no grader catches scope creep. Add one for iteration 2.",
+    "planarmotor: with_skill also found abort() not stopping movers (Critical) and the stuck abort flag (Major); the baseline fixed only the lag and edited PlanarMotorApi.py despite not being asked to fix.",
+    "with_skill runs were faster (439-567 s vs 578-679 s) at similar token cost (160-179k vs 131-169k).",
+    "All worktrees were cut from main (951fb13), not feature/tulip-gripper; suites start at 133 tests, equal for both configurations."
+  ]
+}

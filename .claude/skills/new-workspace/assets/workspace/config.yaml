@@ -1,0 +1,89 @@
+# config.yaml — <<TITLE>>
+#
+# Workspace for the Mecademic demo app. Run it with:
+#   python <path to>/mecademic_demo_app/app.py --workspace <path to this folder>
+# (or start_demo.bat <this folder> from the mecademic_demo superproject).
+#
+# The design behind this file is in WORKSPACE_SPEC.md; what to do at the
+# machine is in README.md.
+#
+# Every entry under `devices:` is checked at startup against
+# mecademic_demo_app/devices/registry.py: an unknown type or a missing value
+# is an error that blocks INITIALIZE, an unknown key is a warning and is
+# ignored. Both show in a banner at the top of the UI. The keys each type
+# accepts are listed in mecademic_demo_app/app_logic/config.yaml and returned
+# by GET /api/devices/types.
+
+title: "<<TITLE>>"
+
+# Params and variables (Variables tab) are declared in context.yaml, next to
+# this file. Production history goes to logs/history/<this folder name>/.
+# history:
+#   enabled: true
+#   retention_days: 30
+
+# ============================================================
+# DEVICES — names are the keys task code uses: devices["robot"]
+# ============================================================
+devices:
+
+  robot:
+    type: "mecademic"
+    ip_address: "192.168.0.100"    # TODO: confirm at the machine
+
+  feeder:
+    type: "asyril"
+    ip_address: "192.168.0.50"     # TODO: confirm at the machine
+    recipe: 63083                  # Eye+ recipe for this part
+    # port: 7171                   # optional, default 7171
+
+  io:
+    type: "iologik"
+    ip_address: "192.168.127.254"  # TODO: confirm at the machine
+    # port: 502                    # optional, default 502
+    # slave_id: 1                  # optional, default 1
+
+# ============================================================
+# MANUAL ACTIONS — buttons on the Manual tab
+# ============================================================
+# Each key must be returned by get_manual_actions() in manual_actions.py,
+# otherwise the app refuses to start this workspace.
+manual_actions:
+  - key: "open_gripper"
+    label: "Open gripper"
+    description: "Release whatever the gripper holds."
+    confirm_title: "Open the gripper?"
+    confirm_message: "A held part will drop. Make sure nothing is below the gripper."
+
+  - key: "pick_one_part"
+    label: "Pick one part"
+    description: "Ask the feeder for one part and pick it, without placing it."
+    confirm_title: "Pick one part?"
+    confirm_message: "The robot will move to the feeder. Keep clear of the cell."
+
+# ============================================================
+# SEQUENCES — expected top-level step order, per task
+# ============================================================
+# Gives "Step 2 of 4", a progress bar and greyed-out upcoming steps. Names
+# must match the context.step("...") names in the code exactly. Keys:
+# prod_cycle, home, shipment, calib. A conditional step goes last, so a cycle
+# that skips it ends one step early instead of being flagged "Off sequence".
+# (No "manual:<key>" sequences: the app nests a manual action's steps under its
+# own "Manual: <key>" step, so such a sequence never advances.)
+sequences:
+  prod_cycle:
+    - Request part from feeder
+    - Pick part
+    - Place part
+    - Reject part              # only when the feeder finds no pickable part
+
+  home:
+    - Open gripper
+    - Move to home
+
+  shipment:
+    - Open gripper
+    - Move to shipment pose
+
+  calib:
+    - Move to calibration pose

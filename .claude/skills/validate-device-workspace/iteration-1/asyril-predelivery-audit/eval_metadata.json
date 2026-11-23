@@ -1,0 +1,15 @@
+{
+  "eval_name": "asyril-predelivery-audit",
+  "prompt": "we ship the asyril eye+ demo to a customer next week. validate the asyril driver against our add-device rules and write whatever tests are missing. no feeder on my desk.",
+  "assertions": [
+    "The report flags that AsyrilEyePlus.clear_fault() only resets the _faulted flag without reopening the connection, rated Major (or higher)",
+    "The report flags the print() call in shutdown() and/or log messages missing the [device_id] prefix as a logging finding",
+    "The report notes the 'recipe' mismatch: registry default 0 while the constructor requires recipe",
+    "The report gives a verdict on status-property I/O that reflects following the chain into AsyrilAPI (e.g. distinguishes the driver reading api._connected / api._faulted attributes from the API's connected property that peeks the socket)",
+    "A new tests/test_asyril*.py exercises AsyrilEyePlus against a fake TCP Eye+ (FakeTcpInstrument or similar), with no hardware",
+    "Tests that fail because of driver contract violations are marked pytest.mark.xfail(strict=True) with a reason naming the finding",
+    "The new test file and the full tests/ suite pass in the final pytest run",
+    "devices/Asyril.py, devices/api/AsyrilAPI.py and devices/registry.py are not modified",
+    "The final response has a findings table with severity, check, evidence (file:line) and how each finding was proven, a passed list, a not-verified section, and offers fixes"
+  ]
+}

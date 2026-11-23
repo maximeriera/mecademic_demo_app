@@ -1,0 +1,13 @@
+{
+  "eval_name": "iologik-validate-and-fix",
+  "prompt": "can you validate the iologik E1212 driver and fix whatever is broken? we have task code in a few workspaces calling io.api.write_do / read_all_di so dont break that",
+  "assertions": [
+    "A tests/test_iologik*.py file exercises IoLogikE1212 with a faked pymodbus ModbusTcpClient (monkeypatched), no hardware",
+    "The trace shows the tests were written and run (with failures or xfails exposing findings) before the driver was edited",
+    "After the changes, IoLogikE1212.clear_fault() reopens the Modbus session (a new client/connect), and a test proves it",
+    "No test for a fixed finding is still marked xfail; any remaining xfail names a finding the report lists as still open",
+    "IoLogikE1212Api.write_do and read_all_di keep their names and signatures and the IoLogikE1212 constructor keeps ip_address, port, slave_id, name; the trace shows usages were searched before changing anything",
+    "The full tests/ suite passes in the final pytest run",
+    "The final response lists each finding with what was changed for it or why it stays open, and states what was not verified on hardware"
+  ]
+}

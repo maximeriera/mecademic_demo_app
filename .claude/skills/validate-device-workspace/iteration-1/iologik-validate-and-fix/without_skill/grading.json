@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "A tests/test_iologik*.py file exercises IoLogikE1212 with a faked pymodbus ModbusTcpClient (monkeypatched), no hardware",
+      "passed": true,
+      "evidence": "tests/test_iologik.py monkeypatches api_module.ModbusTcpClient with FakeModbusClient."
+    },
+    {
+      "text": "The trace shows the tests were written and run (with failures or xfails exposing findings) before the driver was edited",
+      "passed": true,
+      "evidence": "Transcript: Write tests/test_iologik.py and run it (failures shown) before the first Edit of the driver."
+    },
+    {
+      "text": "After the changes, IoLogikE1212.clear_fault() reopens the Modbus session (a new client/connect), and a test proves it",
+      "passed": true,
+      "evidence": "clear_fault() -> recover() reconnects and probes; test_clear_fault_only_clears_when_the_unit_answers."
+    },
+    {
+      "text": "No test for a fixed finding is still marked xfail; any remaining xfail names a finding the report lists as still open",
+      "passed": true,
+      "evidence": "No xfail markers used; nothing left marked."
+    },
+    {
+      "text": "IoLogikE1212Api.write_do and read_all_di keep their names and signatures and the IoLogikE1212 constructor keeps ip_address, port, slave_id, name; the trace shows usages were searched before changing anything",
+      "passed": true,
+      "evidence": "write_do/read_all_di signatures unchanged; constructor keeps ip_address, port, slave_id, name (adds timeout, retries); usages grepped first."
+    },
+    {
+      "text": "The full tests/ suite passes in the final pytest run",
+      "passed": true,
+      "evidence": "pytest.txt: 155 passed."
+    },
+    {
+      "text": "The final response lists each finding with what was changed for it or why it stays open, and states what was not verified on hardware",
+      "passed": true,
+      "evidence": "'What was broken' / 'What I changed' per bug, 'Questions', and states no hardware tests (real pymodbus server only)."
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

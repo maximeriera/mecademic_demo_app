@@ -1,0 +1,50 @@
+{
+  "expectations": [
+    {
+      "text": "The report identifies that PlanarMotor.faulted (and ready, which reads it) goes through PlanarMotorApi.faulted, a property that calls get_pmc_status() on the PMC, i.e. hardware I/O on every fault-monitor poll",
+      "passed": true,
+      "evidence": "Finding 1: faulted reads api.faulted -> get_pmc_status() -> pmclib GetPMCStatus on every read; ready reads it again (2 queries / monitor cycle)."
+    },
+    {
+      "text": "That status-property I/O finding is rated Critical (or the top severity) and cites file:line locations in both devices/PlanarMotor.py and devices/api/PlanarMotorApi.py",
+      "passed": true,
+      "evidence": "Rated Critical; evidence devices/PlanarMotor.py:26-34 and devices/api/PlanarMotorApi.py:62-70,155-157."
+    },
+    {
+      "text": "A new test file for the PlanarMotor driver exists under tests/ and fakes pmclib (monkeypatch or sys.modules) so it runs without hardware",
+      "passed": true,
+      "evidence": "tests/test_planar_motor.py monkeypatches the pmclib sys/bot aliases in devices.api.PlanarMotorApi."
+    },
+    {
+      "text": "At least one test asserting the contract (e.g. status properties do no I/O) is kept with pytest.mark.xfail(strict=True, ...) whose reason names the finding, instead of being deleted or weakened",
+      "passed": true,
+      "evidence": "8 tests kept as xfail(strict=True) with reasons naming findings (A1, C5, B4, C1, C2)."
+    },
+    {
+      "text": "The new test file and the full tests/ suite pass (xfails count as passing) in the final pytest run",
+      "passed": true,
+      "evidence": "pytest.txt: 143 passed, 8 xfailed."
+    },
+    {
+      "text": "devices/PlanarMotor.py, devices/api/PlanarMotorApi.py, devices/registry.py and the docs are not modified",
+      "passed": true,
+      "evidence": "changes.diff only touches tests/test_planar_motor.py."
+    },
+    {
+      "text": "The final response offers specific fixes grouped by severity and asks which to apply, without applying them",
+      "passed": true,
+      "evidence": "'Fixes I can apply' grouped Critical/Major/Minor, ends with 'Which of these fixes should I apply?'; nothing applied."
+    },
+    {
+      "text": "The report states what was not verified because no hardware was available, and does not claim anything was tested on a real PMC",
+      "passed": true,
+      "evidence": "'Not verified' section: no hardware, real GetPMCStatus latency, DLL thread-safety; gives a read-only timing command."
+    }
+  ],
+  "summary": {
+    "passed": 8,
+    "failed": 0,
+    "total": 8,
+    "pass_rate": 1.0
+  }
+}

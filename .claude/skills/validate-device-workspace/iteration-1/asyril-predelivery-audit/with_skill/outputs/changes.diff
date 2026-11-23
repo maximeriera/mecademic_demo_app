@@ -1,0 +1,495 @@
+diff --git a/tests/fake_instrument.py b/tests/fake_instrument.py
+new file mode 100644
+index 0000000..902c47b
+--- /dev/null
++++ b/tests/fake_instrument.py
+@@ -0,0 +1,71 @@
++"""Scripted fake instruments for driver tests: no hardware, no vendor SDK."""
++
++import socketserver
++import threading
++
++
++class _LineHandler(socketserver.StreamRequestHandler):
++    def handle(self):
++        inst = self.server
++        with inst.lock:
++            inst.connections += 1
++        for raw in self.rfile:
++            cmd = raw.decode("ascii", errors="replace").strip()
++            if not cmd:
++                continue
++            with inst.lock:
++                inst.received.append(cmd)
++                drop, inst.drop_next = inst.drop_next, False
++            if drop:
++                return  # closes the connection: the driver sees the link drop
++            reply = inst.reply(cmd)
++            if reply is not None:
++                self.wfile.write(reply.encode("ascii") + inst.terminator)
++
++
++class FakeTcpInstrument(socketserver.ThreadingTCPServer):
++    """A line-based TCP instrument on 127.0.0.1 that answers from a script.
++
++    ``replies`` maps a command to its reply line: a string, a callable taking
++    the command (for state or arguments), or ``None`` for no reply (a setter,
++    or silence to provoke a timeout). Commands not in the map get ``unknown``.
++
++    ``received`` lists every command, ``connections`` counts sessions, and
++    setting ``drop_next`` closes the connection on the next command instead of
++    answering it.
++    """
++
++    allow_reuse_address = True
++    daemon_threads = True
++
++    def __init__(self, replies=None, terminator=b"\r\n", unknown=None):
++        super().__init__(("127.0.0.1", 0), _LineHandler)
++        self.replies = dict(replies or {})
++        self.terminator = terminator
++        self.unknown = unknown
++        self.received = []
++        self.connections = 0
++        self.drop_next = False
++        self.lock = threading.Lock()
++        # Short poll: close() waits up to one interval for the loop to notice.
++        threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
++
++    @property
++    def port(self) -> int:
++        return self.server_address[1]
++
++    def reply(self, cmd):
++        answer = self.replies.get(cmd, self.unknown)
++        return answer(cmd) if callable(answer) else answer
++
++    def close(self):
++        self.shutdown()
++        self.server_close()
++
++
++def dead_port() -> int:
++    """A local port with nothing listening: connecting to it is refused."""
++    inst = FakeTcpInstrument()
++    port = inst.port
++    inst.close()
++    return port
+diff --git a/tests/test_asyril_eye_plus.py b/tests/test_asyril_eye_plus.py
+new file mode 100644
+index 0000000..abb11f3
+--- /dev/null
++++ b/tests/test_asyril_eye_plus.py
+@@ -0,0 +1,412 @@
++"""AsyrilEyePlus driver and the AsyrilAPI protocol module, against a fake Eye+ on 127.0.0.1.
++
++No feeder needed. The fake answers the ASCII protocol the way AsyrilAPI.py
++expects it: one "\\n"-terminated line per command, a three-digit status code
++first ("200 ready", "200 x=1.5 y=-2.25 rz=90.0", "403"...).
++
++Tests marked ``xfail(strict=True, reason="validate-device <ID>: ...")`` document
++an open finding of the validate-device audit: they fail today because the
++driver breaks the add-device contract. Once the fix lands they pass, strict
++xfail turns that into a failure, and whoever applied the fix removes the marker.
++"""
++
++import inspect
++import json
++import threading
++import time
++
++import pytest
++
++import devices.api.AsyrilAPI as asyril_api
++from devices.Asyril import AsyrilEyePlus
++from devices.registry import REQUIRED, create_device, resolve_type, validate_devices_config
++
++from fake_instrument import FakeTcpInstrument, dead_port
++
++RECIPE = 63083
++POSE = "200 x=1.5 y=-2.25 rz=90.0"
++
++
++def _replies():
++    return {
++        "get_parameter state": "200 ready",
++        f"start production {RECIPE}": "200",
++        "stop production": "200",
++        "set_parameter timeout 30.0": "200",
++        "get_parameter timeout": "200 30.0",
++        "get_part": POSE,
++        "can_take_image true": "200",
++    }
++
++
++@pytest.fixture(autouse=True)
++def short_socket_timeout(monkeypatch):
++    # AsyrilAPI.TIMEOUT is 35 s; connect() reads it at call time.
++    monkeypatch.setattr(asyril_api, "TIMEOUT", 1.0)
++
++
++@pytest.fixture
++def instrument():
++    inst = FakeTcpInstrument(_replies(), terminator=b"\n")
++    yield inst
++    inst.close()
++
++
++@pytest.fixture
++def feeder(instrument):
++    dev = AsyrilEyePlus("127.0.0.1", recipe=RECIPE, port=instrument.port, name="feeder_test")
++    yield dev
++    dev.shutdown()
++
++
++class _SocketSpy:
++    """Wraps the API's socket and counts every send/recv (MSG_PEEK included,
++    which a fake server can't see)."""
++
++    def __init__(self, real, fail_send=None):
++        self._real = real
++        self.calls = []
++        self._fail_send = fail_send
++
++    def __getattr__(self, name):
++        return getattr(self._real, name)
++
++    def send(self, *a):
++        self.calls.append(("send", a))
++        if self._fail_send is not None:
++            raise self._fail_send
++        return self._real.send(*a)
++
++    def recv(self, *a):
++        self.calls.append(("recv", a))
++        return self._real.recv(*a)
++
++
++def _blocked_get_part(instrument):
++    """Make get_part hang until the returned event is set (an empty feeder)."""
++    release = threading.Event()
++
++    def reply(cmd):
++        release.wait(5)
++        return "501"
++
++    instrument.replies["get_part"] = reply
++    return release
++
++
++# --- Registry and constructor (F1, C3) ----------------------------------------
++
++def test_registry_validates_and_creates_without_connecting(instrument):
++    entries, issues = validate_devices_config({
++        "part_feeder": {"type": "asyril", "ip_address": "127.0.0.1",
++                        "recipe": str(RECIPE), "port": str(instrument.port)},
++    })
++    assert issues == []
++    assert entries[0].kwargs == {"ip_address": "127.0.0.1", "recipe": RECIPE, "port": instrument.port}
++    dev = create_device(entries[0])
++    assert dev.device_id == "part_feeder"
++    assert not dev.connected and not dev.ready
++    assert instrument.connections == 0          # the constructor never connects
++
++    entries, issues = validate_devices_config({"part_feeder": {"type": "asyril", "recipe": 1}})
++    assert entries == []
++    assert "ip_address" in issues[0]["message"]
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device F1: registry gives 'recipe' a default of 0 "
++                                       "but AsyrilEyePlus.__init__ requires it")
++def test_registry_defaults_match_the_constructor():
++    spec = resolve_type("asyril")
++    sig = inspect.signature(AsyrilEyePlus.__init__).parameters
++    for key, param in spec.params.items():
++        ctor_default = sig[key].default
++        if param.default is REQUIRED:
++            assert ctor_default is inspect.Parameter.empty, key
++        else:
++            assert ctor_default == param.default, key
++
++
++# --- Initialize and identity (C1, A3) -----------------------------------------
++
++def test_initialize_starts_production_with_the_recipe(feeder, instrument):
++    feeder.initialize()
++    assert feeder.connected and feeder.ready and not feeder.faulted
++    assert instrument.received == [
++        "get_parameter state",
++        f"start production {RECIPE}",
++        "set_parameter timeout 30.0",
++    ]
++    assert feeder.info["recipe"] == RECIPE
++    json.dumps(feeder.info)
++
++
++def test_initialize_stops_the_current_state_first(feeder, instrument):
++    instrument.replies["get_parameter state"] = "200 production"
++    feeder.initialize()
++    assert instrument.received[:3] == ["get_parameter state", "stop production", f"start production {RECIPE}"]
++    assert feeder.ready
++
++
++def test_initialize_against_dead_port_raises_and_is_not_ready():
++    dev = AsyrilEyePlus("127.0.0.1", recipe=RECIPE, port=dead_port(), name="dead")
++    with pytest.raises(Exception):
++        dev.initialize()
++    assert not dev.connected and not dev.ready
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device C1: initialize() sets self._faulted, "
++                                       "which the faulted property overwrites from api._faulted")
++def test_initialize_against_dead_port_faults():
++    dev = AsyrilEyePlus("127.0.0.1", recipe=RECIPE, port=dead_port(), name="dead")
++    with pytest.raises(Exception):
++        dev.initialize()
++    assert dev.faulted
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device C1: initialize() raises but the device "
++                                       "still reports connected and ready")
++def test_failed_initialize_after_connect_is_not_reported_ready(feeder, instrument):
++    instrument.replies["get_parameter state"] = "409"     # SYSTEM_NOT_IN_VALID_STATE
++    with pytest.raises(Exception):
++        feeder.initialize()
++    assert not feeder.ready
++    assert feeder.faulted
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device B2/C1: a refused 'start production' "
++                                       "(407 recipe not found) is ignored and initialize() succeeds")
++def test_initialize_with_refused_recipe_raises(feeder, instrument):
++    instrument.replies[f"start production {RECIPE}"] = "407"   # RECIPE_IDENTIFIER_NOT_FOUND
++    with pytest.raises(Exception):
++        feeder.initialize()
++    assert not feeder.ready
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device C1: initialize() opens a new socket "
++                                       "without closing the previous one")
++def test_reinitialize_closes_the_previous_session(feeder, instrument):
++    feeder.initialize()
++    first = feeder.api._connection
++    feeder.initialize()
++    assert feeder.api._connection is not first
++    assert first.fileno() == -1          # closed, not leaked
++
++
++# --- Status properties never touch the device (A1, A2) ------------------------
++
++def test_status_properties_never_touch_the_device(feeder, instrument):
++    feeder.initialize()
++    spy = _SocketSpy(feeder.api._connection)
++    feeder.api._connection = spy
++    sent = len(instrument.received)
++    for _ in range(20):
++        feeder.faulted, feeder.ready, feeder.connected, feeder.info, feeder.link
++    assert len(instrument.received) == sent
++    assert spy.calls == []
++    feeder.api._connection = spy._real
++
++
++def test_status_properties_dont_wait_for_a_blocked_get_part(feeder, instrument):
++    feeder.initialize()
++    release = _blocked_get_part(instrument)
++    worker = threading.Thread(target=lambda: feeder.api.get_part(), daemon=True)
++    worker.start()
++    try:
++        time.sleep(0.1)
++        started = time.monotonic()
++        for _ in range(20):
++            feeder.faulted, feeder.ready, feeder.connected, feeder.info
++        assert time.monotonic() - started < 0.1
++    finally:
++        release.set()
++        worker.join(2)
++
++
++def test_status_properties_never_raise_before_initialize():
++    dev = AsyrilEyePlus("127.0.0.1", recipe=RECIPE, port=dead_port(), name="fresh")
++    assert dev.faulted is False and dev.connected is False and dev.ready is False
++    json.dumps(dev.info)
++    assert dev.link == "disconnected"
++
++
++# --- Task calls ---------------------------------------------------------------
++
++def test_get_part_returns_the_pose(feeder):
++    feeder.initialize()
++    assert feeder.api.get_part() == {"resp": 200, "x": 1.5, "y": -2.25, "rz": 90.0}
++
++
++def test_get_part_async_returns_the_pose(feeder):
++    feeder.initialize()
++    future = feeder.api.get_part_async()
++    assert future.result(timeout=2) == {"resp": 200, "x": 1.5, "y": -2.25, "rz": 90.0}
++
++
++# --- Faults (B1, B2, B4, E3) --------------------------------------------------
++
++@pytest.mark.xfail(strict=True, reason="validate-device B1: a closed link makes recv() return b'', "
++                                       "which __receive_raw__ returns as '' without faulting")
++def test_link_drop_latches_fault(feeder, instrument):
++    feeder.initialize()
++    instrument.drop_next = True
++    try:
++        feeder.api.get_part()
++    except OSError:
++        pass
++    assert feeder.faulted and not feeder.ready
++
++
++def test_socket_timeout_latches_fault(feeder, instrument, monkeypatch):
++    monkeypatch.setattr(asyril_api, "TIMEOUT", 0.3)
++    feeder.initialize()
++    instrument.replies["get_part"] = None          # silence
++    with pytest.raises(OSError):                   # TimeoutError
++        feeder.api.get_part()
++    assert feeder.faulted and not feeder.ready
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device B2: a refused command (403) is returned as "
++                                       "{'resp': {'403\\n'}} instead of raising")
++def test_refused_command_raises_but_does_not_fault(feeder, instrument):
++    feeder.initialize()
++    instrument.replies["get_part"] = "403"          # SYSTEM_NOT_IN_PRODUCTION_STATE
++    with pytest.raises(Exception) as exc_info:
++        feeder.api.get_part()
++    assert not isinstance(exc_info.value, OSError)   # a usage error, not a link error
++    assert not feeder.faulted
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device B4: clear_fault() only resets api._faulted "
++                                       "and keeps the old socket")
++def test_clear_fault_reopens_the_session_without_vibrating(feeder, instrument, monkeypatch):
++    monkeypatch.setattr(asyril_api, "TIMEOUT", 0.3)
++    feeder.initialize()
++    instrument.replies["get_part"] = None
++    with pytest.raises(OSError):
++        feeder.api.get_part()
++    assert feeder.faulted
++
++    sessions = instrument.connections
++    sent = len(instrument.received)
++    feeder.clear_fault()
++    assert not feeder.faulted and feeder.ready
++    assert instrument.connections == sessions + 1
++    assert feeder.api.get_part_timeout().startswith("200 30.0")
++    by_clear = instrument.received[sent:]
++    assert not [c for c in by_clear if c.startswith(("feeder", "prepare_part", "force_take_image"))]
++
++
++def test_clear_fault_does_nothing_when_not_faulted(feeder, instrument):
++    feeder.initialize()
++    sessions, sent = instrument.connections, len(instrument.received)
++    feeder.clear_fault()
++    assert instrument.connections == sessions and len(instrument.received) == sent
++    assert feeder.ready
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device E3: the socket stays open after a timeout, "
++                                       "so the late reply is read as the answer to the next command")
++def test_late_reply_after_timeout_is_not_read_as_the_next_answer(feeder, instrument, monkeypatch):
++    monkeypatch.setattr(asyril_api, "TIMEOUT", 0.3)
++    feeder.initialize()
++
++    def slow_pose(cmd):
++        time.sleep(0.5)
++        return POSE
++
++    instrument.replies["get_part"] = slow_pose
++    with pytest.raises(OSError):
++        feeder.api.get_part()
++    time.sleep(0.4)                       # the late pose arrives
++    try:
++        reply = feeder.api.get_part_timeout()
++    except Exception:
++        return                            # session closed after the timeout: fine
++    assert "x=" not in reply
++
++
++# --- Shutdown and reconnect (C2, C4, G1) --------------------------------------
++
++def test_shutdown_is_safe_when_never_connected_and_twice():
++    dev = AsyrilEyePlus("127.0.0.1", recipe=RECIPE, port=dead_port(), name="never")
++    dev.shutdown()
++    dev.shutdown()
++    assert not dev.connected
++
++
++def test_shutdown_stops_production_and_closes(feeder, instrument):
++    feeder.initialize()
++    feeder.shutdown()
++    assert instrument.received[-1] == "stop production"
++    assert not feeder.connected and not feeder.ready
++    feeder.shutdown()
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device C2: when 'stop production' fails, shutdown() "
++                                       "skips disconnect() and the device stays connected")
++def test_shutdown_closes_the_session_even_if_stop_fails(feeder):
++    feeder.initialize()
++    real = feeder.api._connection
++    feeder.api._connection = _SocketSpy(real, fail_send=ConnectionResetError("reset by peer"))
++    try:
++        feeder.shutdown()
++        assert not feeder.connected
++    finally:
++        real.close()
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device G1: shutdown() print()s instead of logging")
++def test_shutdown_does_not_print(capsys):
++    dev = AsyrilEyePlus("127.0.0.1", recipe=RECIPE, port=dead_port(), name="quiet")
++    dev.shutdown()
++    assert capsys.readouterr().out == ""
++
++
++def test_disconnect_then_connect(feeder, instrument):
++    assert AsyrilEyePlus.supports_reconnect
++    feeder.initialize()
++    feeder.disconnect()
++    assert not feeder.connected
++    feeder.connect()
++    assert feeder.ready
++    assert instrument.connections == 2
++    assert feeder.api.get_part()["resp"] == 200
++
++
++# --- Abort (C5) ---------------------------------------------------------------
++
++def test_abort_never_raises(feeder):
++    feeder.abort()                 # never connected
++    feeder.initialize()
++    feeder.abort()
++
++
++@pytest.mark.xfail(strict=True, reason="validate-device C5: abort() only logs, so a get_part "
++                                       "waiting for parts blocks the task for up to 35 s")
++def test_abort_unblocks_a_waiting_get_part(feeder, instrument, monkeypatch):
++    # Longer than the 1.5 s window, so a socket timeout can't pass for an abort.
++    monkeypatch.setattr(asyril_api, "TIMEOUT", 4.0)
++    feeder.initialize()
++    release = _blocked_get_part(instrument)
++    outcome = []
++
++    def task():
++        try:
++            outcome.append(("returned", feeder.api.get_part()))
++        except Exception as exc:
++            outcome.append(("raised", exc))
++
++    worker = threading.Thread(target=task, daemon=True)
++    worker.start()
++    try:
++        time.sleep(0.2)
++        started = time.monotonic()
++        feeder.abort()
++        worker.join(timeout=1.5)
++        assert not worker.is_alive()
++        assert time.monotonic() - started < 1.5
++        assert outcome and outcome[0][0] == "raised"     # an aborted get_part is not a pose
++        assert not isinstance(outcome[0][1], TimeoutError)
++    finally:
++        release.set()
++        worker.join(2)
