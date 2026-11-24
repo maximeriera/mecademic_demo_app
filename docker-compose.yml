@@ -122,7 +122,7 @@ services:
     # in app_logic/config.yaml. GigE cameras also need host networking (above)
     # for discovery.
     #
-    # NOTE: pmclib (planar motor) cannot import in this image — pythonnet needs
-    # a .NET/mono runtime that python:*-slim does not carry. Every other driver
-    # works. Add mono to the Dockerfile if you need planar motor support in a
-    # container.
+    # Planar motor (pmclib): the image carries the .NET runtime pythonnet needs
+    # (see the Dockerfile). The driver connects to the PMC by its IP, which the
+    # bridge network reaches; only auto_search_and_connect_to_pmc() needs host
+    # networking (above).

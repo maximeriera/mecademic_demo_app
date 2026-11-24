@@ -32,6 +32,17 @@ RUN --mount=type=bind,source=ressources,target=/tmp/ressources \
 ENV SPINNAKER_GENTL64_CTI=/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti
 ENV GENICAM_GENTL64_PATH=/opt/spinnaker/lib/spinnaker-gentl
 
+# .NET runtime for pmclib (planar motor). PMCLIB.dll targets .NET Standard 2.0
+# and is pure managed code, so it runs on .NET (CoreCLR) through pythonnet; no
+# Mono needed. The runtime is copied from Microsoft's runtime image.
+#   PYTHONNET_RUNTIME=coreclr  pythonnet's Linux default is Mono
+#   DOTNET_ROOT                where clr_loader looks for the runtime on Linux
+#   ..._INVARIANT=1            python:*-slim has no ICU libraries
+COPY --from=mcr.microsoft.com/dotnet/runtime:10.0 /usr/share/dotnet /usr/share/dotnet
+ENV DOTNET_ROOT=/usr/share/dotnet \
+    PYTHONNET_RUNTIME=coreclr \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+
 COPY requirements.txt .
 COPY ressources/*.whl ./ressources/
 RUN pip install --no-cache-dir -r requirements.txt
