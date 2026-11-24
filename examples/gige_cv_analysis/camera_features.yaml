@@ -1,0 +1,7 @@
+# Features of `camera`, written by the app (Settings > Devices > camera > Features > Save).
+# Applied in this order at every INITIALIZE. Edit it by hand, then INITIALIZE to reload it.
+ExposureTime: 50.0
+# AcquisitionFrameRate: 30
+GevSCPSPacketSize: 9000
+TriggerMode: 'On'
+TriggerSource: Software

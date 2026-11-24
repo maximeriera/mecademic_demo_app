@@ -17,10 +17,11 @@ MAX_WIDTH = 960            # two feeds side by side
 def setup(hub, devices):
     """Declare both feeds and the result channel for this workspace."""
     vision = devices[VISION]
-    for kind in ("raw", "processed"):
-        hub.add_video(kind, vision.video_source(kind), fps=FPS, quality=JPEG_QUALITY,
-                      max_width=MAX_WIDTH, device=VISION)
-
+    # for kind in ("raw", "processed"):
+    #     hub.add_video(kind, vision.video_source(kind), fps=FPS, quality=JPEG_QUALITY,
+    #                   max_width=MAX_WIDTH, device=VISION)
+    hub.add_video("processed", vision.video_source("processed"), fps=FPS, quality=JPEG_QUALITY,
+                    max_width=MAX_WIDTH, device=VISION)
     sent = [None]
 
     def latest_result():
